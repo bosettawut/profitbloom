@@ -227,6 +227,25 @@ r = await A.call('POST', '/projects', '{bad json');
 ok('JSON เสีย → 400 ไม่ใช่ 500', r.status === 400, r.status);
 r = await A.call('GET', '/nope');
 ok('API ที่ไม่มี → 404', r.status === 404);
+for (const bad of ['abc', '1.5', '-1', '99999999999999']) {
+  r = await A.call('GET', `/projects/${bad}`);
+  ok(`รหัสโปรเจ็กต์ที่ไม่ใช่ตัวเลข (${bad}) → 404 ไม่ใช่ 500`, r.status === 404, r.status);
+}
+r = await A.call('GET', '/quotes/abc');
+ok('รหัสใบเสนอราคาที่ไม่ใช่ตัวเลข → 404 ไม่ใช่ 500', r.status === 404, r.status);
+r = await A.call('POST', '/quotes', { clientName: 'x', projectId: 'abc' });
+ok('ผูกใบเสนอราคากับรหัสโปรเจ็กต์ที่ไม่ใช่ตัวเลข → 404 ไม่ใช่ 500', r.status === 404, r.status);
+r = await A.call('GET', '/activities?limit=1.5');
+ok('limit ที่ไม่ใช่จำนวนเต็ม ไม่ error', r.status === 200 && r.data.length === 1, r.status);
+r = await A.call('GET', '/activities?limit=-3');
+ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
+{
+  // ten projects created at the same moment must each get their own code
+  const made = await Promise.all(Array.from({ length: 10 }, (_, i) => A.call('POST', '/projects', { title: `พร้อมกัน ${i}`, projectType: 'งานหมั้น' })));
+  const codes = made.map((m) => m.data?.code);
+  ok('สร้างโปรเจ็กต์พร้อมกัน 10 งาน รหัสไม่ซ้ำกัน', made.every((m) => m.status === 201) && new Set(codes).size === 10, codes.join(','));
+  for (const m of made) await A.call('DELETE', `/projects/${m.data.id}`);
+}
 r = await A.call('POST', '/auth/logout');
 r = await A.call('GET', '/auth/me');
 ok('logout แล้ว me = null', r.data.user === null);
