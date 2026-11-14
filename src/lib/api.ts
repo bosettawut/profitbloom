@@ -145,6 +145,8 @@ export interface Quote {
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
+  /** UTC timestamp `YYYY-MM-DD HH:MM:SS` */
+  createdAt: string;
   itemCount: number;
   totalAmount: number;
   items: QuoteItem[];
