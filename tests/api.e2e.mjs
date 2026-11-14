@@ -428,6 +428,36 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('เดารหัสผ่านปัจจุบันในหน้าตั้งค่าหลายครั้ง ถูกจำกัด (429)', r.status === 429, r.status);
 }
 
+// --- sales report: by month, by customer, date range
+{
+  const R = client();
+  await R.call('POST', '/auth/register', { name: 'ร้านรายงาน', email: 'report@x.test', password: 'password123' });
+  const job = (title, client, eventDate, price, status = 'approved') =>
+    R.call('POST', '/projects', { title, projectType: 'อื่นๆ', client, eventDate, profitMargin: 50, status, costItems: [{ name: 'x', quantity: 1, price }] });
+  await job('ม.ค. 1', 'คุณเอ', '2026-01-10', 1000);
+  await job('ม.ค. 2', 'คุณบี', '2026-01-20', 2000, 'completed');
+  await job('มี.ค.', 'คุณเอ', '2026-03-05', 4000);
+  await job('ยังไม่ขาย', 'คุณเอ', '2026-03-06', 9000, 'draft');
+  await job('ยกเลิก', 'คุณบี', '2026-03-07', 9000, 'cancelled');
+  await job('ไม่มีชื่อลูกค้า', '', '2026-03-08', 100);
+  r = await R.call('GET', '/reports?from=2026-01-01&to=2026-12-31');
+  const s = r.data.sales;
+  ok('รายงานยอดขาย: รวมเฉพาะงานที่อนุมัติ/เสร็จสิ้น (ขาย 10,650 ต้นทุน 7,100 กำไร 3,550)', s.totals.jobs === 4 && s.totals.sales === 10650 && s.totals.cost === 7100 && s.totals.profit === 3550, JSON.stringify(s.totals));
+  ok('รายเดือน: ม.ค. 2 งาน 4,500 และ มี.ค. 2 งาน 6,150 เรียงตามเวลา', s.byMonth.length === 2 && s.byMonth[0].key === '2026-01' && s.byMonth[0].sales === 4500 && s.byMonth[0].jobs === 2 && s.byMonth[1].sales === 6150 && s.byMonth[0].month === 'ม.ค. 2569', JSON.stringify(s.byMonth));
+  ok('รายลูกค้า: เรียงจากยอดขายมากสุด (คุณเอ 7,500 · คุณบี 3,000 · ไม่ระบุ 150)', s.byCustomer.map((c) => `${c.name}:${c.sales}`).join() === 'คุณเอ:7500,คุณบี:3000,:150', JSON.stringify(s.byCustomer));
+  ok('รายลูกค้า: ต้นทุนและกำไรต่อลูกค้า (คุณเอ ต้นทุน 5,000 กำไร 2,500)', s.byCustomer[0].cost === 5000 && s.byCustomer[0].profit === 2500 && s.byCustomer[0].jobs === 2 && !!s.byCustomer[0].customerId);
+  ok('ยอดรายเดือนและรายลูกค้ารวมกันเท่ายอดรวม', [s.byMonth, s.byCustomer].every((g) => g.reduce((t, x) => t + x.sales, 0) === s.totals.sales && g.reduce((t, x) => t + x.profit, 0) === s.totals.profit));
+  r = await R.call('GET', '/reports?from=2026-01-15&to=2026-03-05');
+  ok('กรองช่วงวันที่ (15 ม.ค.–5 มี.ค.): รวมวันขอบทั้งสองด้าน', r.data.sales.totals.jobs === 2 && r.data.sales.totals.sales === 9000, JSON.stringify(r.data.sales.totals));
+  r = await R.call('GET', '/reports?from=2026-03-01');
+  ok('กำหนดแค่วันเริ่ม', r.data.sales.totals.sales === 6150 && r.data.sales.to === null);
+  r = await R.call('GET', '/reports?from=xx&to=2026-13-99x');
+  ok('วันที่ผิดรูปแบบ → ถือว่าไม่กำหนด ไม่ error', r.status === 200 && r.data.sales.totals.jobs === 4 && r.data.sales.from === null);
+  r = await R.call('GET', '/reports?from=2030-01-01&to=2030-12-31');
+  ok('ช่วงที่ไม่มีงาน → ว่าง ไม่ error', r.data.sales.totals.jobs === 0 && r.data.sales.byMonth.length === 0 && r.data.totals.projects === 6);
+  ok('ร้านอื่นไม่เห็นยอดขายของร้านนี้', (await B.call('GET', '/reports?from=2026-01-01&to=2026-12-31')).data.sales.jobs.every((j) => !['ม.ค. 1', 'มี.ค.'].includes(j.title)));
+}
+
 // --- misc
 r = await A.call('POST', '/projects', '{bad json');
 ok('JSON เสีย → 400 ไม่ใช่ 500', r.status === 400, r.status);

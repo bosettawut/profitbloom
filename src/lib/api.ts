@@ -187,6 +187,24 @@ export interface Reports {
   chart: ChartPoint[];
   byType: Array<{ type: string; projects: number; sold: number; sales: number; profit: number }>;
   byStatus: Array<{ status: ProjectStatus; statusText: string; count: number }>;
+  sales: SalesReport;
+}
+
+export interface SalesSum {
+  jobs: number;
+  sales: number;
+  cost: number;
+  profit: number;
+}
+
+/** sold jobs (approved or completed) inside a date range, counted on the event date */
+export interface SalesReport {
+  from: string | null;
+  to: string | null;
+  totals: SalesSum;
+  byMonth: Array<SalesSum & { key: string; month: string }>;
+  byCustomer: Array<SalesSum & { customerId: string | null; name: string }>;
+  jobs: Array<{ id: string; code: string; title: string; date: string; customerId: string | null; customer: string; statusText: string; sales: number; cost: number; profit: number }>;
 }
 
 export type ProjectInput = Partial<Omit<Project, 'costItems'>> & {
@@ -234,7 +252,7 @@ export const api = {
 
   dashboard: (range: '6' | '12' | 'year') => request<Dashboard>('GET', `/dashboard?range=${range}`),
   activities: (limit = 50) => request<Activity[]>('GET', `/activities?limit=${limit}`),
-  reports: () => request<Reports>('GET', '/reports'),
+  reports: (from = '', to = '') => request<Reports>('GET', `/reports?from=${from}&to=${to}`),
 
   projects: () => request<Project[]>('GET', '/projects'),
   project: (id: string) => request<Project>('GET', `/projects/${id}`),
