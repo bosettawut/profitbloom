@@ -122,9 +122,15 @@ r = await A.call('POST', '/quotes', {
   projectId: p1.id, clientName: 'ลูกค้า1', projectTitle: 'งานแต่ง 1', validUntil: iso(new Date(Date.now() + 10 * 864e5)),
   taxRate: 7, discountRate: 10, items: [{ description: 'แพ็กดอกไม้', quantity: 2, unitPrice: 1000 }],
 });
+ok('ใบเสนอราคาจากโปรเจ็กต์ที่ยอดไม่เท่าราคาโปรเจ็กต์ (1,800 ≠ 2,500) ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('2,500'), JSON.stringify(r.data));
+r = await A.call('POST', '/quotes', {
+  projectId: p1.id, clientName: 'ลูกค้า1', projectTitle: 'งานแต่ง 1', validUntil: iso(new Date(Date.now() + 10 * 864e5)),
+  taxRate: 7, items: [{ description: 'แพ็กดอกไม้', quantity: 2, unitPrice: 1250 }],
+});
 const q1 = r.data;
+ok('ใบเสนอราคาจากโปรเจ็กต์ ล็อกราคาโปรเจ็กต์ไว้ (2,000 + 25% = 2,500)', q1.lockedPrice === 2500, q1.lockedPrice);
 ok('สร้างใบเสนอราคา + รหัส QT', r.status === 201 && /^QT-\d{4}-001$/.test(q1.code), q1?.code);
-ok('ยอดรวม: 2,000 -10% +7% = 1,926', Math.abs(q1.totalAmount - 1926) < 0.001, q1.totalAmount);
+ok('ยอดรวม: 2,500 + VAT 7% = 2,675', q1.totalAmount === 2675 && q1.vatMode === 'exclusive', q1.totalAmount);
 r = await A.call('GET', `/projects/${p1.id}`);
 ok('สร้างใบเสนอราคา → โปรเจ็กต์เป็น "สร้างใบเสนอราคาแล้ว"', r.data.status === 'quote_created', r.data.status);
 r = await A.call('PUT', `/quotes/${q1.id}`, { status: 'sent' });
@@ -145,6 +151,64 @@ ok('ใบเสนอราคาเลยวันหมดอายุ แส
 const qExp = r.data;
 r = await A.call('PUT', `/quotes/${qExp.id}`, { status: 'approved' });
 ok('ใบที่หมดอายุยังอนุมัติได้', r.data.status === 'approved');
+
+// --- quote arithmetic: whole baht, VAT modes, locked price
+{
+  const make = (body) => A.call('POST', '/quotes', { clientName: 'ลูกค้าคำนวณ', ...body });
+  r = await make({ taxRate: 7, discountRate: 10, items: [{ description: 'a', quantity: 2, unitPrice: 1000 }] });
+  ok('บวก VAT: 2,000 -10% +7% = 1,926', r.data.totalAmount === 1926, r.data.totalAmount);
+  const plain = r.data;
+  r = await make({ taxRate: 7, items: [{ description: 'a', quantity: 3, unitPrice: 33.33 }, { description: 'b', quantity: 1, unitPrice: 10.5 }] });
+  ok('ปัดเป็นบาทเต็มทุกบรรทัด: 99.99→100, 10.50→11, VAT 7% ของ 111 = 8, รวม 119', r.data.items[0].total === 100 && r.data.items[1].total === 11 && r.data.totalAmount === 119, JSON.stringify([r.data.items.map((i) => i.total), r.data.totalAmount]));
+  r = await make({ taxRate: 7, vatMode: 'inclusive', items: [{ description: 'a', quantity: 1, unitPrice: 10700 }] });
+  ok('ถอด VAT จากยอดรวม: ลูกค้าจ่าย 10,700 เท่าเดิม', r.data.totalAmount === 10700 && r.data.vatMode === 'inclusive', r.data.totalAmount);
+  r = await make({ taxRate: 7, vatMode: 'none', items: [{ description: 'a', quantity: 1, unitPrice: 10700 }] });
+  ok('ไม่มี VAT: ยอดรวม = ยอดรายการ', r.data.totalAmount === 10700 && r.data.vatMode === 'none');
+  r = await make({ vatMode: 'bogus', items: [] });
+  ok('รูปแบบ VAT ที่ไม่รู้จัก → ใช้ค่าเริ่มต้นของร้าน', r.data.vatMode === 'exclusive', r.data.vatMode);
+  ok('ใบเสนอราคาที่ไม่ผูกโปรเจ็กต์ ไม่ล็อกราคา', r.data.lockedPrice === null);
+
+  r = await A.call('PUT', '/account', { name: 'ร้านเอ', vatMode: 'inclusive' });
+  ok('ตั้งค่าเริ่มต้น VAT ของร้านได้', r.data.user.vatMode === 'inclusive', r.data.user?.vatMode);
+  r = await make({ items: [{ description: 'a', quantity: 1, unitPrice: 107 }] });
+  ok('ใบเสนอราคาใหม่ใช้ค่าเริ่มต้น VAT ของร้าน', r.data.vatMode === 'inclusive' && r.data.totalAmount === 107, r.data.vatMode);
+  r = await A.call('GET', `/quotes/${plain.id}`);
+  ok('เปลี่ยนค่าเริ่มต้นของร้าน ไม่กระทบใบเสนอราคาเดิม', r.data.vatMode === 'exclusive' && r.data.totalAmount === 1926);
+  ok('ร้านอื่นยังใช้ค่าเริ่มต้นของตัวเอง', (await B.call('GET', '/auth/me')).data.user.vatMode === 'exclusive');
+  r = await A.call('PUT', '/account', { name: 'ร้านเอ', vatMode: 'whatever' });
+  ok('ค่าเริ่มต้น VAT ที่ไม่รู้จัก ถูกเมิน', r.data.user.vatMode === 'inclusive');
+  await A.call('PUT', '/account', { name: 'ร้านเอ', vatMode: 'exclusive' });
+
+  // locked price: project costs 3 × 333.33 + extra (not in the price), markup 50% → 1,499.985 → 1,500
+  r = await A.call('POST', '/projects', {
+    title: 'งานล็อกราคา', projectType: 'อื่นๆ', profitMargin: 50,
+    costItems: [{ name: 'ดอกไม้', quantity: 3, price: 333.33 }, { name: 'งอก', quantity: 1, price: 0, isExtra: true, actual: 500 }],
+  });
+  const lp = r.data;
+  const line = (unitPrice, quantity = 1) => [{ description: 'ดอกไม้', quantity, unitPrice }];
+  r = await make({ projectId: lp.id, items: line(1500) });
+  const lq = r.data;
+  ok('ล็อกราคาเป็นบาทเต็ม (1,500) และไม่รวมรายการงอก', r.status === 201 && lq.lockedPrice === 1500, JSON.stringify(r.data));
+  r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 1, unitPrice: 1000 }, { description: 'ค่าแรง', quantity: 2, unitPrice: 250 }] });
+  ok('แก้รายการได้ ถ้ายอดรวมยังเท่าราคาที่ล็อก', r.status === 200 && r.data.items.length === 2 && r.data.totalAmount === 1605, r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { items: line(1400) });
+  ok('แก้รายการจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('1,400') && r.data.error.includes('1,500'), JSON.stringify(r.data));
+  r = await A.call('PUT', `/quotes/${lq.id}`, { discountRate: 10 });
+  ok('ใส่ส่วนลดจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { discountRate: 25, items: line(2000) });
+  ok('ส่วนลดได้ ถ้ายอดหลังหักส่วนลดเท่าราคาที่ล็อก (2,000 -25%)', r.status === 200 && r.data.totalAmount === 1605, r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { vatMode: 'inclusive' });
+  ok('เปลี่ยนเป็นถอด VAT: ลูกค้าจ่ายเท่าราคาที่ล็อก', r.status === 200 && r.data.totalAmount === 1500, r.data.totalAmount);
+  await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
+  r = await A.call('PUT', `/quotes/${lq.id}`, { notes: 'x', status: 'sent' });
+  ok('ราคาโปรเจ็กต์เปลี่ยนทีหลัง ราคาที่ล็อกในใบเสนอราคาไม่เปลี่ยน', r.status === 200 && r.data.lockedPrice === 1500, r.data.lockedPrice);
+  r = await A.call('POST', '/projects', { title: 'งานยังไม่มีต้นทุน', projectType: 'อื่นๆ' });
+  const empty = r.data;
+  r = await make({ projectId: empty.id, items: line(900) });
+  ok('โปรเจ็กต์ที่ยังไม่มีต้นทุน ไม่ล็อกราคา', r.status === 201 && r.data.lockedPrice === null);
+  for (const id of [lp.id, empty.id]) await A.call('DELETE', `/projects/${id}`);
+  for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
+}
 
 // --- dashboard / reports
 r = await A.call('GET', '/dashboard?range=6');

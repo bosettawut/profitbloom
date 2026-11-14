@@ -1,4 +1,7 @@
 import type { CostCategory, Rules } from './decision';
+import type { VatMode } from '../../shared/quote-math.js';
+
+export type { VatMode };
 
 export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'completed' | 'cancelled';
 export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'expired';
@@ -20,6 +23,8 @@ export interface User {
   role: 'shop' | 'admin';
   /** the shop's own business rules; missing keys use the defaults */
   rules: Partial<Rules>;
+  /** how new quotes treat VAT unless changed on the quote */
+  vatMode: VatMode;
 }
 
 export interface AdminShop {
@@ -134,6 +139,9 @@ export interface Quote {
   notes: string;
   taxRate: number;
   discountRate: number;
+  vatMode: VatMode;
+  /** the job's price when the quote was made; the lines must come to this after the discount */
+  lockedPrice: number | null;
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
