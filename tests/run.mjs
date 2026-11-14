@@ -1,5 +1,7 @@
 // Starts the API on a temporary database, runs the end-to-end checks, then cleans up.
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import pg from 'pg';
 
@@ -22,8 +24,11 @@ try {
   process.exit(1);
 }
 
-const env = { ...process.env, DATABASE_URL: testUrl.toString(), API_PORT: String(port), NODE_ENV: 'test' };
+// emails the server would send are collected here instead
+const outbox = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'profitbloom-test-')), 'outbox.jsonl');
+const env = { ...process.env, DATABASE_URL: testUrl.toString(), API_PORT: String(port), NODE_ENV: 'test', MAIL_OUTBOX_FILE: outbox };
 delete env.POSTGRES_URL;
+delete env.RESEND_API_KEY;
 
 const server = spawn(process.execPath, ['server/index.js'], { cwd: root, env, stdio: ['ignore', 'ignore', 'inherit'] });
 const stopped = new Promise((resolve) => server.once('exit', resolve));
@@ -47,5 +52,6 @@ try {
   await stopped;
   await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`).catch((err) => console.error(err.message));
   await admin.end();
+  fs.rmSync(path.dirname(outbox), { recursive: true, force: true });
 }
 process.exit(code ?? 1);

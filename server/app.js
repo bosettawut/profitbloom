@@ -1,11 +1,13 @@
 import express from 'express';
 import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
+import { passwordResetMail, sendMail } from './mail.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
 const SESSION_DAYS = 30;
 const TRIAL_DAYS = 30;
+const RESET_MINUTES = 60;
 
 export const app = express();
 // behind Vercel's proxy: trust X-Forwarded-For so req.ip is the visitor, not the proxy
@@ -70,6 +72,14 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(hash, Buffer.from(hashHex, 'hex'));
 }
 
+// checked when the email is unknown, so "no such account" takes as long as "wrong password"
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+/** Signs the user out on every device. */
+const endAllSessions = (userId) => db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+
 async function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5);
@@ -112,30 +122,32 @@ function parseRules(text) {
   }
 }
 
-// In-memory brute-force guard. Only failures count, keyed per IP + email, so people sharing
-// one shop network don't lock each other out. Sign-ups are capped per IP separately.
-const failures = new Map();
+// Brute-force guard. Only failures count, keyed per IP + email, so people sharing one shop
+// network don't lock each other out; a second, higher limit per account stops guessing spread
+// over many addresses. Attempts live in the database because serverless instances share no memory.
+// Keys are stored hashed: the table never holds an IP address or an email.
 const WINDOW = 15 * 60e3;
-function recent(key, max) {
-  const now = Date.now();
-  const list = (failures.get(key) || []).filter((t) => now - t < WINDOW);
-  if (list.length) failures.set(key, list);
-  else failures.delete(key);
-  return list.length >= max;
+const windowStart = () => new Date(Date.now() - WINDOW).toISOString();
+async function recent(key, max) {
+  const { n } = await db.prepare('SELECT COUNT(*) AS n FROM auth_attempts WHERE key = ? AND created_at > ?').get(sha256(key), windowStart());
+  return n >= max;
 }
-function record(key) {
-  failures.set(key, [...(failures.get(key) || []), Date.now()]);
-}
+const record = (key) => db.prepare('INSERT INTO auth_attempts (key, created_at) VALUES (?, ?)').run(sha256(key), new Date().toISOString());
+const forget = (key) => db.prepare('DELETE FROM auth_attempts WHERE key = ?').run(sha256(key));
 const TOO_MANY = 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่';
+const TOO_MANY_REQUESTS = 'ทำรายการบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่';
 
 let cleaned = false;
 app.use((req, _res, next) => loadSession(req).then(() => next(), next));
 async function loadSession(req) {
   await ready();
   if (!cleaned) {
-    // clear expired sessions once per server start
+    // clear what has expired once per server start
     cleaned = true;
-    await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
+    const now = new Date().toISOString();
+    await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now);
+    await db.prepare('DELETE FROM password_resets WHERE expires_at <= ?').run(now);
+    await db.prepare('DELETE FROM auth_attempts WHERE created_at <= ?').run(windowStart());
   }
   const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
   if (token) {
@@ -150,8 +162,8 @@ async function loadSession(req) {
 }
 
 app.post('/api/auth/register', route(async (req, res) => {
-  if (recent(`signup:${req.ip}`, 20)) throw new HttpError(429, TOO_MANY);
-  record(`signup:${req.ip}`);
+  if (await recent(`signup:${req.ip}`, 20)) throw new HttpError(429, TOO_MANY);
+  await record(`signup:${req.ip}`);
   const name = str(req.body.name, 100);
   const email = str(req.body.email, 200).toLowerCase();
   const password = typeof req.body.password === 'string' ? req.body.password : '';
@@ -170,14 +182,16 @@ app.post('/api/auth/register', route(async (req, res) => {
 app.post('/api/auth/login', route(async (req, res) => {
   const email = str(req.body.email, 200).toLowerCase();
   const key = `login:${req.ip}:${email}`;
-  if (recent(key, 10)) throw new HttpError(429, TOO_MANY);
+  const accountKey = `login-account:${email}`;
+  if ((await recent(key, 10)) || (await recent(accountKey, 50))) throw new HttpError(429, TOO_MANY);
   const password = typeof req.body.password === 'string' ? req.body.password : '';
   const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-  if (!user || !verifyPassword(password, user.password_hash)) {
-    record(key);
+  if (!verifyPassword(password, user ? user.password_hash : DUMMY_HASH) || !user) {
+    await record(key);
+    await record(accountKey);
     throw new HttpError(401, 'อีเมลหรือรหัสผ่านไม่ถูกต้อง');
   }
-  failures.delete(key);
+  await forget(key);
   if (user.disabled) throw new HttpError(403, 'บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อทีม ProfitBloom');
   await startSession(res, user.id);
   return { user: publicUser(user) };
@@ -191,8 +205,83 @@ app.post('/api/auth/logout', route(async (req, res) => {
 
 app.get('/api/auth/me', route(async (req) => ({ user: req.user ? publicUser(req.user) : null })));
 
+// ---------- forgotten password ----------
+
+/** Where the web app lives, for links in emails. Never taken from the request in production (the Host header can be forged). */
+function appUrl(req) {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  if (IS_PROD) throw new Error('ต้องตั้งค่า APP_URL เพื่อส่งลิงก์ตั้งรหัสผ่านใหม่');
+  return req.get('origin') || `${req.protocol}://${req.get('host')}`;
+}
+
+async function findReset(token) {
+  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
+  return db
+    .prepare('SELECT r.token_hash, u.* FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = ? AND r.expires_at > ? AND u.disabled = 0')
+    .get(sha256(token), new Date().toISOString());
+}
+const RESET_EXPIRED = 'ลิงก์นี้ใช้ไม่ได้แล้วหรือหมดอายุ กรุณาขอลิงก์ใหม่';
+
+// Always answers the same way, whether or not the email belongs to an account.
+app.post('/api/auth/forgot', route(async (req) => {
+  const email = str(req.body.email, 200).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'รูปแบบอีเมลไม่ถูกต้อง');
+  const ipKey = `forgot:${req.ip}`;
+  const emailKey = `forgot-email:${email}`;
+  if (await recent(ipKey, 10)) throw new HttpError(429, TOO_MANY_REQUESTS);
+  await record(ipKey);
+  // at most three emails per address per window, however many people ask
+  const quiet = await recent(emailKey, 3);
+  const user = quiet ? null : await db.prepare('SELECT * FROM users WHERE email = ? AND disabled = 0').get(email);
+  if (user) {
+    await record(emailKey);
+    const token = crypto.randomBytes(32).toString('hex');
+    const link = `${appUrl(req)}/reset?token=${token}`;
+    await transaction(async () => {
+      // only the newest link works, and only its hash is stored
+      await db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
+      await db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+        .run(sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60e3).toISOString());
+    });
+    await sendMail({ to: user.email, ...passwordResetMail({ name: user.name, link, minutes: RESET_MINUTES }) });
+  }
+  return { ok: true };
+}));
+
+app.post('/api/auth/reset/check', route(async (req) => ({ valid: !!(await findReset(req.body.token)) })));
+
+app.post('/api/auth/reset', route(async (req, res) => {
+  const ipKey = `reset:${req.ip}`;
+  if (await recent(ipKey, 20)) throw new HttpError(429, TOO_MANY_REQUESTS);
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (password.length < 8) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
+  const user = await findReset(req.body.token);
+  if (!user) {
+    await record(ipKey);
+    throw new HttpError(400, RESET_EXPIRED);
+  }
+  await transaction(async () => {
+    // the link is spent the moment it is used; a second request with it finds nothing
+    const { changes } = await db.prepare('DELETE FROM password_resets WHERE token_hash = ?').run(user.token_hash);
+    if (!changes) throw new HttpError(400, RESET_EXPIRED);
+    await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), user.id);
+    // whoever knew the old password is signed out everywhere
+    await endAllSessions(user.id);
+  });
+  await forget(`login-account:${user.email}`);
+  await startSession(res, user.id);
+  return { user: publicUser(user) };
+}));
+
 // everything below requires login
 app.use('/api', (req, _res, next) => (req.user ? next() : next(new HttpError(401, 'กรุณาเข้าสู่ระบบ'))));
+
+app.post('/api/auth/logout-all', route(async (req, res) => {
+  await endAllSessions(req.user.id);
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  return { ok: true };
+}));
 
 app.put('/api/account', route(async (req) => {
   const name = str(req.body.name, 100);
@@ -226,8 +315,14 @@ app.put('/api/account', route(async (req) => {
   const { currentPassword, newPassword } = req.body;
   if (newPassword) {
     if (typeof newPassword !== 'string' || newPassword.length < 8) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
-    if (typeof currentPassword !== 'string' || !verifyPassword(currentPassword, req.user.password_hash))
+    const key = `password:${req.user.id}`;
+    if (await recent(key, 10)) throw new HttpError(429, TOO_MANY_REQUESTS);
+    if (typeof currentPassword !== 'string' || !verifyPassword(currentPassword, req.user.password_hash)) {
+      await record(key);
       throw new HttpError(400, 'รหัสผ่านปัจจุบันไม่ถูกต้อง');
+    }
+    await forget(key);
+    await db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(req.user.id);
     await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.user.id);
     await db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.sessionToken);
   }
