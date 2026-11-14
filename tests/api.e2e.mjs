@@ -1,5 +1,6 @@
 // End-to-end API checks for ProfitBloom. Run with `npm test` (starts its own server on a throwaway database).
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 
 const BASE = process.env.BASE;
 const PROJECT_DIR = process.env.PROJECT_DIR;
@@ -221,6 +222,72 @@ ok('ร้าน A login ไม่ได้ + มีข้อความบอ�
 r = await ADM.call('PUT', `/admin/shops/${shopA.id}`, { disabled: false });
 r = await A.call('POST', '/auth/login', { email: 'a@x.test', password: 'newpassword1' });
 ok('เปิดใช้งานแล้ว ร้าน A login ได้ + ข้อมูลยังอยู่', r.status === 200 && (await A.call('GET', '/projects')).data.length === 2);
+
+// --- forgotten password, sign out everywhere
+{
+  const outbox = () => (fs.existsSync(process.env.MAIL_OUTBOX_FILE) ? fs.readFileSync(process.env.MAIL_OUTBOX_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+  const tokenIn = (mail) => mail.text.match(/\/reset\?token=([0-9a-f]{64})/)?.[1];
+  const F = client(), OLD = client(), OTHER = client();
+  await F.call('POST', '/auth/register', { name: 'ลืมรหัส', email: 'forgot@x.test', password: 'password123' });
+  await OLD.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'password123' });
+
+  r = await F.call('POST', '/auth/forgot', { email: 'not-an-email' });
+  ok('ลืมรหัส: อีเมลผิดรูปแบบ ถูกปฏิเสธ', r.status === 400);
+  const known = await OTHER.call('POST', '/auth/forgot', { email: 'Forgot@X.test' });
+  const unknown = await OTHER.call('POST', '/auth/forgot', { email: 'ghost@x.test' });
+  ok('ลืมรหัส: อีเมลที่มี/ไม่มีบัญชี ตอบเหมือนกัน (เดาไม่ได้ว่าใครเป็นสมาชิก)', known.status === 200 && unknown.status === 200 && JSON.stringify(known.data) === JSON.stringify(unknown.data));
+  let mails = outbox();
+  ok('ลืมรหัส: ส่งอีเมลเฉพาะบัญชีที่มีอยู่ 1 ฉบับ', mails.length === 1 && mails[0].to === 'forgot@x.test', JSON.stringify(mails.map((m) => m.to)));
+  const first = tokenIn(mails[0]);
+  ok('อีเมลมีลิงก์ตั้งรหัสผ่านใหม่', !!first);
+
+  r = await OTHER.call('POST', '/auth/reset/check', { token: first });
+  ok('ลิงก์ที่เพิ่งส่ง ใช้ได้', r.data.valid === true);
+  r = await OTHER.call('POST', '/auth/reset/check', { token: 'f'.repeat(64) });
+  ok('ลิงก์ปลอม ใช้ไม่ได้', r.data.valid === false);
+  r = await OTHER.call('POST', '/auth/reset', { token: 'f'.repeat(64), password: 'whatever123' });
+  ok('ตั้งรหัสด้วยลิงก์ปลอม ถูกปฏิเสธ', r.status === 400);
+  r = await OTHER.call('POST', '/auth/reset', { token: first, password: 'short' });
+  ok('ตั้งรหัสใหม่สั้นกว่า 8 ถูกปฏิเสธ และลิงก์ยังใช้ได้', r.status === 400 && (await OTHER.call('POST', '/auth/reset/check', { token: first })).data.valid);
+
+  await OTHER.call('POST', '/auth/forgot', { email: 'forgot@x.test' });
+  mails = outbox();
+  const second = tokenIn(mails.at(-1));
+  ok('ขอลิงก์ใหม่ ลิงก์เก่าใช้ไม่ได้อีก', mails.length === 2 && second !== first && (await OTHER.call('POST', '/auth/reset/check', { token: first })).data.valid === false);
+
+  r = await OTHER.call('POST', '/auth/reset', { token: second, password: 'brandnew456' });
+  ok('ตั้งรหัสผ่านใหม่สำเร็จ + เข้าสู่ระบบให้เลย', r.status === 200 && r.data.user.email === 'forgot@x.test' && (await OTHER.call('GET', '/projects')).status === 200, r.status);
+  ok('คำตอบไม่มีรหัสผ่านหรือ token', !JSON.stringify(r.data).includes('hash'));
+  r = await OTHER.call('POST', '/auth/reset', { token: second, password: 'another789' });
+  ok('ลิงก์ใช้ได้ครั้งเดียว', r.status === 400);
+  ok('ตั้งรหัสใหม่แล้ว เครื่องที่ login ค้างไว้ถูกออกจากระบบ', (await OLD.call('GET', '/projects')).status === 401 && (await F.call('GET', '/projects')).status === 401);
+  r = await F.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'password123' });
+  ok('รหัสผ่านเดิมใช้ไม่ได้แล้ว', r.status === 401);
+  r = await F.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'brandnew456' });
+  ok('login ด้วยรหัสผ่านใหม่ได้', r.status === 200);
+
+  for (let i = 0; i < 4; i++) await client().call('POST', '/auth/forgot', { email: 'forgot@x.test' });
+  ok('ขอลิงก์ถี่ ๆ ส่งอีเมลไม่เกิน 3 ฉบับใน 15 นาที', outbox().filter((m) => m.to === 'forgot@x.test').length === 3, outbox().length);
+
+  // a link asked for before a password change in Settings must die with the old password
+  const stale = tokenIn(outbox().at(-1));
+  r = await F.call('PUT', '/account', { name: 'ลืมรหัส', currentPassword: 'brandnew456', newPassword: 'settings789' });
+  ok('เปลี่ยนรหัสในหน้าตั้งค่า → ลิงก์รีเซ็ตที่ค้างอยู่ใช้ไม่ได้', r.status === 200 && (await OTHER.call('POST', '/auth/reset/check', { token: stale })).data.valid === false);
+
+  r = await client().call('POST', '/auth/logout-all');
+  ok('ออกจากระบบทุกเครื่อง: ต้อง login ก่อน', r.status === 401);
+  const D1 = client(), D2 = client();
+  await D1.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'settings789' });
+  await D2.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'settings789' });
+  r = await D1.call('POST', '/auth/logout-all');
+  ok('ออกจากระบบทุกเครื่อง: ทุกเครื่องรวมเครื่องนี้ถูกออก', r.status === 200 && (await D1.call('GET', '/projects')).status === 401 && (await D2.call('GET', '/projects')).status === 401 && (await F.call('GET', '/projects')).status === 401);
+  ok('ออกจากระบบทุกเครื่อง: ไม่กระทบร้านอื่น', (await B.call('GET', '/projects')).status === 200);
+  r = await D1.call('POST', '/auth/login', { email: 'forgot@x.test', password: 'settings789' });
+  ok('ออกทุกเครื่องแล้ว login ใหม่ได้', r.status === 200);
+
+  for (let i = 0; i < 11; i++) r = await D1.call('PUT', '/account', { name: 'ลืมรหัส', currentPassword: 'guess-' + i, newPassword: 'whatever123' });
+  ok('เดารหัสผ่านปัจจุบันในหน้าตั้งค่าหลายครั้ง ถูกจำกัด (429)', r.status === 429, r.status);
+}
 
 // --- misc
 r = await A.call('POST', '/projects', '{bad json');

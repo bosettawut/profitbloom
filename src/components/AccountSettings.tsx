@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, Save, ShieldCheck, Trash2 } from 'lucide-react';
+import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { api, User } from '../lib/api';
 import { brandLogo, resizeLogo } from '../lib/brand';
 import { DEFAULT_RULES, withDefaults, type Rules } from '../lib/decision';
@@ -8,12 +8,14 @@ interface AccountSettingsProps {
   user: User;
   onUserUpdated: (user: User) => void;
   onLogout: () => void;
+  /** signs out every device, this one included */
+  onLogoutAll: () => Promise<void>;
   onNavigate: (page: string) => void;
 }
 
 const inputClass = 'pb-input';
 
-export function AccountSettings({ user, onUserUpdated, onLogout, onNavigate }: AccountSettingsProps) {
+export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, onNavigate }: AccountSettingsProps) {
   const [form, setForm] = useState({
     name: user.name,
     businessName: user.businessName,
@@ -44,6 +46,15 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onNavigate }: A
 
   const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm({ ...form, [field]: e.target.value });
+
+  const handleLogoutAll = async () => {
+    if (!window.confirm('ออกจากระบบทุกเครื่อง รวมถึงเครื่องนี้ ใช่หรือไม่?')) return;
+    try {
+      await onLogoutAll();
+    } catch (err) {
+      setMessage({ ok: false, text: (err as Error).message });
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -195,6 +206,17 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onNavigate }: A
                 <label className="pb-label">รหัสผ่านใหม่</label>
                 <input className={inputClass} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} autoComplete="new-password" />
               </div>
+            </div>
+            <p className="text-xs text-ink-muted">เมื่อเปลี่ยนรหัสผ่าน เครื่องอื่นที่เข้าสู่ระบบค้างไว้จะถูกออกจากระบบ</p>
+            <div className="pt-4 border-t border-line flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-ink">ออกจากระบบทุกเครื่อง</p>
+                <p className="text-sm text-ink-muted">ใช้เมื่อเคยเข้าสู่ระบบไว้บนเครื่องอื่น หรือสงสัยว่ามีคนอื่นเข้าบัญชี</p>
+              </div>
+              <button type="button" onClick={handleLogoutAll} className="pb-btn-secondary shrink-0 whitespace-nowrap">
+                <MonitorSmartphone className="w-4 h-4" />
+                ออกจากระบบทุกเครื่อง
+              </button>
             </div>
           </div>
 

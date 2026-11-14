@@ -40,7 +40,8 @@ import { Packages } from './components/Packages';
 import { AdminPage } from './components/AdminPage';
 import { QuickCheck } from './components/QuickCheck';
 import { LEVEL_STYLE, projectHealth } from './lib/job';
-import { AuthScreen } from './components/AuthScreen';
+import { AuthScreen, type AuthMode } from './components/AuthScreen';
+import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
@@ -81,7 +82,7 @@ const formatEventDate = (iso: string) =>
 
 interface AppProps {
   /** which tab the sign-in screen opens on when nobody is logged in */
-  authMode?: 'login' | 'register';
+  authMode?: AuthMode;
   /** the current address (path + query); decides which app screen is showing */
   path: string;
   /** move to another address: landing, /login, /signup, or a screen under /app */
@@ -95,6 +96,8 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
   const [chartRange, setChartRange] = useState<'6' | '12' | 'year'>('6');
   // the screen comes from the address, so the browser's back/forward buttons walk through the app
   const view = useMemo(() => parseView(path), [path]);
+  /** the page a password reset email links to; it works whether or not someone is signed in here */
+  const onResetPage = path.startsWith('/reset');
   const activeNav = view.nav;
   /** the job the address points at (open in the workspace, or the one a new quote is built from) */
   const neededProjectId = view.projectId ?? view.fromProjectId;
@@ -124,7 +127,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
 
   useEffect(() => {
     // a signed-in user never sees /login or /signup again, not even through the back button
-    if (user && !path.startsWith('/app')) go('/app', { replace: true });
+    if (user && !path.startsWith('/app') && !onResetPage) go('/app', { replace: true });
   }, [user, path]);
 
   const show = (next: View, options?: { replace?: boolean }) => {
@@ -150,8 +153,9 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
 
   const navigate = (nav: string) => show({ nav });
 
-  const handleLogout = async () => {
-    await api.logout().catch(() => {});
+  const handleLogout = async (everywhere = false) => {
+    if (everywhere) await api.logoutAll();
+    else await api.logout().catch(() => {});
     setUser(null);
     setDashboard(null);
     setSelectedProject(null);
@@ -166,12 +170,29 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
     );
   }
 
+  if (onResetPage) {
+    return (
+      <ResetPassword
+        token={new URLSearchParams(path.split('?')[1] ?? '').get('token') ?? ''}
+        onDone={(u) => {
+          // possibly a different account from the one that was signed in on this device
+          setSelectedProject(null);
+          setDashboard(null);
+          setUser(u);
+          go('/app', { replace: true });
+        }}
+        onRequestNew={() => go('/forgot', { replace: true })}
+        onBack={() => go('/')}
+      />
+    );
+  }
+
   if (!user) {
     return (
       <AuthScreen
         key={authMode}
         initialMode={authMode}
-        onModeChange={(m) => go(m === 'register' ? '/signup' : '/login')}
+        onModeChange={(m) => go(m === 'register' ? '/signup' : m === 'forgot' ? '/forgot' : '/login')}
         onBack={() => go('/')}
         // signing in from /login lands on /app (see the effect above); a session that ran out
         // mid-work signs back in to the screen it was on
@@ -309,7 +330,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
       case 'reports':
         return <Reports user={user} onOpenProject={(p) => handleProjectSelect(p)} />;
       case 'settings':
-        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={handleLogout} onNavigate={navigate} />;
+        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={() => handleLogout()} onLogoutAll={() => handleLogout(true)} onNavigate={navigate} />;
       case 'admin':
         return user.role === 'admin' ? <AdminPage user={user} /> : null;
       case 'subscription':
@@ -495,7 +516,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
     <div className="min-h-screen bg-canvas text-ink">
       {/* Desktop sidebar: floating purple panel */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
-        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={handleLogout} />
+        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
       </aside>
 
       {/* Mobile top bar */}

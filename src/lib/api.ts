@@ -185,6 +185,11 @@ export const api = {
   login: (email: string, password: string) => request<{ user: User }>('POST', '/auth/login', { email, password }),
   register: (name: string, email: string, password: string) => request<{ user: User }>('POST', '/auth/register', { name, email, password }),
   logout: () => request<{ ok: true }>('POST', '/auth/logout'),
+  /** signs out every device, this one included */
+  logoutAll: () => request<{ ok: true }>('POST', '/auth/logout-all'),
+  forgotPassword: (email: string) => request<{ ok: true }>('POST', '/auth/forgot', { email }),
+  resetCheck: (token: string) => request<{ valid: boolean }>('POST', '/auth/reset/check', { token }),
+  resetPassword: (token: string, password: string) => request<{ user: User }>('POST', '/auth/reset', { token, password }),
   updateAccount: (body: Partial<Omit<User, 'id' | 'email' | 'plan' | 'role' | 'trialEndsAt'>> & { name: string; currentPassword?: string; newPassword?: string }) => request<{ user: User }>('PUT', '/account', body),
 
   dashboard: (range: '6' | '12' | 'year') => request<Dashboard>('GET', `/dashboard?range=${range}`),

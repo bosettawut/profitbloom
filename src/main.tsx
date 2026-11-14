@@ -10,6 +10,7 @@ import './index.css';
  *   /          public landing page
  *   /login     sign-in   (the app shows it when nobody is logged in)
  *   /signup    sign-up
+ *   /forgot    ask for a password reset link      /reset?token=…   the page that link opens
  *   /app/...   the ProfitBloom app itself (its own screens are in src/lib/route.ts)
  */
 const here = () => window.location.pathname + window.location.search;
@@ -38,7 +39,7 @@ function Root() {
   };
 
   if (path === '/') return <LandingPage isLoggedIn={loggedIn} onNavigate={go} />;
-  return <App authMode={path === '/signup' ? 'register' : 'login'} path={path} go={go} />;
+  return <App authMode={path === '/signup' ? 'register' : path === '/forgot' ? 'forgot' : 'login'} path={path} go={go} />;
 }
 
 createRoot(document.getElementById('root')!).render(<Root />);
