@@ -11,7 +11,7 @@
 import { createClient } from '@libsql/client';
 import fs from 'node:fs';
 import path from 'node:path';
-import { close, connectionConfig, db, LINK_CUSTOMERS, ready, transaction } from './db.js';
+import { close, connectionConfig, db, GROUP_COSTS, LINK_CUSTOMERS, ready, transaction } from './db.js';
 
 const flags = new Set(process.argv.slice(2));
 const DRY = flags.has('--dry-run');
@@ -142,6 +142,7 @@ try {
 
       // the old database had no customer list: build it from the client names on jobs and quotes
       await db.exec(LINK_CUSTOMERS);
+      await db.exec(GROUP_COSTS);
       customers = await count('customers');
     });
   }

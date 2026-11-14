@@ -5,10 +5,14 @@ import assert from 'node:assert/strict';
 import {
   canTakeJob,
   DEFAULT_RULES,
+  hasOwnerLabor,
+  hasTeardown,
   health,
   learnings,
+  marginToMarkup,
   markupToMargin,
   numbers,
+  repriced,
   review,
   risks,
   simulate,
@@ -28,8 +32,8 @@ const job = (over: Partial<Job> = {}): Job => ({
   teardown: true,
   ...over,
 });
-const item = (name: string, category: any, amount: number, paidBefore = true, actual: number | null = null) => ({
-  name, category, quantity: 1, price: amount, paidBefore, actual,
+const item = (name: string, category: any, amount: number, groupId: number | null = null, actual: number | null = null) => ({
+  name, category, quantity: 1, price: amount, groupId, actual,
 });
 /** markup that turns `cost` into `price` */
 const markup = (cost: number, price: number) => (price / cost - 1) * 100;
@@ -81,11 +85,11 @@ test('Scenario Simulator adds team, setup day, vehicles and material price rises
   near(r.added.vehicles, 2500);
 });
 
-test('Quote Health Check finds the four risks on slide 7', () => {
+test('Quote Health Check finds the risks on slide 7', () => {
   const j = job({
-    costItems: [item('ดอกไม้', 'material', 150000), item('ทีม', 'labor', 40000, false), item('รถ', 'transport', 15000, false)],
+    costItems: [item('ดอกไม้', 'material', 150000), item('ทีม', 'labor', 40000), item('รถ', 'transport', 15000)],
     profitMargin: markup(205000, 280000),
-    depositPct: 30, // 84,000 deposit vs 150,000 paid before the event
+    depositPct: 30,
     ownerLabor: false,
     teardown: false,
     setupDays: 2,
@@ -93,7 +97,7 @@ test('Quote Health Check finds the four risks on slide 7', () => {
     laborDays: 1,
   });
   const ids = risks(j, DEFAULT_RULES).map((r) => r.id);
-  for (const id of ['owner-labor', 'teardown', 'labor-days', 'cash-flow']) assert.ok(ids.includes(id), `missing ${id}: ${ids}`);
+  for (const id of ['owner-labor', 'teardown', 'labor-days']) assert.ok(ids.includes(id), `missing ${id}: ${ids}`);
   assert.ok(risks(j, DEFAULT_RULES).find((r) => r.id === 'labor-days')!.title.includes('1 วัน แต่ Timeline 3 วัน'));
 });
 
@@ -105,11 +109,56 @@ test('RULE 1 (slide 10): margin under 20% is High Risk', () => {
   assert.equal(health(j, DEFAULT_RULES).level, 'risk');
 });
 
-test('RULE 2 (slide 10): deposit below pre-event cash is a Cash Flow Warning', () => {
-  const ok = job({ costItems: [item('ดอกไม้', 'material', 10000)], profitMargin: 100, depositPct: 50 }); // deposit 10,000 = cash 10,000
-  const bad = { ...ok, depositPct: 40 };
-  assert.ok(!risks(ok, DEFAULT_RULES).some((r) => r.id === 'cash-flow'));
-  assert.ok(risks(bad, DEFAULT_RULES).some((r) => r.id === 'cash-flow'));
+test('Cash to set aside = every cost of the job less the deposit (no "paid before" ticks, no warning of its own)', () => {
+  const j = job({ costItems: [item('ดอกไม้', 'material', 60000), item('ทีม', 'labor', 40000)], profitMargin: 50, depositPct: 30 }); // price 150,000, deposit 45,000
+  near(numbers(j).cashRequired, 55000);
+  near(numbers({ ...j, depositPct: 100 }).cashRequired, 0); // never negative
+  assert.ok(!risks(j, DEFAULT_RULES).some((r) => r.id === 'cash-flow'));
+});
+
+test('Headings: each has its own margin and the job price is their sum', () => {
+  const j = job({
+    groups: [{ id: 1, name: 'ดอกไม้', markup: marginToMarkup(40) }, { id: 2, name: 'ค่าแรง', markup: marginToMarkup(20) }, { id: 3, name: 'ว่าง', markup: 100 }],
+    costItems: [item('กุหลาบ', 'material', 60000, 1), item('ทีม', 'labor', 40000, 2), { ...item('หน้างาน', 'other', 0), actual: 500, isExtra: true }],
+    profitMargin: 999, // ignored once every item has a heading
+  });
+  const n = numbers(j);
+  near(n.cost, 100000);
+  near(n.headings[0].price, 100000);
+  near(n.headings[1].price, 50000);
+  near(n.headings[0].margin, 40, 1e-9);
+  near(n.headings[2].price, 0);
+  near(n.price, 150000);
+  near(n.margin, 100 / 3, 1e-9);
+  // warnings stay at job level: 33.3% overall is fine even though one heading is at 20%
+  assert.ok(!risks(j, DEFAULT_RULES).some((r) => r.id.startsWith('margin')));
+});
+
+test('Headings: moving the job to a new price keeps every heading\'s share, never below cost', () => {
+  const j = job({
+    groups: [{ id: 1, name: 'ดอกไม้', markup: marginToMarkup(40) }, { id: 2, name: 'ค่าแรง', markup: marginToMarkup(20) }],
+    costItems: [item('กุหลาบ', 'material', 60000, 1), item('ทีม', 'labor', 40000, 2)],
+  });
+  const r = repriced(j, 120000);
+  const n = numbers({ ...j, groups: r.groups });
+  near(n.price, 120000, 1e-6);
+  near(n.headings[0].price, 80000, 1e-6);
+  near(n.headings[1].price, 40000, 1e-6);
+  near(r.profitMargin, 20, 1e-9);
+  near(numbers({ ...j, groups: repriced(j, 50000).groups }).price, 100000, 1e-6);
+});
+
+test('Job conditions come from the cost categories', () => {
+  const base = job({ ownerLabor: null, teardown: null, costItems: [item('ดอกไม้', 'material', 1000), item('ทีม', 'labor', 1000), item('รถ', 'transport', 500)] });
+  const ids = (j: any) => risks(j, DEFAULT_RULES).map((r) => r.id);
+  assert.ok(ids(base).includes('owner-labor') && ids(base).includes('teardown'));
+  const filled = { ...base, costItems: [...base.costItems, item('ค่าแรงตัวเอง', 'owner_labor', 3000), item('เก็บงาน', 'teardown', 2000)] };
+  assert.ok(!ids(filled).includes('owner-labor') && !ids(filled).includes('teardown'));
+  assert.equal(hasOwnerLabor(filled), true);
+  assert.equal(hasTeardown(base), false);
+  // a zero-baht line does not count, and a "yes" saved before the categories existed still does
+  assert.ok(ids({ ...base, costItems: [...base.costItems, item('ค่าแรงตัวเอง', 'owner_labor', 0)] }).includes('owner-labor'));
+  assert.ok(!ids({ ...base, ownerLabor: true, teardown: true }).some((id) => id === 'owner-labor' || id === 'teardown'));
 });
 
 test('RULE 3 (slide 10) + Post-Event Review (slide 9: expected 98,000 → actual 61,500, lost 36,500)', () => {
@@ -117,9 +166,9 @@ test('RULE 3 (slide 10) + Post-Event Review (slide 9: expected 98,000 → actual
   const j = job({
     costItems: [
       { ...item('ดอกไม้', 'material', 100000), actual: 112000 },
-      { ...item('ทีม', 'labor', 50000, false), actual: 58500 },
-      { ...item('รถขนส่ง', 'transport', 32000, false), actual: 38000 },
-      { name: 'ซื้อของหน้างาน', category: 'other', quantity: 0, price: 0, paidBefore: false, actual: 10000, isExtra: true },
+      { ...item('ทีม', 'labor', 50000), actual: 58500 },
+      { ...item('รถขนส่ง', 'transport', 32000), actual: 38000 },
+      { name: 'ซื้อของหน้างาน', category: 'other', quantity: 0, price: 0, actual: 10000, isExtra: true },
     ],
     profitMargin: markup(cost, 280000),
   });
@@ -148,7 +197,7 @@ test('Can I Take This Job?: take / adjust / risky', () => {
 });
 
 test('Learning loop: average overrun per category from reviewed jobs', () => {
-  const a = job({ costItems: [{ ...item('ดอกไม้', 'material', 100), actual: 112 }, { ...item('ทีม', 'labor', 100, false), actual: 100 }] });
+  const a = job({ costItems: [{ ...item('ดอกไม้', 'material', 100), actual: 112 }, { ...item('ทีม', 'labor', 100), actual: 100 }] });
   const b = job({ costItems: [{ ...item('ดอกไม้', 'material', 100), actual: 108 }] });
   const l = learnings([a, b]);
   assert.equal(l.length, 1);

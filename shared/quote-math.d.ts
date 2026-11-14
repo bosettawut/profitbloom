@@ -18,5 +18,24 @@ export function quoteTotals(q: {
   taxRate?: number;
   vatMode?: VatMode;
 }): QuoteTotals;
-export function projectPrice(costItems: Array<{ quantity: number; price: number; isExtra?: boolean }>, markupPct: number): number;
+export interface PricedItem {
+  quantity: number;
+  price: number;
+  isExtra?: boolean;
+  groupId?: number | null;
+}
+export interface PricedGroup {
+  id: number;
+  name: string;
+  /** markup on cost in % */
+  markup: number;
+}
+export interface JobPricing {
+  cost: number;
+  price: number;
+  headings: Array<PricedGroup & { cost: number; price: number }>;
+}
+export function jobPricing(costItems: PricedItem[], groups?: PricedGroup[] | null, markupPct?: number): JobPricing;
+export function markupOf(item: { groupId?: number | null }, groups?: PricedGroup[] | null, markupPct?: number): number;
+export function projectPrice(costItems: PricedItem[], markupPct: number, groups?: PricedGroup[] | null): number;
 export function fitToPrice<T extends { quantity: number; unitPrice: number }>(items: T[], target: number, discountRate?: number): T[] | null;

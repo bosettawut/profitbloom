@@ -3,11 +3,11 @@ import { ArrowLeft, ChevronRight, Edit, FileText, FolderOpen, Mail, MapPin, Mess
 import { api, baht, type Customer, type CustomerDetail, type CustomerInput, type CustomerSummary, type Project } from '../lib/api';
 import { ProjectItem, statusPill } from './ProjectItem';
 import { StatsCard } from './StatsCard';
+import { salePrice } from '../lib/job';
 
 const formatDate = (iso: string) =>
   iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : 'ยังไม่กำหนดวัน';
 
-const salePrice = (p: Project) => p.costItems.reduce((s, i) => s + i.total, 0) * (1 + p.profitMargin / 100);
 
 function useToast() {
   const [toast, setToast] = useState('');

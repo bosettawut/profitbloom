@@ -70,7 +70,7 @@ export function RiskList({ risks, empty = 'ไม่พบจุดเสี่�
 export function HealthPanel({ h, budget }: { h: Health; budget?: number }) {
   const metrics = [
     { label: 'Margin', value: `${h.margin.toFixed(1)}%`, hint: `กำไร ${fmt(h.profit)} บาท จากราคา ${fmt(h.price)}` },
-    { label: 'เงินสดที่ต้องสำรอง', value: `${fmt(h.cashRequired)} บาท`, hint: `ก่อนงาน · มัดจำได้ ${fmt(h.deposit)}` },
+    { label: 'เงินสดที่ต้องสำรอง', value: `${fmt(h.cashRequired)} บาท`, hint: `ต้นทุนทั้งหมด − มัดจำ ${fmt(h.deposit)}` },
     { label: 'ราคาคุ้มทุน (Break-even)', value: `${fmt(h.breakEven)} บาท`, hint: 'ต่ำกว่านี้คือขาดทุน' },
     { label: 'ช่วงราคาแนะนำ', value: `${fmt(h.recommended[0])}–${fmt(h.recommended[1])}`, hint: budget ? `งบลูกค้า ${fmt(budget)} บาท` : 'ตาม Margin เป้าหมายของร้าน' },
   ];

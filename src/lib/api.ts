@@ -44,15 +44,22 @@ export interface AdminShop {
   lastActiveAt: string | null;
 }
 
+/** a heading of cost items with its own markup on cost in % (margin = markup ÷ (100 + markup)) */
+export interface CostGroup {
+  id: number;
+  name: string;
+  markup: number;
+}
+
 export interface CostItem {
   id: number;
+  /** the heading it sits under; unplanned extras have none */
+  groupId: number | null;
   name: string;
   category: CostCategory;
   quantity: number;
   price: number;
   total: number;
-  /** has to be paid before the client pays the balance (counts toward cash required) */
-  paidBefore: boolean;
   /** what it really cost, filled in during/after the event */
   actual: number | null;
   /** unplanned cost that appeared during the event (estimate 0) */
@@ -102,8 +109,9 @@ export interface Project {
   notes: string;
   createdDate: string;
   projectType: string;
+  costGroups: CostGroup[];
   costItems: CostItem[];
-  /** markup on cost in % (margin = markup ÷ (100 + markup)) */
+  /** the whole job's markup on cost in %, worked out from its headings when saved */
   profitMargin: number;
   depositPct: number;
   setupDays: number;
@@ -208,7 +216,7 @@ export interface SalesReport {
 }
 
 export type ProjectInput = Partial<Omit<Project, 'costItems'>> & {
-  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'paidBefore' | 'actual' | 'isExtra'>>>;
+  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & {
   items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'>>;
