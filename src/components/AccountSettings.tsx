@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
-import { api, User } from '../lib/api';
+import { api, User, type VatMode } from '../lib/api';
 import { brandLogo, resizeLogo } from '../lib/brand';
 import { DEFAULT_RULES, withDefaults, type Rules } from '../lib/decision';
 
@@ -23,6 +23,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
     businessPhone: user.businessPhone,
     businessTaxId: user.businessTaxId,
     businessLogo: user.businessLogo,
+    vatMode: user.vatMode,
   });
   const fileInput = useRef<HTMLInputElement>(null);
   const [rules, setRules] = useState<Rules>(withDefaults(user.rules));
@@ -177,6 +178,15 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
                   <p className="text-xs text-ink-muted mt-1">{hint}</p>
                 </div>
               ))}
+              <div>
+                <label className="pb-label">VAT ในใบเสนอราคา</label>
+                <select className={inputClass} value={form.vatMode} onChange={(e) => setForm({ ...form, vatMode: e.target.value as VatMode })}>
+                  <option value="exclusive">บวก VAT เพิ่มจากราคา</option>
+                  <option value="inclusive">ราคารวม VAT แล้ว (ถอด VAT)</option>
+                  <option value="none">ไม่มี VAT</option>
+                </select>
+                <p className="text-xs text-ink-muted mt-1">ค่าเริ่มต้นของใบเสนอราคาใหม่ เปลี่ยนเป็นรายใบได้</p>
+              </div>
             </div>
             <button type="button" onClick={() => setRules(DEFAULT_RULES)} className="text-sm text-[#5A42C6] font-medium hover:underline">
               ใช้ค่าเริ่มต้นของ ProfitBloom

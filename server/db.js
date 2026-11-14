@@ -292,6 +292,14 @@ const MIGRATIONS = [
 
   ${LINK_CUSTOMERS}
   `,
+
+  // 4 — VAT handling per quote (with a shop default) and the job price a quote is locked to
+  `
+  ALTER TABLE users ADD COLUMN vat_mode TEXT NOT NULL DEFAULT 'exclusive';
+  ALTER TABLE quotes ADD COLUMN vat_mode TEXT NOT NULL DEFAULT 'exclusive';
+  ALTER TABLE quotes ADD COLUMN locked_price DOUBLE PRECISION;
+  UPDATE quotes SET vat_mode = 'none' WHERE tax_rate = 0;
+  `,
 ];
 
 async function schemaVersion(q) {

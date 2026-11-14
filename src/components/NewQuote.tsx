@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin } from 'lucide-react';
-import { api, Project, QuoteStatus, User } from '../lib/api';
+import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin, Lock } from 'lucide-react';
+import { api, Project, QuoteStatus, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
+import { fitToPrice, lineAmount, projectPrice, quoteTotals, wholeBaht } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -23,6 +24,8 @@ interface NewQuoteProps {
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+/** every amount on a quote is whole baht */
+const money = (n: number) => `฿${n.toLocaleString('th-TH', { maximumFractionDigits: 0 })}`;
 
 export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
@@ -44,17 +47,26 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
     notes: fromProject?.notes ?? ''
   });
 
-  // a quote created from a project lists each cost item at its selling price (cost + project margin)
-  const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() =>
-    fromProject && fromProject.costItems.some((i) => !i.isExtra)
-      ? fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
-          const unitPrice = Math.round(item.price * (1 + fromProject.profitMargin / 100) * 100) / 100;
-          return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: unitPrice * item.quantity };
-        })
-      : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }]
-  );
+  // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
+  const [lockedPrice, setLockedPrice] = useState<number | null>(() => {
+    const price = fromProject ? projectPrice(fromProject.costItems, fromProject.profitMargin) : 0;
+    return price > 0 ? price : null;
+  });
+
+  // it lists each cost item at its selling price (cost + project margin) in whole baht; rounding each
+  // line can leave the sum a few baht off the job's price, so one line takes up the difference
+  const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
+    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }];
+    const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
+      const unitPrice = wholeBaht(item.price * (1 + fromProject.profitMargin / 100));
+      return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0 };
+    });
+    const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice)) || lines;
+    return fitted.map((i) => ({ ...i, total: lineAmount(i) }));
+  });
 
   const [taxRate, setTaxRate] = useState(7);
+  const [vatMode, setVatMode] = useState<VatMode>(user.vatMode);
   const [discountRate, setDiscountRate] = useState(0);
   const [notification, setNotification] = useState('');
 
@@ -79,24 +91,32 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }]);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
+        setVatMode(q.vatMode);
+        setLockedPrice(q.lockedPrice);
         if (startInPreview) setShowPreview(true);
       })
       .catch(err => showNotification(err.message))
       .finally(() => setLoading(false));
   }, [quoteId, startInPreview]);
 
-  const subtotal = quoteItems.reduce((sum, item) => sum + item.total, 0);
-  const discount = subtotal * (discountRate / 100);
-  const afterDiscount = subtotal - discount;
-  const tax = afterDiscount * (taxRate / 100);
-  const grandTotal = afterDiscount + tax;
+  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode });
+  /** how far the lines are from the locked job price (0 = they match) */
+  const lockGap = lockedPrice === null ? 0 : afterDiscount - lockedPrice;
+
+  const fitToLock = () => {
+    if (lockedPrice === null) return;
+    const fitted = fitToPrice(quoteItems, lockedPrice, discountRate);
+    if (!fitted) return showNotification('ปรับอัตโนมัติไม่ได้กับส่วนลดนี้ ลองเปลี่ยนส่วนลดหรือแก้รายการเอง');
+    setQuoteItems(fitted.map((i) => ({ ...i, total: lineAmount(i) })));
+    showNotification('ปรับยอดรายการให้ตรงกับราคาที่ล็อกแล้ว');
+  };
 
   const updateQuoteItem = (id: number, field: string, value: string | number) => {
     setQuoteItems(items => items.map(item => {
       if (item.id === id) {
         const updatedItem = { ...item, [field]: value };
         if (field === 'quantity' || field === 'unitPrice') {
-          updatedItem.total = updatedItem.quantity * updatedItem.unitPrice;
+          updatedItem.total = lineAmount(updatedItem);
         }
         return updatedItem;
       }
@@ -130,6 +150,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       showNotification('กรุณากรอกชื่อลูกค้า');
       return null;
     }
+    if (lockGap !== 0) {
+      setShowPreview(false);
+      showNotification(`ยอดรายการยังไม่เท่าราคาที่ล็อกไว้ ${money(lockedPrice ?? 0)} กด "ปรับส่วนต่างอัตโนมัติ"`);
+      return null;
+    }
     setSaving(true);
     try {
       const body = {
@@ -138,6 +163,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         customerId,
         taxRate,
         discountRate,
+        vatMode,
         status: nextStatus === 'expired' ? undefined : nextStatus,
         items: quoteItems
           .filter(item => item.description.trim() || item.total > 0)
@@ -147,6 +173,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       setSavedId(saved.id);
       setQuoteCode(saved.code);
       setStatus(saved.status);
+      setLockedPrice(saved.lockedPrice);
       return saved;
     } catch (err) {
       showNotification((err as Error).message);
@@ -166,7 +193,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
   };
 
   const docRef = useRef<HTMLDivElement>(null);
-  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, items: quoteItems };
+  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, vatMode, items: quoteItems };
   const [exporting, setExporting] = useState(false);
 
   /** Saves first so the PDF always carries a real quote number, then downloads it. */
@@ -197,9 +224,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         `เรียน ${saved.clientName}`,
         '',
         `ขอส่งใบเสนอราคา ${saved.code}${saved.projectTitle ? ` สำหรับ ${saved.projectTitle}` : ''}`,
-        ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ฿${i.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
+        ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ${money(i.total)}`),
         '',
-        `ยอดรวมสุทธิ ฿${saved.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        `ยอดรวมสุทธิ ${money(saved.totalAmount)}`,
         saved.validUntilText ? `ใบเสนอราคานี้ใช้ได้ถึง ${saved.validUntilText}` : '',
         '',
         user.businessName || user.name,
@@ -371,7 +398,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                       <div>
                         <span className="text-xs text-ink-muted">รวม: </span>
                         <span className="font-medium text-ink">
-                          ฿{item.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {money(item.total)}
                         </span>
                       </div>
                       <button
@@ -429,7 +456,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                       </td>
                       <td className="p-4 text-right">
                         <span className="text-ink font-medium">
-                          ฿{item.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {money(item.total)}
                         </span>
                       </td>
                       <td className="p-4 text-center">
@@ -451,7 +478,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">การคำนวณเพิ่มเติม</h3>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+            <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
               <div>
                 <label className="pb-label">ส่วนลด (%)</label>
                 <input
@@ -466,17 +493,28 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               </div>
 
               <div>
-                <label className="pb-label">ภาษี (%)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.1"
-                  value={taxRate}
-                  onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
-                  className="pb-input"
-                />
+                <label className="pb-label">ภาษีมูลค่าเพิ่ม (VAT)</label>
+                <select className="pb-input" value={vatMode} onChange={(e) => setVatMode(e.target.value as VatMode)}>
+                  <option value="exclusive">บวก VAT เพิ่มจากราคา</option>
+                  <option value="inclusive">ราคารวม VAT แล้ว (ถอด VAT)</option>
+                  <option value="none">ไม่มี VAT</option>
+                </select>
               </div>
+
+              {vatMode !== 'none' && (
+                <div>
+                  <label className="pb-label">อัตรา VAT (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={taxRate}
+                    onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                    className="pb-input"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -491,7 +529,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               <div className="flex justify-between">
                 <span className="text-sm md:text-base text-ink-muted">ยอดรวม</span>
                 <span className="font-medium text-ink text-sm md:text-base">
-                  ฿{subtotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(subtotal)}
                 </span>
               </div>
               
@@ -499,7 +537,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                 <div className="flex justify-between">
                   <span className="text-sm md:text-base text-ink-muted">ส่วนลด ({discountRate}%)</span>
                   <span className="font-medium text-red-600 text-sm md:text-base">
-                    -฿{discount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    -{money(discount)}
                   </span>
                 </div>
               )}
@@ -507,15 +545,24 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               <div className="flex justify-between">
                 <span className="text-sm md:text-base text-ink-muted">ยอดหลังหักส่วนลด</span>
                 <span className="font-medium text-ink text-sm md:text-base">
-                  ฿{afterDiscount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(afterDiscount)}
                 </span>
               </div>
               
-              {taxRate > 0 && (
+              {vatRate > 0 && vatMode === 'inclusive' && (
                 <div className="flex justify-between">
-                  <span className="text-sm md:text-base text-ink-muted">ภาษี ({taxRate}%)</span>
+                  <span className="text-sm md:text-base text-ink-muted">มูลค่าก่อน VAT</span>
+                  <span className="font-medium text-ink text-sm md:text-base">
+                    {money(beforeVat)}
+                  </span>
+                </div>
+              )}
+
+              {vatRate > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-sm md:text-base text-ink-muted">{vatMode === 'inclusive' ? `VAT ${vatRate}% (รวมในราคาแล้ว)` : `ภาษี (${vatRate}%)`}</span>
                   <span className="font-medium text-amber-600 text-sm md:text-base">
-                    ฿{tax.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {money(tax)}
                   </span>
                 </div>
               )}
@@ -523,10 +570,31 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               <div className="flex justify-between pt-3 md:pt-4 border-t border-line text-base md:text-lg font-medium">
                 <span className="text-ink">ยอดรวมสุทธิ</span>
                 <span className="text-ink">
-                  ฿{grandTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(grandTotal)}
                 </span>
               </div>
             </div>
+
+            {lockedPrice !== null && (
+              <div className="rounded-xl bg-[#F7F6FA] px-3 py-3 mt-4">
+                <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                  <Lock className="w-4 h-4 text-[#673AB7] shrink-0" />
+                  ราคาโปรเจ็กต์ที่ล็อกไว้ {money(lockedPrice)}
+                </p>
+                {lockGap === 0 ? (
+                  <p className="text-xs text-emerald-600 mt-1">ยอดรายการหลังหักส่วนลดตรงกับราคาที่ล็อก</p>
+                ) : (
+                  <>
+                    <p className="text-xs text-rose-600 mt-1">
+                      ยอดรายการหลังหักส่วนลด {money(afterDiscount)} {lockGap > 0 ? 'เกิน' : 'ขาด'}อยู่ {money(Math.abs(lockGap))} ต้องเท่าราคาที่ล็อกจึงจะบันทึกได้
+                    </p>
+                    <button onClick={fitToLock} className="pb-btn-secondary !py-2 w-full mt-3 !bg-white">
+                      ปรับส่วนต่างอัตโนมัติ
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* Action Buttons */}
             <div className="grid grid-cols-1 gap-3 mt-6">
