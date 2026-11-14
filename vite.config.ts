@@ -7,7 +7,8 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     port: Number(process.env.WEB_PORT) || 5173,
-    proxy: { '/api': 'http://localhost:3001' },
+    // the API's port; set API_PORT when 3001 is taken (server/index.js reads the same variable)
+    proxy: { '/api': `http://localhost:${Number(process.env.API_PORT) || 3001}` },
   },
   resolve: {
     alias: [
