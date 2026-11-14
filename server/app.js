@@ -663,6 +663,7 @@ async function serializeQuote(q) {
     status,
     statusText: QUOTE_STATUS[status] || status,
     createdDate: thaiDate(q.created_at),
+    createdAt: q.created_at,
     itemCount: items.length,
     totalAmount: totals.total,
     items: lines.map((i) => ({ ...i, total: lineAmount(i) })),
