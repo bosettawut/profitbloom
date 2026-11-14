@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   BarChart3, 
   FolderOpen, 
@@ -45,6 +45,7 @@ import { Reports } from './components/Reports';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
 import { trialDaysLeft } from './lib/plans';
+import { parseView, viewPath, type View } from './lib/route';
 import { api, Activity, baht, Dashboard, Project, ProjectInput, timeAgo, UNAUTHORIZED_EVENT, User } from './lib/api';
 
 // Function to calculate progress based on status
@@ -81,21 +82,23 @@ const formatEventDate = (iso: string) =>
 interface AppProps {
   /** which tab the sign-in screen opens on when nobody is logged in */
   authMode?: 'login' | 'register';
-  /** move to another top-level page (landing, /login, /signup, /app) */
-  go?: (path: string) => void;
+  /** the current address (path + query); decides which app screen is showing */
+  path: string;
+  /** move to another address: landing, /login, /signup, or a screen under /app */
+  go: (path: string, options?: { replace?: boolean }) => void;
 }
 
-export default function App({ authMode = 'login', go }: AppProps) {
+export default function App({ authMode = 'login', path, go }: AppProps) {
   const [user, setUser] = useState<User | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
-  const [activeNav, setActiveNav] = useState('dashboard');
   const [chartType, setChartType] = useState<'line' | 'bar'>('bar');
   const [chartRange, setChartRange] = useState<'6' | '12' | 'year'>('6');
+  // the screen comes from the address, so the browser's back/forward buttons walk through the app
+  const view = useMemo(() => parseView(path), [path]);
+  const activeNav = view.nav;
+  /** the job the address points at (open in the workspace, or the one a new quote is built from) */
+  const neededProjectId = view.projectId ?? view.fromProjectId;
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [editOnOpen, setEditOnOpen] = useState(false);
-  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
-  const [quoteStartsInPreview, setQuoteStartsInPreview] = useState(false);
-  const [quoteFromProject, setQuoteFromProject] = useState<Project | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [openJobs, setOpenJobs] = useState<Project[]>([]);
   const [allActivities, setAllActivities] = useState<Activity[] | null>(null);
@@ -117,35 +120,42 @@ export default function App({ authMode = 'login', go }: AppProps) {
 
   useEffect(() => {
     document.title = user ? brandName(user) : 'ProfitBloom';
-    // a signed-in user always lives at /app, even if they arrived via /login or /signup (or the back button)
-    const keepAtApp = () => {
-      if (user && window.location.pathname !== '/app') window.history.replaceState(null, '', '/app');
-    };
-    keepAtApp();
-    window.addEventListener('popstate', keepAtApp);
-    return () => window.removeEventListener('popstate', keepAtApp);
   }, [user]);
+
+  useEffect(() => {
+    // a signed-in user never sees /login or /signup again, not even through the back button
+    if (user && !path.startsWith('/app')) go('/app', { replace: true });
+  }, [user, path]);
+
+  const show = (next: View, options?: { replace?: boolean }) => {
+    setAllActivities(null);
+    go(viewPath(next), options);
+  };
+
+  useEffect(() => {
+    // arrived by back/forward, refresh or a link: the job isn't in memory yet
+    if (!user || !neededProjectId || selectedProject?.id === neededProjectId) return;
+    let stale = false;
+    api.project(neededProjectId)
+      .then((p) => !stale && setSelectedProject(p))
+      .catch(() => !stale && show({ nav: 'projects' }, { replace: true }));
+    return () => {
+      stale = true;
+    };
+  }, [user, neededProjectId, selectedProject?.id]);
 
   useEffect(() => {
     if (user && activeNav === 'dashboard') loadDashboard();
   }, [user, activeNav, loadDashboard]);
 
-  const navigate = (nav: string) => {
-    setActiveNav(nav);
-    setSelectedProject(null);
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(null);
-    setAllActivities(null);
-    window.scrollTo(0, 0);
-  };
+  const navigate = (nav: string) => show({ nav });
 
   const handleLogout = async () => {
     await api.logout().catch(() => {});
     setUser(null);
     setDashboard(null);
-    navigate('dashboard');
-    go?.('/');
+    setSelectedProject(null);
+    go('/');
   };
 
   if (!authChecked) {
@@ -161,13 +171,11 @@ export default function App({ authMode = 'login', go }: AppProps) {
       <AuthScreen
         key={authMode}
         initialMode={authMode}
-        onModeChange={(m) => go?.(m === 'register' ? '/signup' : '/login')}
-        onBack={go && (() => go('/'))}
-        onAuthenticated={(u) => {
-          setUser(u);
-          navigate('dashboard');
-          go?.('/app');
-        }}
+        onModeChange={(m) => go(m === 'register' ? '/signup' : '/login')}
+        onBack={() => go('/')}
+        // signing in from /login lands on /app (see the effect above); a session that ran out
+        // mid-work signs back in to the screen it was on
+        onAuthenticated={setUser}
       />
     );
   }
@@ -226,10 +234,8 @@ export default function App({ authMode = 'login', go }: AppProps) {
     activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav));
 
   const handleProjectSelect = (project: Project, edit = false) => {
-    setActiveNav('projects');
-    setEditOnOpen(edit);
     setSelectedProject(project);
-    window.scrollTo(0, 0);
+    show({ nav: 'projects', projectId: project.id, edit });
   };
 
   const handleProjectUpdate = async (updatedProject: ProjectInput & { id: string }) => {
@@ -240,43 +246,41 @@ export default function App({ authMode = 'login', go }: AppProps) {
 
   const handleProjectDelete = async (projectId: string) => {
     await api.deleteProject(projectId);
+    // the deleted job's address is replaced, so the back button can't land on it again
     setSelectedProject(null);
+    show({ nav: 'projects' }, { replace: true });
   };
 
-  const handleBackToProjects = () => {
-    setSelectedProject(null);
-  };
+  const handleBackToProjects = () => show({ nav: 'projects' });
 
-  const openQuote = (quoteId: string | null, preview = false) => {
-    setEditingQuoteId(quoteId);
-    setQuoteStartsInPreview(preview);
-    setQuoteFromProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
-  };
+  const openQuote = (quoteId: string | null, preview = false) => show({ nav: 'quotes-new', quoteId: quoteId ?? undefined, preview });
 
   const createQuoteFromProject = (project: Project) => {
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(project);
-    setSelectedProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
+    setSelectedProject(project);
+    show({ nav: 'quotes-new', fromProjectId: project.id });
   };
 
+  const loadingScreen = (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-[#673AB7] animate-spin" />
+    </div>
+  );
+
   const renderContent = () => {
-    // If a project is selected, show project detail
-    if (selectedProject && activeNav === 'projects') {
+    // the address names a job that is still being fetched
+    if (neededProjectId && selectedProject?.id !== neededProjectId) return loadingScreen;
+
+    if (view.projectId && selectedProject) {
       return (
         <JobWorkspace
-          key={`${selectedProject.id}-${editOnOpen}`}
+          key={`${selectedProject.id}-${!!view.edit}`}
           project={selectedProject}
           user={user}
           onBack={handleBackToProjects}
           onUpdate={handleProjectUpdate}
           onDelete={handleProjectDelete}
           onCreateQuote={createQuoteFromProject}
-          startStage={editOnOpen ? 'quote' : undefined}
+          startStage={view.edit ? 'quote' : undefined}
         />
       );
     }
@@ -292,11 +296,11 @@ export default function App({ authMode = 'login', go }: AppProps) {
       case 'quotes-new':
         return (
           <NewQuote
-            key={editingQuoteId ?? quoteFromProject?.id ?? 'new'}
+            key={view.quoteId ?? view.fromProjectId ?? 'new'}
             user={user}
-            quoteId={editingQuoteId}
-            fromProject={quoteFromProject}
-            startInPreview={quoteStartsInPreview}
+            quoteId={view.quoteId ?? null}
+            fromProject={view.fromProjectId ? selectedProject : null}
+            startInPreview={!!view.preview}
             onDone={() => navigate('quotes-all')}
           />
         );
