@@ -1,6 +1,6 @@
 import express from 'express';
 import crypto from 'node:crypto';
-import { db, ready, transaction } from './db.js';
+import { db, NOW, ready, transaction } from './db.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -37,6 +37,11 @@ const num = (v, { min = -Infinity, max = Infinity } = {}) => {
   return Math.min(max, Math.max(min, n));
 };
 const date = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+/** a row id from the URL or the request body; anything that isn't a plain positive integer is null */
+const rowId = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n <= 2147483647 ? n : null;
+};
 
 const thaiDate = (iso) =>
   iso ? new Date(iso.replace(' ', 'T') + (iso.length > 10 ? 'Z' : '')).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -126,7 +131,7 @@ const TOO_MANY = 'พยายามเข้าสู่ระบบบ่อ�
 let cleaned = false;
 app.use((req, _res, next) => loadSession(req).then(() => next(), next));
 async function loadSession(req) {
-  await ready;
+  await ready();
   if (!cleaned) {
     // clear expired sessions once per server start
     cleaned = true;
@@ -156,7 +161,7 @@ app.post('/api/auth/register', route(async (req, res) => {
   if (await db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'อีเมลนี้ถูกใช้งานแล้ว');
   const trialEnds = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
   const { lastInsertRowid } = await db
-    .prepare("INSERT INTO users (name, email, password_hash, plan, trial_ends_at) VALUES (?, ?, ?, 'trial', ?)")
+    .prepare("INSERT INTO users (name, email, password_hash, plan, trial_ends_at) VALUES (?, ?, ?, 'trial', ?) RETURNING id")
     .run(name, email, hashPassword(password), trialEnds);
   await startSession(res, Number(lastInsertRowid));
   return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid)) };
@@ -242,6 +247,9 @@ const PROJECT_STATUS = {
 const TYPE_PREFIX = { 'งานแต่งงาน': 'WD', 'งานหมั้น': 'EN', 'งานวันเกิด': 'BD', 'งานบวช': 'OR', 'งานเปิดร้าน': 'OP' };
 
 async function nextCode(table, userId, prefix) {
+  // always called inside a transaction: one shop's codes are handed out one at a time, so two
+  // requests arriving together can't be given the same number
+  await db.prepare('SELECT pg_advisory_xact_lock(?::bigint)').get(userId);
   const year = new Date().getFullYear();
   const like = `${prefix}-${year}-%`;
   const row = await db.prepare(`SELECT code FROM ${table} WHERE user_id = ? AND code LIKE ? ORDER BY id DESC LIMIT 1`).get(userId, like);
@@ -291,7 +299,7 @@ async function serializeProject(p) {
 }
 
 async function getProject(userId, id) {
-  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(Number(id), userId);
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(rowId(id), userId);
   if (!p) throw new HttpError(404, 'ไม่พบโปรเจ็กต์');
   return p;
 }
@@ -363,7 +371,7 @@ app.post('/api/projects', route(async (req, res) => {
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO projects (user_id, code, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
                   deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown);
     await replaceCostItems(Number(lastInsertRowid), d.items || []);
@@ -380,7 +388,7 @@ app.put('/api/projects/:id', route(async (req) => {
   await transaction(async () => {
     await db.prepare(`UPDATE projects SET title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
-                  reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN datetime('now') ELSE reviewed_at END, updated_at=datetime('now')
+                  reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
       .run(d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.review_applied,
@@ -395,12 +403,8 @@ app.put('/api/projects/:id', route(async (req) => {
 
 app.delete('/api/projects/:id', route(async (req) => {
   const p = await getProject(req.user.id, req.params.id);
-  // foreign keys aren't enforced, so clean up the children by hand
-  await transaction(async () => {
-    await db.prepare('DELETE FROM cost_items WHERE project_id = ?').run(p.id);
-    await db.prepare('UPDATE quotes SET project_id = NULL WHERE project_id = ?').run(p.id);
-    await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
-  });
+  // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL)
+  await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
   await logActivity(req.user.id, 'project_deleted', `ลบโปรเจ็กต์ ${p.title}`, 'ลบแล้ว');
   return { ok: true };
 }));
@@ -442,14 +446,14 @@ async function serializeQuote(q) {
 }
 
 async function getQuote(userId, id) {
-  const q = await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(Number(id), userId);
+  const q = await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(rowId(id), userId);
   if (!q) throw new HttpError(404, 'ไม่พบใบเสนอราคา');
   return q;
 }
 
 async function readQuoteBody(userId, body) {
-  let projectId = body.projectId ? Number(body.projectId) : null;
-  if (projectId) await getProject(userId, projectId);
+  const projectId = body.projectId ? rowId(body.projectId) : null;
+  if (body.projectId) await getProject(userId, projectId);
   return {
     project_id: projectId,
     client_name: str(body.clientName, 200),
@@ -477,7 +481,7 @@ async function replaceQuoteItems(quoteId, items) {
 async function syncProjectStatus(userId, projectId, quoteStatus) {
   const target = QUOTE_TO_PROJECT_STATUS[quoteStatus];
   if (!projectId || !target) return;
-  await db.prepare(`UPDATE projects SET status = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ? AND status NOT IN ('completed', 'cancelled')`)
+  await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ? AND user_id = ? AND status NOT IN ('completed', 'cancelled')`)
     .run(target, projectId, userId);
 }
 
@@ -495,7 +499,7 @@ app.post('/api/quotes', route(async (req, res) => {
     const status = d.status || 'draft';
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO quotes (user_id, code, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
@@ -514,7 +518,7 @@ app.put('/api/quotes/:id', route(async (req) => {
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const status = d.status || existing.status;
   await transaction(async () => {
-    await db.prepare(`UPDATE quotes SET project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, status=?, updated_at=datetime('now')
+    await db.prepare(`UPDATE quotes SET project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, status=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
       .run(d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
@@ -528,10 +532,7 @@ app.put('/api/quotes/:id', route(async (req) => {
 
 app.delete('/api/quotes/:id', route(async (req) => {
   const q = await getQuote(req.user.id, req.params.id);
-  await transaction(async () => {
-    await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(q.id);
-    await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
-  });
+  await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
   await logActivity(req.user.id, 'quote_deleted', `ลบใบเสนอราคา ${q.code}`, 'ลบแล้ว');
   return { ok: true };
 }));
@@ -601,7 +602,7 @@ app.get('/api/dashboard', route(async (req) => {
 }));
 
 app.get('/api/activities', route(async (req) =>
-  db.prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(req.user.id, Math.min(Number(req.query.limit) || 50, 200)),
+  db.prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(req.user.id, Math.min(Math.max(Math.trunc(Number(req.query.limit)) || 50, 1), 200)),
 ));
 
 app.get('/api/reports', route(async (req) => {
@@ -666,7 +667,7 @@ const SHOPS_SQL = `
 app.get('/api/admin/shops', route(async () => (await db.prepare(`${SHOPS_SQL} ORDER BY u.created_at DESC, u.id DESC`).all()).map(shopRow)));
 
 app.put('/api/admin/shops/:id', route(async (req) => {
-  const shop = await db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
+  const shop = await db.prepare('SELECT * FROM users WHERE id = ?').get(rowId(req.params.id));
   if (!shop) throw new HttpError(404, 'ไม่พบร้านนี้');
   const { plan, disabled } = req.body;
   await transaction(async () => {

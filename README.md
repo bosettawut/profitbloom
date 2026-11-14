@@ -5,22 +5,24 @@
 ส่งมอบงาน / เจ้าของใหม่: อ่าน [HANDOVER.md](HANDOVER.md) ก่อน
 
 - **Frontend:** React + Vite + Tailwind (ดีไซน์จาก Figma Make)
-- **Backend:** Node.js + Express, ฐานข้อมูล SQLite ผ่าน `@libsql/client` — บนเครื่องใช้ไฟล์ใน `data/`, บน Vercel ใช้ [Turso](https://turso.tech)
+- **Backend:** Node.js + Express, ฐานข้อมูล PostgreSQL ผ่าน `pg` — บนเครื่องใช้ PostgreSQL ในเครื่อง, บน Vercel ใช้ [Supabase](https://supabase.com) (สิงคโปร์)
 - **Login:** อีเมล + รหัสผ่าน (scrypt hash), session cookie แบบ httpOnly
 
-ต้องใช้ Node.js 22.13 ขึ้นไป
+ต้องใช้ Node.js 22.13 ขึ้นไป และ PostgreSQL 14 ขึ้นไป
 
 ## รันบนเครื่อง (development)
 
 ```bash
 npm install
+createdb profitbloom     # ครั้งแรกครั้งเดียว
 npm run dev
 ```
 
 เปิด http://localhost:5173 แล้วสมัครสมาชิกได้เลย
 (`npm run dev` รันทั้ง API ที่พอร์ต 3001 และหน้าเว็บที่พอร์ต 5173 โดย Vite ส่งต่อ `/api` ไปที่ API)
 
-ข้อมูลเก็บที่ `data/profitbloom.db` ลบโฟลเดอร์ `data/` ทิ้งได้ถ้าต้องการเริ่มใหม่ทั้งหมด
+ข้อมูลเก็บในฐานข้อมูล `profitbloom` ของ PostgreSQL บนเครื่อง (ตารางถูกสร้างให้อัตโนมัติ) ถ้าต้องการเริ่มใหม่ทั้งหมด: `dropdb profitbloom && createdb profitbloom`
+ถ้า PostgreSQL ไม่ได้อยู่ที่ `localhost:5432` ให้กำหนด `DATABASE_URL` เช่น `postgresql://user:pass@host:5432/profitbloom`
 
 ## หน้าเว็บ
 
@@ -28,7 +30,7 @@ npm run dev
 | --- | --- |
 | `/` | หน้าเว็บหลัก (Landing page) |
 | `/login`, `/signup` | เข้าสู่ระบบ / สมัครสมาชิก |
-| `/app` | ตัวโปรแกรม ProfitBloom |
+| `/app`, `/app/projects`, `/app/projects/12`, `/app/quotes`, … | ตัวโปรแกรม ProfitBloom — แต่ละหน้าจอมีที่อยู่ของตัวเอง (ดู `src/lib/route.ts`) ปุ่มย้อนกลับของเบราว์เซอร์จึงย้อนทีละหน้าจอ |
 
 ข้อความ ตัวเลข ราคาแพ็กเกจ รีวิว อีเมลติดต่อ และลิงก์โซเชียลของหน้าเว็บหลักแก้ได้ที่เดียวใน `src/landing/content.ts`
 รูปภาพอยู่ใน `public/landing/`
@@ -61,24 +63,34 @@ npm run make-admin -- admin@profitbloom.co.th
 npm test
 ```
 
-รัน unit test ของระบบคำนวณ (เทียบกับตัวอย่างใน Product Vision) แล้วตามด้วยการทดสอบ API ทั้งหมด (สมัคร/login, แยกข้อมูลระหว่างร้าน, โปรเจ็กต์, ใบเสนอราคา, ตัวเลข Dashboard/Reports, ตั้งค่าบัญชี, แอดมิน, จำกัดการเดารหัส) บนฐานข้อมูลชั่วคราว ไม่กระทบข้อมูลจริง
+รัน unit test ของระบบคำนวณ (เทียบกับตัวอย่างใน Product Vision) แล้วตามด้วยการทดสอบ API ทั้งหมด (สมัคร/login, แยกข้อมูลระหว่างร้าน, โปรเจ็กต์, ใบเสนอราคา, ตัวเลข Dashboard/Reports, ตั้งค่าบัญชี, แอดมิน, จำกัดการเดารหัส) บนฐานข้อมูลชั่วคราว (สร้างและลบให้เองบน PostgreSQL ในเครื่อง หรือที่ `TEST_DATABASE_URL`) ไม่กระทบข้อมูลจริง
 
 ## ขึ้นใช้งานจริง (production)
 
-### Vercel + Turso (ที่ใช้อยู่)
+### Vercel + Supabase (สิงคโปร์)
 
-- หน้าเว็บ build ด้วย `vite build` → `dist/`, API ทั้งหมดวิ่งผ่าน serverless function `api/index.js` (ดู `vercel.json`)
-- ฐานข้อมูลอยู่บน Turso เพราะ Vercel ไม่มี disk ถาวร — ตั้งค่า Environment Variables ใน Vercel:
+- หน้าเว็บ build ด้วย `vite build` → `dist/`, API ทั้งหมดวิ่งผ่าน serverless function `api/index.js` ที่ region `sin1` (ดู `vercel.json`)
+- ฐานข้อมูลอยู่บน Supabase region Southeast Asia (Singapore) — ตั้งค่า Environment Variables ใน Vercel:
 
 | ตัวแปร | ความหมาย |
 | --- | --- |
-| `TURSO_DATABASE_URL` | เช่น `libsql://profitbloom-xxxx.turso.io` |
-| `TURSO_AUTH_TOKEN` | token ของฐานข้อมูล |
+| `DATABASE_URL` | connection string แบบ **Transaction pooler** (พอร์ต 6543) จาก Supabase → Connect |
+| `DATABASE_CA_CERT` | (แนะนำ) ใบรับรองจาก Supabase → Database → SSL Configuration เพื่อให้ตรวจสอบตัวตนของเซิร์ฟเวอร์ฐานข้อมูล |
 
-ตารางถูกสร้างให้อัตโนมัติตอนเรียก API ครั้งแรก
-ตั้งแอดมินบนฐานข้อมูลจริง: `TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... npm run make-admin -- อีเมล`
+ตารางถูกสร้างและอัปเดตให้อัตโนมัติตอนเรียก API ครั้งแรก (ดู `MIGRATIONS` ใน `server/db.js`) ทุกตารางเปิด Row Level Security ไว้ เพื่อไม่ให้เข้าถึงผ่าน REST API ของ Supabase ได้
+ตั้งแอดมินบนฐานข้อมูลจริง: `DATABASE_URL=... npm run make-admin -- อีเมล`
 
-### เซิร์ฟเวอร์ทั่วไป (มี disk ถาวร)
+### ย้ายข้อมูลจากระบบเดิม (Turso / SQLite)
+
+```bash
+# ต้นทาง: TURSO_DATABASE_URL + TURSO_AUTH_TOKEN (หรือ SQLITE_FILE=ไฟล์.db)   ปลายทาง: DATABASE_URL
+npm run migrate-data -- --dry-run   # ดูจำนวนแถวก่อน ยังไม่เขียน
+npm run migrate-data                # ย้ายจริง (หยุดถ้าปลายทางมีข้อมูลแล้ว)
+```
+
+ย้ายทั้งหมดในครั้งเดียว ถ้าพลาดกลางทางจะไม่มีอะไรถูกเขียน และตรวจจำนวนแถวกับยอดเงินให้ก่อนยืนยัน บัญชี รหัสผ่าน และการ login ค้างไว้ของร้านใช้ต่อได้เลย
+
+### เซิร์ฟเวอร์ทั่วไป
 
 ```bash
 npm install
@@ -86,7 +98,7 @@ npm run build
 npm start
 ```
 
-เซิร์ฟเวอร์ตัวเดียวให้บริการทั้งหน้าเว็บและ API ที่พอร์ตจาก `PORT` — ถ้าไม่ตั้ง `TURSO_DATABASE_URL` จะเก็บข้อมูลเป็นไฟล์ใน `DATA_DIR` (ต้องเป็น disk ถาวร)
+เซิร์ฟเวอร์ตัวเดียวให้บริการทั้งหน้าเว็บและ API ที่พอร์ตจาก `PORT` — กำหนด `DATABASE_URL` ชี้ไปที่ PostgreSQL ที่ใช้
 
 ต้องเปิดผ่าน **HTTPS** เพราะ cookie ตั้งค่า `Secure` ในโหมด production
 
@@ -94,11 +106,12 @@ npm start
 
 ```
 server/
-  db.js          เชื่อมฐานข้อมูล (Turso หรือไฟล์) + ตาราง
+  db.js          เชื่อมฐานข้อมูล PostgreSQL + ตาราง (MIGRATIONS)
   app.js         API ทั้งหมด (Express)
   index.js       รันแบบเซิร์ฟเวอร์ปกติ + เสิร์ฟไฟล์ใน dist/
 api/index.js     ทางเข้าของ Vercel
   make-admin.js  ตั้ง/ถอนสิทธิ์ผู้ดูแลระบบ
+  migrate-from-sqlite.js  ย้ายข้อมูลจากระบบเดิม (ใช้ครั้งเดียว)
 tests/           การทดสอบ API (npm test)
 src/
   lib/api.ts   ฟังก์ชันเรียก API และ type ที่ใช้ร่วมกัน
