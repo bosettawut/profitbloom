@@ -4,6 +4,7 @@ import { api, Project, QuoteStatus, User } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
+import { CustomerPicker } from './CustomerPicker';
 
 interface QuoteItem {
   id: number;
@@ -28,6 +29,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [projectId, setProjectId] = useState<string | null>(fromProject?.id ?? null);
+  const [customerId, setCustomerId] = useState<string | null>(fromProject?.customerId ?? null);
   const [createdDate, setCreatedDate] = useState(new Date().toLocaleDateString('th-TH'));
   const [loading, setLoading] = useState(!!quoteId);
   const [saving, setSaving] = useState(false);
@@ -63,6 +65,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         setQuoteCode(q.code);
         setStatus(q.status);
         setProjectId(q.projectId);
+        setCustomerId(q.customerId);
         setCreatedDate(q.createdDate);
         setQuoteData({
           clientName: q.clientName,
@@ -132,6 +135,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       const body = {
         ...quoteData,
         projectId,
+        customerId,
         taxRate,
         discountRate,
         status: nextStatus === 'expired' ? undefined : nextStatus,
@@ -234,12 +238,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
               <div>
                 <label className="pb-label">ชื่อลูกค้า *</label>
-                <input
-                  type="text"
+                <CustomerPicker
                   value={quoteData.clientName}
-                  onChange={(e) => setQuoteData({ ...quoteData, clientName: e.target.value })}
-                  className="pb-input"
                   placeholder="เช่น คุณสมชาย"
+                  onChange={(clientName) => {
+                    setCustomerId(null);
+                    setQuoteData({ ...quoteData, clientName });
+                  }}
+                  onPick={(c) => {
+                    setCustomerId(c.id);
+                    setQuoteData({ ...quoteData, clientName: c.name, clientPhone: c.phone, clientEmail: c.email });
+                  }}
                 />
               </div>
 

@@ -54,8 +54,37 @@ export interface CostItem {
   isExtra: boolean;
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  lineId: string;
+  address: string;
+  notes: string;
+  createdDate: string;
+}
+
+/** a customer with what they have bought; sales count jobs that are approved or completed */
+export interface CustomerSummary extends Customer {
+  projectCount: number;
+  quoteCount: number;
+  soldCount: number;
+  totalSales: number;
+  lastEventDate: string;
+}
+
+export interface CustomerDetail extends CustomerSummary {
+  projects: Project[];
+  quotes: Quote[];
+}
+
+export type CustomerInput = Partial<Omit<Customer, 'id' | 'createdDate'>>;
+
 export interface Project {
   id: string;
+  /** the customer in the shop's customer list this job belongs to */
+  customerId: string | null;
   title: string;
   code: string;
   eventDate: string;
@@ -94,6 +123,7 @@ export interface Quote {
   id: string;
   code: string;
   projectId: string | null;
+  customerId: string | null;
   clientName: string;
   clientPhone: string;
   clientEmail: string;
@@ -201,6 +231,12 @@ export const api = {
   createProject: (body: ProjectInput) => request<Project>('POST', '/projects', body),
   updateProject: (id: string, body: ProjectInput) => request<Project>('PUT', `/projects/${id}`, body),
   deleteProject: (id: string) => request<{ ok: true }>('DELETE', `/projects/${id}`),
+
+  customers: () => request<CustomerSummary[]>('GET', '/customers'),
+  customer: (id: string) => request<CustomerDetail>('GET', `/customers/${id}`),
+  createCustomer: (body: CustomerInput) => request<Customer>('POST', '/customers', body),
+  updateCustomer: (id: string, body: CustomerInput) => request<Customer>('PUT', `/customers/${id}`, body),
+  deleteCustomer: (id: string) => request<{ ok: true }>('DELETE', `/customers/${id}`),
 
   adminShops: () => request<AdminShop[]>('GET', '/admin/shops'),
   adminUpdateShop: (id: number, body: { plan?: User['plan']; disabled?: boolean }) => request<AdminShop>('PUT', `/admin/shops/${id}`, body),

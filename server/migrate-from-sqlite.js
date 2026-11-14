@@ -11,7 +11,7 @@
 import { createClient } from '@libsql/client';
 import fs from 'node:fs';
 import path from 'node:path';
-import { close, connectionConfig, db, ready, transaction } from './db.js';
+import { close, connectionConfig, db, LINK_CUSTOMERS, ready, transaction } from './db.js';
 
 const flags = new Set(process.argv.slice(2));
 const DRY = flags.has('--dry-run');
@@ -72,6 +72,7 @@ try {
   rows.cost_items = rows.cost_items.filter((r) => projects.has(r.project_id));
   rows.quote_items = rows.quote_items.filter((r) => quotes.has(r.quote_id));
   let unlinked = 0;
+  let customers = 0;
   for (const q of rows.quotes) {
     if (q.project_id !== null && !projects.has(q.project_id)) {
       q.project_id = null;
@@ -121,7 +122,7 @@ try {
     await transaction(async () => {
       const existing = await count('users');
       if (existing && !REPLACE) throw new Error(`ฐานข้อมูลปลายทางมีข้อมูลอยู่แล้ว (${existing} บัญชี) — ถ้าตั้งใจเขียนทับให้ใส่ --replace`);
-      if (existing) await db.exec(`TRUNCATE ${TABLES.join(', ')} RESTART IDENTITY CASCADE`);
+      if (existing) await db.exec(`TRUNCATE ${TABLES.join(', ')}, customers RESTART IDENTITY CASCADE`);
       for (const t of TABLES) await insertAll(t);
       // new rows must continue after the highest id that came across
       for (const t of WITH_ID) {
@@ -138,6 +139,10 @@ try {
       const close2 = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
       if (!close2(cost, money(rows.cost_items, 'quantity', 'price'))) throw new Error('ยอดรวมต้นทุนไม่ตรงกับฐานข้อมูลเดิม');
       if (!close2(quoted, money(rows.quote_items, 'quantity', 'unit_price'))) throw new Error('ยอดรวมใบเสนอราคาไม่ตรงกับฐานข้อมูลเดิม');
+
+      // the old database had no customer list: build it from the client names on jobs and quotes
+      await db.exec(LINK_CUSTOMERS);
+      customers = await count('customers');
     });
   }
 
@@ -148,6 +153,7 @@ try {
   }
   console.log(`\nต้นทุนรวม ${money(rows.cost_items, 'quantity', 'price').toLocaleString('th-TH')} บาท · ใบเสนอราคารวม ${money(rows.quote_items, 'quantity', 'unit_price').toLocaleString('th-TH')} บาท (ก่อนส่วนลด/ภาษี)`);
   console.log('ที่ข้าม: session ที่หมดอายุ และแถวที่เจ้าของ (ร้าน/โปรเจ็กต์/ใบเสนอราคา) ถูกลบไปแล้ว');
+  if (!DRY) console.log(`สร้างรายชื่อลูกค้าจากชื่อในโปรเจ็กต์และใบเสนอราคา ${customers} ราย`);
   if (unlinked) console.log(`ใบเสนอราคา ${unlinked} ใบ ผูกกับโปรเจ็กต์ที่ถูกลบไปแล้ว จึงย้ายแบบไม่ผูกโปรเจ็กต์`);
   console.log(DRY ? '\nยังไม่ได้เขียนข้อมูล (dry run)' : '\nย้ายข้อมูลเสร็จและตรวจจำนวนแถว + ยอดเงินตรงกันแล้ว');
 

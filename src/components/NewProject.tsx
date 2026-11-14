@@ -5,6 +5,7 @@ import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
 import { blankItem, CostsStage } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
+import { CustomerPicker } from './CustomerPicker';
 
 interface NewProjectProps {
   user: User;
@@ -28,6 +29,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const [history, setHistory] = useState<Project[]>([]);
   const [draft, setDraft] = useState<Project>(() => ({
     id: 'new',
+    customerId: null,
     code: '',
     title: '',
     projectType: 'งานแต่งงาน',
@@ -136,7 +138,15 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
               {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
             </select>
           </div>
-          {field('ชื่อลูกค้า', 'client', 'text', 'เช่น คุณสมชาย')}
+          <div>
+            <label className="pb-label">ชื่อลูกค้า</label>
+            <CustomerPicker
+              value={draft.client}
+              placeholder="เช่น คุณสมชาย"
+              onChange={(client) => patch({ client, customerId: null })}
+              onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}
+            />
+          </div>
           {field('เบอร์โทรศัพท์', 'phone', 'tel', 'เช่น 081-234-5678')}
           {field('อีเมล', 'email', 'email', 'เช่น customer@email.com')}
           {field('วันที่จัดงาน *', 'eventDate', 'date')}
