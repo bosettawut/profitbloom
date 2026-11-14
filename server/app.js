@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
-import { lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
+import { jobPricing, lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -477,6 +477,7 @@ async function nextCode(table, userId, prefix) {
 
 async function serializeProject(p) {
   const items = await db.prepare('SELECT * FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(p.id);
+  const groups = await db.prepare('SELECT * FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(p.id);
   return {
     id: String(p.id),
     code: p.code,
@@ -503,14 +504,15 @@ async function serializeProject(p) {
     reviewedAt: p.reviewed_at,
     createdDate: thaiDate(p.created_at),
     updatedAt: p.updated_at,
+    costGroups: groups.map((g) => ({ id: g.id, name: g.name, markup: g.markup })),
     costItems: items.map((i) => ({
       id: i.id,
+      groupId: i.group_id,
       name: i.name,
       category: i.category,
       quantity: i.quantity,
       price: i.price,
       total: i.quantity * i.price,
-      paidBefore: !!i.paid_before,
       actual: i.actual,
       isExtra: !!i.is_extra,
     })),
@@ -546,13 +548,16 @@ function readProjectBody(body) {
     teardown: optBool(body.teardown),
     review_applied: body.reviewApplied ? 1 : 0,
     status,
+    groups: Array.isArray(body.costGroups)
+      ? body.costGroups.slice(0, 100).map((g) => ({ id: g?.id, name: str(g?.name, 200), markup: num(g?.markup, { min: -100, max: 1000 }) }))
+      : null,
     items: Array.isArray(body.costItems)
       ? body.costItems.slice(0, 500).map((i) => ({
+          group: i.groupId,
           name: str(i.name, 200),
           category: COST_CATEGORIES.includes(i.category) ? i.category : 'material',
           quantity: num(i.quantity, { min: 0 }),
           price: num(i.price, { min: 0 }),
-          paid_before: i.paidBefore === false ? 0 : 1,
           actual: i.actual === null || i.actual === undefined || i.actual === '' ? null : num(i.actual, { min: 0 }),
           is_extra: i.isExtra ? 1 : 0,
         }))
@@ -560,7 +565,7 @@ function readProjectBody(body) {
   };
 }
 
-const COST_CATEGORIES = ['material', 'rental', 'labor', 'transport', 'other'];
+const COST_CATEGORIES = ['material', 'rental', 'labor', 'owner_labor', 'transport', 'teardown', 'other'];
 function optNum(v, min, max) {
   if (v === null || v === undefined || v === '') return null;
   return num(v, { min, max });
@@ -569,12 +574,39 @@ function optBool(v) {
   return v === null || v === undefined ? null : v ? 1 : 0;
 }
 
-async function replaceCostItems(projectId, items) {
+/**
+ * Saves a job's headings and the cost items under them, replacing what was there. Planned items that
+ * name no heading go under the first one (a job always gets one once it has costs); unplanned extras
+ * have none. `oneMarkup` sets every heading to the job's markup — for callers that still send a single
+ * markup for the whole job. Keeps projects.profit_margin as the job's overall markup, so
+ * cost × (1 + profit_margin) is its price everywhere.
+ */
+async function replaceCosts(projectId, d, oneMarkup = false) {
+  const groups = (d.groups || []).map((g) => ({ ...g, markup: oneMarkup ? d.profit_margin : g.markup }));
+  const items = d.items || [];
+  const known = new Set(groups.map((g) => g.id).filter((id) => id !== null && id !== undefined));
+  if (groups.length === 0 && items.some((i) => !i.is_extra)) groups.push({ id: undefined, name: 'รายการต้นทุน', markup: d.profit_margin });
+
   await db.prepare('DELETE FROM cost_items WHERE project_id = ?').run(projectId);
-  const ins = db.prepare(
-    'INSERT INTO cost_items (project_id, name, category, quantity, price, paid_before, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  );
-  for (const [idx, i] of items.entries()) await ins.run(projectId, i.name, i.category, i.quantity, i.price, i.paid_before, i.actual, i.is_extra, idx);
+  await db.prepare('DELETE FROM cost_groups WHERE project_id = ?').run(projectId);
+  const newId = new Map();
+  const saved = [];
+  for (const [idx, g] of groups.entries()) {
+    const { lastInsertRowid } = await db.prepare('INSERT INTO cost_groups (project_id, name, markup, sort) VALUES (?, ?, ?, ?) RETURNING id').run(projectId, g.name, g.markup, idx);
+    const id = Number(lastInsertRowid);
+    if (known.has(g.id)) newId.set(g.id, id);
+    saved.push({ id, name: g.name, markup: g.markup });
+  }
+  const ins = db.prepare('INSERT INTO cost_items (project_id, group_id, name, category, quantity, price, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const priced = [];
+  for (const [idx, i] of items.entries()) {
+    const groupId = i.is_extra ? null : newId.get(i.group) ?? saved[0].id;
+    await ins.run(projectId, groupId, i.name, i.category, i.quantity, i.price, i.actual, i.is_extra, idx);
+    priced.push({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId });
+  }
+  const { cost, price } = jobPricing(priced, saved);
+  const overall = cost > 0 ? (price / cost - 1) * 100 : saved[0]?.markup ?? d.profit_margin;
+  await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(overall, projectId);
 }
 
 app.get('/api/projects', route(async (req) =>
@@ -594,7 +626,7 @@ app.post('/api/projects', route(async (req, res) => {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown);
-    await replaceCostItems(Number(lastInsertRowid), d.items || []);
+    await replaceCosts(Number(lastInsertRowid), d);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่ - ${d.title}`, 'เพิ่มแล้ว');
     return await getProject(req.user.id, lastInsertRowid);
   });
@@ -614,7 +646,8 @@ app.put('/api/projects/:id', route(async (req) => {
       .run(customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.review_applied,
         d.review_applied, existing.id, req.user.id);
-    if (d.items) await replaceCostItems(existing.id, d.items);
+    // a caller that sends one markup for the job, and no headings, means it for every heading
+    await replaceCosts(existing.id, d, req.body.profitMargin !== undefined && !Array.isArray(req.body.costGroups));
     if (d.status && d.status !== existing.status) {
       await logActivity(req.user.id, `project_${d.status}`, `โปรเจ็กต์ ${d.title}`, PROJECT_STATUS[d.status]);
     }
@@ -711,8 +744,9 @@ function checkLockedPrice(lockedPrice, d, items) {
 async function lockedPriceOf(projectId) {
   if (!projectId) return null;
   const p = await db.prepare('SELECT profit_margin FROM projects WHERE id = ?').get(projectId);
-  const items = await db.prepare('SELECT quantity, price, is_extra FROM cost_items WHERE project_id = ?').all(projectId);
-  const price = projectPrice(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra })), p.profit_margin);
+  const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
+  const groups = await db.prepare('SELECT id, name, markup FROM cost_groups WHERE project_id = ?').all(projectId);
+  const price = projectPrice(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), p.profit_margin, groups);
   // a job with no costs yet has no price to hold the quote to
   return price > 0 ? price : null;
 }

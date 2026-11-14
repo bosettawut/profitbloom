@@ -162,7 +162,7 @@ export function QuickCheck({ user, onCreated }: Props) {
                     ['ต้นทุนรวม', `${fmt(r.cost)} บาท`],
                     ['กำไรที่งบนี้', `${fmt(r.profit)} บาท`],
                     ['Margin', `${r.margin.toFixed(1)}%`],
-                    ['เงินสดสำรองก่อนงาน', `${fmt(r.cashRequired)} บาท`],
+                    ['เงินสดที่ต้องสำรอง', `${fmt(r.cashRequired)} บาท`],
                   ].map(([l, v]) => (
                     <div key={l} className="rounded-xl bg-[#F7F6FA] px-3 py-2.5">
                       <p className="text-xs text-ink-muted">{l}</p>

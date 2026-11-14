@@ -31,10 +31,37 @@ export function quoteTotals({ items, discountRate = 0, taxRate = 0, vatMode = 'e
   return { subtotal, discount, afterDiscount, beforeVat: afterDiscount, vat, total: afterDiscount + vat, rate };
 }
 
-/** a job's selling price in whole baht: planned cost plus its markup (unplanned extras are not part of the price) */
-export function projectPrice(costItems, markupPct) {
-  const cost = costItems.reduce((s, i) => s + (i.isExtra ? 0 : i.quantity * i.price), 0);
-  return wholeBaht(cost * (1 + markupPct / 100));
+/**
+ * A job's planned cost and selling price, heading by heading: each heading has its own markup and the
+ * job's price is the sum of its headings. Items outside any heading use the job's own markup.
+ * Unplanned extras are not part of the price. Amounts are not rounded here.
+ */
+export function jobPricing(costItems, groups, markupPct = 0) {
+  const list = groups || [];
+  const planned = costItems.filter((i) => !i.isExtra);
+  const sum = (items) => items.reduce((s, i) => s + i.quantity * i.price, 0);
+  const ids = new Set(list.map((g) => g.id));
+  const headings = list.map((g) => {
+    const cost = sum(planned.filter((i) => i.groupId === g.id));
+    return { id: g.id, name: g.name, markup: g.markup, cost, price: cost * (1 + g.markup / 100) };
+  });
+  const loose = sum(planned.filter((i) => !ids.has(i.groupId)));
+  return {
+    cost: headings.reduce((s, h) => s + h.cost, 0) + loose,
+    price: headings.reduce((s, h) => s + h.price, 0) + loose * (1 + markupPct / 100),
+    headings,
+  };
+}
+
+/** the markup one cost item is sold at: its heading's, or the job's when it has no heading */
+export function markupOf(item, groups, markupPct = 0) {
+  const g = (groups || []).find((x) => x.id === item.groupId);
+  return g ? g.markup : markupPct;
+}
+
+/** a job's selling price in whole baht */
+export function projectPrice(costItems, markupPct, groups) {
+  return wholeBaht(jobPricing(costItems, groups, markupPct).price);
 }
 
 /**

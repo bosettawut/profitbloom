@@ -39,7 +39,7 @@ import { AllQuotes } from './components/AllQuotes';
 import { Packages } from './components/Packages';
 import { AdminPage } from './components/AdminPage';
 import { QuickCheck } from './components/QuickCheck';
-import { LEVEL_STYLE, projectHealth } from './lib/job';
+import { LEVEL_STYLE, projectHealth, salePrice } from './lib/job';
 import { AuthScreen, type AuthMode } from './components/AuthScreen';
 import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
@@ -514,7 +514,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
                     key={project.id}
                     title={project.title}
                     date={formatEventDate(project.eventDate)}
-                    budget={baht(project.costItems.reduce((s, i) => s + i.total, 0) * (1 + project.profitMargin / 100))}
+                    budget={baht(salePrice(project))}
                     status={project.status}
                     statusText={project.statusText}
                     onClick={() => handleProjectSelect(project)}

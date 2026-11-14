@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
-import { blankItem, CostsStage } from './job/CostsStage';
+import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
 
@@ -27,7 +27,9 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [history, setHistory] = useState<Project[]>([]);
-  const [draft, setDraft] = useState<Project>(() => ({
+  const [draft, setDraft] = useState<Project>(() => {
+    const heading = blankGroup(marginToMarkup(rules.goodMargin), 'รายการต้นทุน');
+    return {
     id: 'new',
     customerId: null,
     code: '',
@@ -52,12 +54,14 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     teardown: null,
     reviewApplied: false,
     reviewedAt: null,
+    costGroups: [heading],
     costItems: [
-      { ...blankItem('material'), name: 'ดอกไม้และวัสดุ' },
-      { ...blankItem('labor'), name: 'ค่าแรงทีมงาน' },
-      { ...blankItem('transport'), name: 'ขนส่ง' },
+      { ...blankItem('material', heading.id), name: 'ดอกไม้และวัสดุ' },
+      { ...blankItem('labor', heading.id), name: 'ค่าแรงทีมงาน' },
+      { ...blankItem('transport', heading.id), name: 'ขนส่ง' },
     ],
-  }));
+    };
+  });
 
   useEffect(() => {
     api.projects().then(setHistory).catch(() => {});

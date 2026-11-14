@@ -5,7 +5,7 @@ import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
-import { fitToPrice, lineAmount, projectPrice, quoteTotals, wholeBaht } from '../../shared/quote-math.js';
+import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, wholeBaht } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -49,16 +49,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
 
   // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
   const [lockedPrice, setLockedPrice] = useState<number | null>(() => {
-    const price = fromProject ? projectPrice(fromProject.costItems, fromProject.profitMargin) : 0;
+    const price = fromProject ? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
     return price > 0 ? price : null;
   });
 
-  // it lists each cost item at its selling price (cost + project margin) in whole baht; rounding each
+  // it lists each cost item at its selling price (cost + its heading's margin) in whole baht; rounding each
   // line can leave the sum a few baht off the job's price, so one line takes up the difference
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
     if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }];
     const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
-      const unitPrice = wholeBaht(item.price * (1 + fromProject.profitMargin / 100));
+      const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin) / 100));
       return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0 };
     });
     const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice)) || lines;

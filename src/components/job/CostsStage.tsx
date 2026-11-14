@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { Lightbulb, Plus, Trash2 } from 'lucide-react';
-import type { CostItem, Project } from '../../lib/api';
+import type { CostGroup, CostItem, Project } from '../../lib/api';
+import { toJob } from '../../lib/job';
 import {
+  categoryCost,
   categoryLabel,
   COST_CATEGORIES,
   fmt,
   marginToMarkup,
   markupToMargin,
+  repriced,
   type CostCategory,
   type health,
   type learnings,
@@ -24,15 +27,20 @@ interface Props {
 const input = 'pb-input !py-2';
 let tempId = -1;
 
-export function blankItem(category: CostCategory = 'material'): CostItem {
+/** a new heading; it gets a real id when the job is saved */
+export function blankGroup(markup: number, name = ''): CostGroup {
+  return { id: tempId--, name, markup };
+}
+
+export function blankItem(category: CostCategory = 'material', groupId: number | null = null): CostItem {
   return {
     id: tempId--,
+    groupId,
     name: '',
     category,
     quantity: 1,
     price: 0,
     total: 0,
-    paidBefore: COST_CATEGORIES.find((c) => c.id === category)!.paidBefore,
     actual: null,
     isExtra: false,
   };
@@ -66,51 +74,67 @@ function CommitNumber({ value, onCommit, disabled, ...rest }: { value: number; o
   );
 }
 
-/** Yes / No / not answered — the Quote Health Check treats "not answered" as a risk. */
-function YesNo({ label, value, onChange, hint }: { label: string; value: boolean | null; onChange: (v: boolean) => void; hint: string }) {
+/** A job condition read off the cost items: whether anything is planned in a category, and how much. */
+function FromCategory({ label, hint, amount, saidYes, onAdd }: { label: string; hint: string; amount: number; saidYes: boolean; onAdd: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-3 border-b border-line last:border-0">
       <div>
         <p className="text-sm font-medium text-ink">{label}</p>
         <p className="text-xs text-ink-muted">{hint}</p>
       </div>
-      <div className="flex bg-[#F1F0F5] rounded-full p-1 shrink-0">
-        {[
-          [true, 'ใส่แล้ว'],
-          [false, 'ยังไม่ใส่'],
-        ].map(([v, t]) => (
-          <button
-            key={String(v)}
-            type="button"
-            onClick={() => onChange(v as boolean)}
-            className={`px-3 py-1.5 text-xs rounded-full transition-colors ${value === v ? 'bg-white shadow-card text-ink font-medium' : 'text-ink-muted'}`}
-          >
-            {t as string}
-          </button>
-        ))}
-      </div>
+      {amount > 0 || saidYes ? (
+        <span className="px-3 py-1.5 text-xs rounded-full bg-emerald-50 text-emerald-700 font-medium shrink-0 whitespace-nowrap">ใส่แล้ว{amount > 0 ? ` ฿${fmt(amount)}` : ''}</span>
+      ) : (
+        <button type="button" onClick={onAdd} className="px-3 py-1.5 rounded-full bg-[#F1F0F5] text-xs text-ink hover:bg-[#E8E6EF] shrink-0 whitespace-nowrap">
+          ยังไม่ใส่ · เพิ่มรายการ
+        </button>
+      )}
     </div>
   );
 }
 
 export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
   const items = draft.costItems.filter((i) => !i.isExtra);
+  const groups = draft.costGroups;
+  const job = toJob(draft);
+  const newGroup = () => blankGroup(marginToMarkup(rules.goodMargin), groups.length === 0 ? 'รายการต้นทุน' : '');
   const setItem = (id: number, change: Partial<CostItem>) =>
     patch({
       costItems: draft.costItems.map((i) => {
         if (i.id !== id) return i;
         const next = { ...i, ...change };
-        if (change.category && change.paidBefore === undefined) next.paidBefore = COST_CATEGORIES.find((c) => c.id === change.category)!.paidBefore;
         return { ...next, total: next.quantity * next.price };
       }),
     });
-  const addItem = (category: CostCategory = 'material', name = '', price = 0) =>
-    patch({ costItems: [...draft.costItems, { ...blankItem(category), name, price, total: price }] });
+  /** adds an item under a heading; with no heading named it goes under the last one (made on the spot if the job has none) */
+  const addItem = (groupId: number | null, category: CostCategory = 'material', name = '', price = 0) => {
+    const made = groupId === null && groups.length === 0 ? newGroup() : null;
+    const target = groupId ?? made?.id ?? groups[groups.length - 1].id;
+    patch({ costGroups: made ? [made] : groups, costItems: [...draft.costItems, { ...blankItem(category, target), name, price, total: price }] });
+  };
   const removeItem = (id: number) => patch({ costItems: draft.costItems.filter((i) => i.id !== id) });
+  const addGroup = () => {
+    const g = newGroup();
+    patch({ costGroups: [...groups, g], costItems: [...draft.costItems, blankItem('material', g.id)] });
+  };
+  const setGroup = (id: number, change: Partial<CostGroup>) => patch({ costGroups: groups.map((g) => (g.id === id ? { ...g, ...change } : g)) });
+  const removeGroup = (g: CostGroup) => {
+    const inside = items.filter((i) => i.groupId === g.id);
+    if (inside.some((i) => i.name.trim() || i.quantity * i.price > 0) && !window.confirm(`ลบหัวข้อ "${g.name || 'ไม่มีชื่อ'}" พร้อมรายการข้างใน ${inside.length} รายการ ใช่หรือไม่?`)) return;
+    patch({ costGroups: groups.filter((x) => x.id !== g.id), costItems: draft.costItems.filter((i) => i.isExtra || i.groupId !== g.id) });
+  };
 
-  const margin = markupToMargin(draft.profitMargin);
-  const setMargin = (m: number) => patch({ profitMargin: marginToMarkup(Math.min(95, Math.max(0, m))) });
-  const setPrice = (price: number) => patch({ profitMargin: h.cost > 0 ? Math.max(0, (price / h.cost - 1) * 100) : draft.profitMargin });
+  // the job's own margin and price are the sum of its headings; changing either here moves every heading
+  const margin = h.margin;
+  const setMargin = (m: number) => {
+    const markup = marginToMarkup(Math.min(95, Math.max(0, m)));
+    patch({ profitMargin: markup, costGroups: groups.map((g) => ({ ...g, markup })) });
+  };
+  const setPrice = (price: number) => {
+    if (h.cost <= 0) return;
+    const r = repriced(job, price);
+    patch({ profitMargin: r.profitMargin, costGroups: r.groups });
+  };
   const num = (v: string) => (v === '' ? 0 : Number(v));
 
   return (
@@ -130,7 +154,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
                     {categoryLabel(l.category)} เกินงบเฉลี่ย {l.overrunPct.toFixed(0)}% ({l.jobs} งาน)
                   </span>
                   {buffer > 0 && (
-                    <button type="button" onClick={() => addItem('other', `เผื่อ${categoryLabel(l.category)}เกินงบ ${l.overrunPct.toFixed(0)}%`, buffer)} className="text-xs font-medium text-[#5A42C6] hover:underline">
+                    <button type="button" onClick={() => addItem(null, 'other', `เผื่อ${categoryLabel(l.category)}เกินงบ ${l.overrunPct.toFixed(0)}%`, buffer)} className="text-xs font-medium text-[#5A42C6] hover:underline">
                       + เผื่อไว้ {fmt(buffer)} บาท
                     </button>
                   )}
@@ -141,50 +165,82 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
         </div>
       )}
 
-      {/* Cost items */}
+      {/* Cost items, heading by heading */}
       <div className="pb-card p-5 md:p-6">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between gap-3 mb-4">
           <div>
             <h3 className="text-base md:text-lg font-semibold text-ink">รายการต้นทุน</h3>
-            <p className="text-xs text-ink-muted">ติ๊ก "จ่ายก่อนงาน" กับรายการที่ต้องจ่ายเงินก่อนได้รับเงินจากลูกค้า</p>
+            <p className="text-xs text-ink-muted">แบ่งต้นทุนเป็นหัวข้อ แต่ละหัวข้อตั้ง Margin ของตัวเองได้</p>
           </div>
-          <button type="button" onClick={() => addItem()} className="pb-btn-secondary !py-2 shrink-0">
-            <Plus className="w-4 h-4" /> เพิ่มรายการ
+          <button type="button" onClick={addGroup} className="pb-btn-secondary !py-2 shrink-0">
+            <Plus className="w-4 h-4" /> เพิ่มหัวข้อ
           </button>
         </div>
 
-        <div className="hidden xl:grid grid-cols-[1.6fr_1fr_0.6fr_0.9fr_0.9fr_0.6fr_auto] gap-3 px-1 pb-2 text-xs font-medium text-ink-muted">
-          <span>รายการ</span><span>หมวด</span><span>จำนวน</span><span>ราคา/หน่วย</span><span className="text-right">รวม</span><span className="text-center">จ่ายก่อนงาน</span><span />
-        </div>
-        <div className="space-y-3 xl:space-y-2">
-          {items.length === 0 && <p className="text-sm text-ink-muted py-6 text-center">ยังไม่มีรายการ กด "เพิ่มรายการ" เพื่อเริ่ม</p>}
-          {items.map((i) => (
-            <div key={i.id} className="grid grid-cols-2 sm:grid-cols-[1.5fr_0.8fr_1fr_0.8fr] xl:grid-cols-[1.6fr_1fr_0.6fr_0.9fr_0.9fr_0.6fr_auto] gap-2 xl:gap-3 items-center rounded-2xl xl:rounded-none bg-[#F7F6FA] xl:bg-transparent p-3 xl:p-0">
-              <input className={`${input} col-span-2 sm:col-span-4 xl:col-span-1`} value={i.name} placeholder="เช่น ดอกกุหลาบขาว" onChange={(e) => setItem(i.id, { name: e.target.value })} />
-              <div>
-                <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
-                <select className={input} aria-label="หมวด" value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
-                  {COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <span className="xl:hidden block text-[11px] text-ink-muted mb-1">จำนวน</span>
-                <input className={input} type="number" min="0" inputMode="decimal" aria-label="จำนวน" value={i.quantity} onChange={(e) => setItem(i.id, { quantity: num(e.target.value) })} />
-              </div>
-              <div>
-                <span className="xl:hidden block text-[11px] text-ink-muted mb-1">ราคา/หน่วย</span>
-                <input className={input} type="number" min="0" inputMode="decimal" aria-label="ราคาต่อหน่วย" value={i.price} onChange={(e) => setItem(i.id, { price: num(e.target.value) })} />
-              </div>
-              <div><span className="xl:hidden block text-[11px] text-ink-muted mb-1">รวม</span><p className="text-sm font-semibold text-ink xl:text-right py-2 xl:py-0">฿{fmt(i.quantity * i.price)}</p></div>
-              <label className="flex items-center xl:justify-center gap-2 text-xs text-ink-muted">
-                <input type="checkbox" className="w-4 h-4 accent-[#673AB7]" checked={i.paidBefore} onChange={(e) => setItem(i.id, { paidBefore: e.target.checked })} />
-                <span className="xl:hidden">จ่ายก่อนงาน</span>
-              </label>
-              <button type="button" onClick={() => removeItem(i.id)} aria-label="ลบรายการ" className="justify-self-end p-2 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+        <div className="space-y-4">
+          {groups.length === 0 && <p className="text-sm text-ink-muted py-6 text-center">ยังไม่มีหัวข้อ กด "เพิ่มหัวข้อ" เพื่อเริ่ม</p>}
+          {groups.map((g) => {
+            const inside = items.filter((i) => i.groupId === g.id);
+            const sums = h.headings.find((x) => x.id === g.id);
+            return (
+              <section key={g.id} aria-label={g.name || 'หัวข้อ'} className="rounded-2xl border border-line p-3 md:p-4">
+                <div className="grid grid-cols-[1fr_5.5rem_auto] gap-2 md:gap-3 items-end mb-3">
+                  <div className="min-w-0">
+                    <label className="pb-label">ชื่อหัวข้อ</label>
+                    <input className={`${input} font-medium`} aria-label="ชื่อหัวข้อ" value={g.name} placeholder="เช่น ซุ้มดอกไม้" onChange={(e) => setGroup(g.id, { name: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="pb-label">Margin (%)</label>
+                    <CommitNumber min="0" max="95" step="0.1" aria-label="Margin ของหัวข้อ" value={Number(markupToMargin(g.markup).toFixed(1))} onCommit={(m) => setGroup(g.id, { markup: marginToMarkup(Math.min(95, Math.max(0, m))) })} />
+                  </div>
+                  <button type="button" onClick={() => removeGroup(g)} aria-label="ลบหัวข้อ" title="ลบหัวข้อ" className="p-2 mb-0.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="hidden xl:grid grid-cols-[1.6fr_1fr_0.6fr_0.9fr_0.9fr_auto] gap-3 px-1 pb-2 text-xs font-medium text-ink-muted">
+                  <span>รายการ</span><span>หมวด</span><span>จำนวน</span><span>ราคา/หน่วย</span><span className="text-right">รวม</span><span className="w-8" />
+                </div>
+                <div className="space-y-3 xl:space-y-2">
+                  {inside.length === 0 && <p className="text-sm text-ink-muted py-3 text-center">ยังไม่มีรายการในหัวข้อนี้</p>}
+                  {inside.map((i) => (
+                    <div key={i.id} className="grid grid-cols-2 sm:grid-cols-[1.5fr_0.8fr_1fr_0.8fr] xl:grid-cols-[1.6fr_1fr_0.6fr_0.9fr_0.9fr_auto] gap-2 xl:gap-3 items-center rounded-2xl xl:rounded-none bg-[#F7F6FA] xl:bg-transparent p-3 xl:p-0">
+                      <input className={`${input} col-span-2 sm:col-span-4 xl:col-span-1`} aria-label="ชื่อรายการ" value={i.name} placeholder="เช่น ดอกกุหลาบขาว" onChange={(e) => setItem(i.id, { name: e.target.value })} />
+                      <div>
+                        <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
+                        <select className={input} aria-label="หมวด" value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
+                          {COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <span className="xl:hidden block text-[11px] text-ink-muted mb-1">จำนวน</span>
+                        <input className={input} type="number" min="0" inputMode="decimal" aria-label="จำนวน" value={i.quantity} onChange={(e) => setItem(i.id, { quantity: num(e.target.value) })} />
+                      </div>
+                      <div>
+                        <span className="xl:hidden block text-[11px] text-ink-muted mb-1">ราคา/หน่วย</span>
+                        <input className={input} type="number" min="0" inputMode="decimal" aria-label="ราคาต่อหน่วย" value={i.price} onChange={(e) => setItem(i.id, { price: num(e.target.value) })} />
+                      </div>
+                      {/* on small screens the total and the delete button share a cell */}
+                      <div className="flex items-end justify-between gap-2 xl:contents">
+                        <div><span className="xl:hidden block text-[11px] text-ink-muted mb-1">รวม</span><p className="text-sm font-semibold text-ink xl:text-right py-2 xl:py-0">฿{fmt(i.quantity * i.price)}</p></div>
+                        <button type="button" onClick={() => removeItem(i.id)} aria-label="ลบรายการ" className="justify-self-end p-2 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-sm">
+                  <button type="button" onClick={() => addItem(g.id)} className="inline-flex items-center gap-1 font-medium text-[#673AB7] hover:text-[#35235e]">
+                    <Plus className="w-4 h-4" /> เพิ่มรายการ
+                  </button>
+                  <p className="text-ink-muted">
+                    ต้นทุน <span className="font-semibold text-ink">฿{fmt(sums?.cost ?? 0)}</span> · ราคาขาย <span className="font-semibold text-ink">฿{fmt(sums?.price ?? 0)}</span>
+                  </p>
+                </div>
+              </section>
+            );
+          })}
         </div>
         <div className="mt-5 pt-4 border-t border-line flex flex-wrap justify-between gap-2 text-sm">
           <span className="text-ink-muted">ต้นทุนรวม</span>
@@ -217,8 +273,8 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
               </div>
             ))}
           </div>
-          <YesNo label="ค่าแรงเจ้าของ" hint="เวลาของคุณคือต้นทุนของงาน" value={draft.ownerLabor} onChange={(v) => patch({ ownerLabor: v })} />
-          <YesNo label="ค่าเก็บงานและขนส่งกลับ" hint="รื้อถอนและขนของกลับหลังงาน" value={draft.teardown} onChange={(v) => patch({ teardown: v })} />
+          <FromCategory label="ค่าแรงเจ้าของ" hint='นับจากรายการในหมวด "ค่าแรงเจ้าของ"' amount={categoryCost(job, 'owner_labor')} saidYes={draft.ownerLabor === true} onAdd={() => addItem(null, 'owner_labor', 'ค่าแรงเจ้าของ')} />
+          <FromCategory label="ค่าเก็บงานและขนส่งกลับ" hint='นับจากรายการในหมวด "เก็บงาน/ขนส่งกลับ"' amount={categoryCost(job, 'teardown')} saidYes={draft.teardown === true} onAdd={() => addItem(null, 'teardown', 'เก็บงานและขนส่งกลับ')} />
         </div>
 
         {/* Pricing */}
@@ -242,7 +298,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
               <CommitNumber min="0" aria-label="ราคาขาย" value={Math.round(h.price)} disabled={h.cost <= 0} onCommit={setPrice} />
             </div>
           </div>
-          <p className="mt-2 text-xs text-ink-muted">Margin = กำไร ÷ ราคาขาย · แก้ช่องใดช่องหนึ่ง แล้วกด Enter อีกช่องจะคำนวณให้</p>
+          <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin ที่นี่จะตั้งทุกหัวข้อให้เท่ากัน แก้ราคาขายจะปรับทุกหัวข้อตามสัดส่วน</p>
           <div className="mt-4 flex flex-wrap gap-2">
             {[
               [`Margin ขั้นต่ำ ${rules.minMargin}%`, rules.minMargin],

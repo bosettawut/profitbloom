@@ -75,18 +75,20 @@ r = await A.call('POST', '/projects', {
   title: 'งานทดสอบเงื่อนไข', projectType: 'งานแต่งงาน', profitMargin: 50, depositPct: 45, setupDays: 2, eventDays: 1, laborDays: 3, teamSize: 4,
   ownerLabor: true, teardown: false,
   costItems: [
-    { name: 'ดอกไม้', category: 'material', quantity: 1, price: 1000, paidBefore: true },
-    { name: 'ทีม', category: 'labor', quantity: 2, price: 800, paidBefore: false, actual: 1900 },
+    { name: 'ดอกไม้', category: 'material', quantity: 1, price: 1000 },
+    { name: 'ทีม', category: 'labor', quantity: 2, price: 800, actual: 1900 },
     { name: 'แปลก', category: 'hacker', quantity: 1, price: 10 },
   ],
 });
 {
   const d = r.data;
   ok('บันทึกเงื่อนไขงาน (มัดจำ/วันเซ็ตอัพ/ทีม/ค่าแรงเจ้าของ/เก็บงาน)', d.depositPct === 45 && d.setupDays === 2 && d.laborDays === 3 && d.teamSize === 4 && d.ownerLabor === true && d.teardown === false, JSON.stringify(d));
-  ok('บันทึกหมวด จ่ายก่อนงาน และต้นทุนจริง', d.costItems[1].category === 'labor' && d.costItems[1].paidBefore === false && d.costItems[1].actual === 1900, JSON.stringify(d.costItems[1]));
+  ok('บันทึกหมวดและต้นทุนจริง และไม่มีช่อง "จ่ายก่อนงาน" แล้ว', d.costItems[1].category === 'labor' && d.costItems[1].actual === 1900 && !('paidBefore' in d.costItems[1]), JSON.stringify(d.costItems[1]));
+  ok('ไม่ได้ส่งหัวข้อมา → ทุกรายการอยู่ในหัวข้อเดียว ที่ markup ของงาน', d.costGroups.length === 1 && d.costGroups[0].markup === 50 && d.costItems.every((i) => i.groupId === d.costGroups[0].id), JSON.stringify(d.costGroups));
   ok('หมวดที่ไม่มีอยู่จริงถูกปรับเป็น material', d.costItems[2].category === 'material');
   r = await A.call('PUT', `/projects/${d.id}`, { costItems: [...d.costItems, { name: 'ซื้อหน้างาน', category: 'other', quantity: 0, price: 0, actual: 500, isExtra: true }], reviewApplied: true });
   ok('เพิ่มค่าใช้จ่ายนอกแผน + บันทึกบทเรียน', r.data.costItems.at(-1).isExtra === true && r.data.reviewApplied === true && !!r.data.reviewedAt, JSON.stringify(r.data.costItems.at(-1)));
+  ok('ค่าใช้จ่ายนอกแผนไม่อยู่ในหัวข้อ รายการเดิมยังอยู่ในหัวข้อเดิม', r.data.costItems.at(-1).groupId === null && r.data.costGroups.length === 1 && r.data.costItems.slice(0, 3).every((i) => i.groupId === r.data.costGroups[0].id), JSON.stringify(r.data.costItems.map((i) => i.groupId)));
   r = await A.call('PUT', `/projects/${d.id}`, { notes: 'x' });
   ok('แก้ช่องอื่น เงื่อนไขงานไม่หาย', r.data.depositPct === 45 && r.data.ownerLabor === true && r.data.costItems.length === 4);
   await A.call('DELETE', `/projects/${d.id}`);
@@ -456,6 +458,50 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   r = await R.call('GET', '/reports?from=2030-01-01&to=2030-12-31');
   ok('ช่วงที่ไม่มีงาน → ว่าง ไม่ error', r.data.sales.totals.jobs === 0 && r.data.sales.byMonth.length === 0 && r.data.totals.projects === 6);
   ok('ร้านอื่นไม่เห็นยอดขายของร้านนี้', (await B.call('GET', '/reports?from=2026-01-01&to=2026-12-31')).data.sales.jobs.every((j) => !['ม.ค. 1', 'มี.ค.'].includes(j.title)));
+}
+
+// --- cost headings: own items, own margin; the job's price is the sum
+{
+  r = await A.call('POST', '/projects', {
+    title: 'งานแบบหัวข้อ', projectType: 'อื่นๆ', status: 'approved', eventDate: '2031-05-05',
+    costGroups: [{ id: -1, name: 'ซุ้มดอกไม้', markup: 100 }, { id: -2, name: 'ทีมงาน', markup: 25 }, { id: -3, name: 'ยังว่าง', markup: 10 }],
+    costItems: [
+      { groupId: -1, name: 'กุหลาบ', category: 'material', quantity: 10, price: 100 },
+      { groupId: -2, name: 'ค่าแรงเจ้าของ', category: 'owner_labor', quantity: 1, price: 2000 },
+      { groupId: -2, name: 'เก็บงาน', category: 'teardown', quantity: 1, price: 2000 },
+      { groupId: 999, name: 'ไม่มีหัวข้อ', quantity: 1, price: 500 },
+    ],
+  });
+  const d = r.data;
+  const [g1, g2, g3] = d.costGroups;
+  ok('สร้างโปรเจ็กต์ 3 หัวข้อ เก็บชื่อและ markup ครบ ตามลำดับ', r.status === 201 && d.costGroups.length === 3 && g1.name === 'ซุ้มดอกไม้' && g1.markup === 100 && g2.markup === 25 && g3.name === 'ยังว่าง', JSON.stringify(d.costGroups));
+  ok('รายการอยู่ใต้หัวข้อของตัวเอง', d.costItems[0].groupId === g1.id && d.costItems[1].groupId === g2.id && d.costItems[2].groupId === g2.id);
+  ok('รายการที่อ้างหัวข้อที่ไม่มีอยู่ ไปอยู่หัวข้อแรก', d.costItems[3].groupId === g1.id);
+  ok('หมวดใหม่ "ค่าแรงเจ้าของ" และ "เก็บงาน/ขนส่งกลับ" บันทึกได้', d.costItems[1].category === 'owner_labor' && d.costItems[2].category === 'teardown');
+  // (1,000 + 500) × 2 + 4,000 × 1.25 = 8,000 on a cost of 5,500
+  ok('markup รวมของงานคิดจากผลรวมทุกหัวข้อ (ราคา 8,000 ÷ ต้นทุน 5,500)', Math.abs(d.profitMargin - (8000 / 5500 - 1) * 100) < 1e-9, String(d.profitMargin));
+  r = await A.call('GET', '/reports?from=2031-05-01&to=2031-05-31');
+  ok('รายงานยอดขายใช้ราคารวมทุกหัวข้อ (ขาย 8,000 ต้นทุน 5,500 กำไร 2,500)', r.data.sales.totals.sales === 8000 && r.data.sales.totals.cost === 5500 && r.data.sales.totals.profit === 2500, JSON.stringify(r.data.sales?.totals));
+  // (making a quote moves the job out of "approved", so the report is checked first)
+  r = await A.call('POST', '/quotes', { projectId: d.id, clientName: 'x', items: [{ description: 'รวม', quantity: 1, unitPrice: 8000 }] });
+  ok('ใบเสนอราคาล็อกที่ราคารวมทุกหัวข้อ (8,000)', r.status === 201 && r.data.lockedPrice === 8000, JSON.stringify(r.data?.lockedPrice ?? r.data));
+
+  r = await A.call('PUT', `/projects/${d.id}`, {
+    costGroups: [{ id: g2.id, name: 'ทีมงานและเก็บงาน', markup: 50 }, { id: -9, name: 'ขนส่ง', markup: 0 }],
+    costItems: [{ ...d.costItems[1] }, { ...d.costItems[2] }, { groupId: -9, name: 'รถ', category: 'transport', quantity: 1, price: 1000 }],
+  });
+  ok('แก้หัวข้อ: เปลี่ยนชื่อ/markup ลบหัวข้อ เพิ่มหัวข้อใหม่', r.status === 200 && r.data.costGroups.length === 2 && r.data.costGroups[0].name === 'ทีมงานและเก็บงาน' && r.data.costGroups[0].markup === 50 && r.data.costGroups[1].name === 'ขนส่ง', JSON.stringify(r.data.costGroups));
+  ok('รายการตามหัวข้อไปถูกที่หลังบันทึกซ้ำ', r.data.costItems.length === 3 && r.data.costItems[0].groupId === r.data.costGroups[0].id && r.data.costItems[2].groupId === r.data.costGroups[1].id);
+  ok('markup รวมอัปเดตตาม (ราคา 7,000 ÷ ต้นทุน 5,000 = 40%)', Math.abs(r.data.profitMargin - 40) < 1e-9, String(r.data.profitMargin));
+  r = await A.call('PUT', `/projects/${d.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่น หัวข้อและ markup ไม่เปลี่ยน', r.data.costGroups.length === 2 && r.data.costGroups[0].markup === 50 && r.data.costGroups[1].markup === 0 && r.data.costItems.length === 3, JSON.stringify(r.data.costGroups));
+  r = await A.call('PUT', `/projects/${d.id}`, { profitMargin: 20 });
+  ok('ส่ง markup เดียวทั้งงาน (ไม่ส่งหัวข้อ) → ตั้งทุกหัวข้อเท่ากัน', r.data.costGroups.every((g) => g.markup === 20) && Math.abs(r.data.profitMargin - 20) < 1e-9, JSON.stringify(r.data.costGroups));
+  r = await A.call('PUT', `/projects/${d.id}`, { costGroups: [{ id: 1, name: 'x', markup: 5000 }, { id: 2, name: 'y', markup: -500 }], costItems: [] });
+  ok('markup นอกช่วงถูกปรับเข้า −100…1000', r.data.costGroups[0].markup === 1000 && r.data.costGroups[1].markup === -100, JSON.stringify(r.data.costGroups));
+  r = await B.call('PUT', `/projects/${d.id}`, { costGroups: [] });
+  ok('ร้านอื่นแก้หัวข้อของเราไม่ได้', r.status === 404);
+  await A.call('DELETE', `/projects/${d.id}`);
 }
 
 // --- misc
