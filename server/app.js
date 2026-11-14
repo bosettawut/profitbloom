@@ -329,6 +329,125 @@ app.put('/api/account', route(async (req) => {
   return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) };
 }));
 
+// ---------- customers ----------
+
+function serializeCustomer(c) {
+  return {
+    id: String(c.id),
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+    lineId: c.line_id,
+    address: c.address,
+    notes: c.notes,
+    createdDate: thaiDate(c.created_at),
+  };
+}
+
+async function getCustomer(userId, id) {
+  const c = await db.prepare('SELECT * FROM customers WHERE id = ? AND user_id = ?').get(rowId(id), userId);
+  if (!c) throw new HttpError(404, 'ไม่พบลูกค้า');
+  return c;
+}
+
+function readCustomerBody(body) {
+  const name = str(body.name, 200);
+  if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
+  return {
+    name,
+    phone: str(body.phone, 50),
+    email: str(body.email, 200),
+    line_id: str(body.lineId, 100),
+    address: str(body.address, 1000),
+    notes: str(body.notes, 5000),
+  };
+}
+
+/**
+ * The customer a project or quote belongs to. A customer picked from the list wins; otherwise the
+ * typed name is matched against the shop's customers (ignoring case) and a new customer is created
+ * when there is none, so every job with a client name shows up under a customer.
+ */
+async function resolveCustomer(userId, customerId, name, phone, email) {
+  if (customerId) return (await getCustomer(userId, customerId)).id;
+  if (!name) return null;
+  // one at a time per shop: two saves arriving together must not both create the customer
+  await db.prepare('SELECT pg_advisory_xact_lock(?::bigint)').get(userId);
+  const found = await db.prepare('SELECT id FROM customers WHERE user_id = ? AND lower(name) = lower(?) ORDER BY id LIMIT 1').get(userId, name);
+  if (found) return found.id;
+  const { lastInsertRowid } = await db
+    .prepare('INSERT INTO customers (user_id, name, phone, email) VALUES (?, ?, ?, ?) RETURNING id')
+    .run(userId, name, phone, email);
+  return Number(lastInsertRowid);
+}
+
+/** which customer a save points at: `customerId` in the request picks one, a changed name is looked up again */
+function customerChoice(body, existing, nameKey, existingName) {
+  if ('customerId' in body) return body.customerId ? rowId(body.customerId) ?? -1 : null;
+  if (existing && (!(nameKey in body) || str(body[nameKey], 200).toLowerCase() === existingName.toLowerCase())) return existing.customer_id;
+  return null;
+}
+
+/** every customer of the shop with how much they have bought; sales count as in the reports */
+async function customerSummaries(userId) {
+  const customers = await db.prepare('SELECT * FROM customers WHERE user_id = ? ORDER BY name, id').all(userId);
+  const projects = await projectFinancials(userId);
+  const quotes = await db.prepare('SELECT customer_id, COUNT(*) AS n FROM quotes WHERE user_id = ? AND customer_id IS NOT NULL GROUP BY customer_id').all(userId);
+  const quoteCount = new Map(quotes.map((q) => [q.customer_id, q.n]));
+  return customers.map((c) => {
+    const mine = projects.filter((p) => p.customer_id === c.id);
+    const sold = mine.filter((p) => p.sold);
+    return {
+      ...serializeCustomer(c),
+      projectCount: mine.length,
+      quoteCount: quoteCount.get(c.id) ?? 0,
+      soldCount: sold.length,
+      totalSales: sold.reduce((s, p) => s + p.sales, 0),
+      lastEventDate: mine.map((p) => p.event_date || '').sort().pop() || '',
+    };
+  });
+}
+
+app.get('/api/customers', route(async (req) => customerSummaries(req.user.id)));
+
+app.get('/api/customers/:id', route(async (req) => {
+  const c = await getCustomer(req.user.id, req.params.id);
+  const summary = (await customerSummaries(req.user.id)).find((x) => x.id === String(c.id));
+  const projects = await db.prepare('SELECT * FROM projects WHERE user_id = ? AND customer_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id, c.id);
+  const quotes = await db.prepare('SELECT * FROM quotes WHERE user_id = ? AND customer_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id, c.id);
+  return {
+    ...summary,
+    projects: await Promise.all(projects.map(serializeProject)),
+    quotes: await Promise.all(quotes.map(serializeQuote)),
+  };
+}));
+
+app.post('/api/customers', route(async (req, res) => {
+  const d = readCustomerBody(req.body);
+  const { lastInsertRowid } = await db
+    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes);
+  await logActivity(req.user.id, 'customer_created', `ลูกค้าใหม่ - ${d.name}`, 'เพิ่มแล้ว');
+  res.status(201);
+  return serializeCustomer(await getCustomer(req.user.id, lastInsertRowid));
+}));
+
+app.put('/api/customers/:id', route(async (req) => {
+  const existing = await getCustomer(req.user.id, req.params.id);
+  const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body });
+  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
+    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, existing.id, req.user.id);
+  return serializeCustomer(await getCustomer(req.user.id, existing.id));
+}));
+
+app.delete('/api/customers/:id', route(async (req) => {
+  const c = await getCustomer(req.user.id, req.params.id);
+  // their projects and quotes stay, with the name still on them; the database clears the link
+  await db.prepare('DELETE FROM customers WHERE id = ?').run(c.id);
+  await logActivity(req.user.id, 'customer_deleted', `ลบลูกค้า ${c.name}`, 'ลบแล้ว');
+  return { ok: true };
+}));
+
 // ---------- projects ----------
 
 const PROJECT_STATUS = {
@@ -359,6 +478,7 @@ async function serializeProject(p) {
     code: p.code,
     title: p.title,
     projectType: p.project_type,
+    customerId: p.customer_id ? String(p.customer_id) : null,
     client: p.client,
     phone: p.phone,
     email: p.email,
@@ -463,11 +583,12 @@ app.post('/api/projects', route(async (req, res) => {
   const d = readProjectBody(req.body);
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO projects (user_id, code, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
+      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
                   deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
-      .run(req.user.id, code, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown);
     await replaceCostItems(Number(lastInsertRowid), d.items || []);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่ - ${d.title}`, 'เพิ่มแล้ว');
@@ -481,11 +602,12 @@ app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body });
   await transaction(async () => {
-    await db.prepare(`UPDATE projects SET title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
+    await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
                   reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
+      .run(customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.review_applied,
         d.review_applied, existing.id, req.user.id);
     if (d.items) await replaceCostItems(existing.id, d.items);
@@ -521,6 +643,7 @@ async function serializeQuote(q) {
     id: String(q.id),
     code: q.code,
     projectId: q.project_id ? String(q.project_id) : null,
+    customerId: q.customer_id ? String(q.customer_id) : null,
     clientName: q.client_name,
     clientPhone: q.client_phone,
     clientEmail: q.client_email,
@@ -592,10 +715,11 @@ app.post('/api/quotes', route(async (req, res) => {
   const quote = await transaction(async () => {
     const code = await nextCode('quotes', req.user.id, 'QT');
     const status = d.status || 'draft';
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO quotes (user_id, code, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
-      .run(req.user.id, code, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status);
+      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
@@ -613,9 +737,10 @@ app.put('/api/quotes/:id', route(async (req) => {
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const status = d.status || existing.status;
   await transaction(async () => {
-    await db.prepare(`UPDATE quotes SET project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, status=?, updated_at=${NOW}
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
+    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, status=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status, existing.id, req.user.id);
+      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
     if (status !== existing.status) {
       await syncProjectStatus(req.user.id, d.project_id, status);

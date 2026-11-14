@@ -43,6 +43,7 @@ import { LEVEL_STYLE, projectHealth } from './lib/job';
 import { AuthScreen, type AuthMode } from './components/AuthScreen';
 import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
+import { CustomerPage, Customers } from './components/Customers';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
 import { trialDaysLeft } from './lib/plans';
@@ -63,12 +64,12 @@ export const getProgressFromStatus = (status: string): number => {
 };
 
 const activityIcon = (kind: string) => {
-  if (kind.startsWith('quote_deleted') || kind === 'project_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
+  if (kind.startsWith('quote_deleted') || kind === 'project_deleted' || kind === 'customer_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind === 'quote_sent') return { icon: Send, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'quote_rejected' || kind === 'project_cancelled') return { icon: XCircle, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind.startsWith('quote_')) return { icon: FileText, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'plan_changed') return { icon: Crown, iconBg: 'bg-amber-50 text-amber-600' };
-  if (kind === 'project_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
+  if (kind === 'project_created' || kind === 'customer_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
   if (kind === 'project_completed' || kind === 'project_approved') return { icon: CheckCircle, iconBg: 'bg-amber-50 text-amber-600' };
   return { icon: DollarSign, iconBg: 'bg-violet-50 text-[#673AB7]' };
 };
@@ -327,6 +328,20 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
         );
       case 'quick-check':
         return <QuickCheck user={user} onCreated={(p) => handleProjectSelect(p)} />;
+      case 'customers':
+        return view.customerId ? (
+          <CustomerPage
+            key={view.customerId}
+            customerId={view.customerId}
+            onBack={() => show({ nav: 'customers' })}
+            // the deleted customer's address is replaced, so the back button can't land on it again
+            onGone={() => show({ nav: 'customers' }, { replace: true })}
+            onOpenProject={(p) => handleProjectSelect(p)}
+            onOpenQuote={(id) => openQuote(id, true)}
+          />
+        ) : (
+          <Customers onOpenCustomer={(id) => show({ nav: 'customers', customerId: id })} />
+        );
       case 'reports':
         return <Reports user={user} onOpenProject={(p) => handleProjectSelect(p)} />;
       case 'settings':

@@ -9,6 +9,7 @@ import { CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
+import { CustomerPicker } from '../CustomerPicker';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -174,7 +175,15 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
               {infoField('วันที่จัดงาน', 'eventDate', 'date')}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {infoField('ลูกค้า', 'client')}
+              <div>
+                <label className="pb-label">ลูกค้า</label>
+                <CustomerPicker
+                  className="pb-input !py-2"
+                  value={draft.client}
+                  onChange={(client) => patch({ client, customerId: null })}
+                  onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}
+                />
+              </div>
               {infoField('เบอร์โทร', 'phone', 'tel')}
             </div>
             {infoField('อีเมลลูกค้า', 'email', 'email')}

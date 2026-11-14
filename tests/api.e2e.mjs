@@ -223,6 +223,81 @@ r = await ADM.call('PUT', `/admin/shops/${shopA.id}`, { disabled: false });
 r = await A.call('POST', '/auth/login', { email: 'a@x.test', password: 'newpassword1' });
 ok('เปิดใช้งานแล้ว ร้าน A login ได้ + ข้อมูลยังอยู่', r.status === 200 && (await A.call('GET', '/projects')).data.length === 2);
 
+// --- customers
+{
+  r = await A.call('GET', '/customers');
+  const auto = r.data.find((c) => c.name === 'ลูกค้า1');
+  ok('ชื่อลูกค้าที่พิมพ์ในโปรเจ็กต์กลายเป็นลูกค้าในรายชื่อ', r.status === 200 && !!auto, JSON.stringify(r.data));
+  r = await A.call('POST', '/customers', { name: '  ' });
+  ok('เพิ่มลูกค้าไม่มีชื่อ ถูกปฏิเสธ', r.status === 400);
+  r = await A.call('POST', '/customers', { name: 'คุณสมหญิง', phone: '0812345678', email: 'ying@x.test', lineId: '@ying', address: '1 ถนนสุขุมวิท', notes: 'ชอบสีขาว' });
+  const c1 = r.data;
+  ok('เพิ่มลูกค้าครบทุกช่อง', r.status === 201 && c1.lineId === '@ying' && c1.address === '1 ถนนสุขุมวิท' && c1.notes === 'ชอบสีขาว', JSON.stringify(c1));
+  r = await A.call('PUT', `/customers/${c1.id}`, { phone: '0899999999' });
+  ok('แก้ไขลูกค้าเฉพาะบางช่อง ช่องอื่นคงเดิม', r.status === 200 && r.data.phone === '0899999999' && r.data.name === 'คุณสมหญิง' && r.data.lineId === '@ying');
+  r = await A.call('PUT', `/customers/${c1.id}`, { name: '' });
+  ok('แก้ชื่อลูกค้าเป็นว่าง ถูกปฏิเสธ', r.status === 400);
+
+  ok('ร้านอื่นดูลูกค้าไม่ได้', (await B.call('GET', `/customers/${c1.id}`)).status === 404);
+  ok('ร้านอื่นแก้ลูกค้าไม่ได้', (await B.call('PUT', `/customers/${c1.id}`, { name: 'x' })).status === 404);
+  ok('ร้านอื่นลบลูกค้าไม่ได้', (await B.call('DELETE', `/customers/${c1.id}`)).status === 404);
+  ok('รายชื่อลูกค้าของร้านอื่นไม่มีลูกค้าร้านนี้', !(await B.call('GET', '/customers')).data.some((c) => c.id === c1.id));
+  ok('ร้านอื่นผูกโปรเจ็กต์กับลูกค้าร้านนี้ไม่ได้', (await B.call('POST', '/projects', { title: 'x', customerId: c1.id })).status === 404);
+  ok('รหัสลูกค้าที่ไม่ใช่ตัวเลข → 404 ไม่ใช่ 500', (await A.call('GET', '/customers/abc')).status === 404 && (await A.call('POST', '/projects', { title: 'x', customerId: 'abc' })).status === 404);
+
+  r = await A.call('POST', '/projects', {
+    title: 'งานคุณสมหญิง', projectType: 'งานวันเกิด', customerId: c1.id, client: 'คุณสมหญิง', eventDate: thisMonth, profitMargin: 50,
+    costItems: [{ name: 'ดอกไม้', quantity: 1, price: 4000 }],
+  });
+  const cp = r.data;
+  ok('สร้างโปรเจ็กต์โดยเลือกลูกค้าจากรายชื่อ', r.status === 201 && cp.customerId === c1.id, cp?.customerId);
+  r = await A.call('POST', '/quotes', { clientName: 'คุณสมหญิง', projectTitle: 'งานคุณสมหญิง', items: [{ description: 'จัดดอกไม้', quantity: 1, unitPrice: 6000 }] });
+  const cq = r.data;
+  ok('ใบเสนอราคาที่พิมพ์ชื่อตรงกับลูกค้าเดิม ผูกกับลูกค้าคนนั้น', cq.customerId === c1.id, cq.customerId);
+  await A.call('POST', '/projects', { title: 'งาน ก', projectType: 'อื่นๆ', client: ' Somchai ' });
+  await A.call('POST', '/quotes', { clientName: 'somchai' });
+  r = await A.call('GET', '/customers');
+  const somchai = r.data.filter((c) => c.name.toLowerCase() === 'somchai');
+  ok('ชื่อเดียวกันต่างตัวพิมพ์/เว้นวรรค ไม่สร้างลูกค้าซ้ำ', somchai.length === 1 && somchai[0].projectCount === 1 && somchai[0].quoteCount === 1, JSON.stringify(somchai));
+
+  ok('ยังไม่อนุมัติ ยอดซื้อรวมเป็น 0', r.data.find((c) => c.id === c1.id).totalSales === 0);
+  r = await A.call('PUT', `/projects/${cp.id}`, { status: 'approved' });
+  ok('เปลี่ยนสถานะโปรเจ็กต์ ลูกค้ายังผูกอยู่', r.data.customerId === c1.id);
+  r = await A.call('GET', `/customers/${c1.id}`);
+  ok('หน้าลูกค้า: ยอดซื้อรวม = ราคาขายของงานที่อนุมัติ (4,000 + 50% = 6,000)', Math.abs(r.data.totalSales - 6000) < 0.001 && r.data.soldCount === 1, r.data.totalSales);
+  ok('หน้าลูกค้า: เห็นโปรเจ็กต์และใบเสนอราคาของลูกค้า', r.data.projects.length === 1 && r.data.projects[0].id === cp.id && r.data.quotes.length === 1 && r.data.quotes[0].id === cq.id);
+
+  r = await A.call('PUT', `/customers/${c1.id}`, { name: 'คุณสมหญิง ใจดี' });
+  r = await A.call('GET', `/projects/${cp.id}`);
+  ok('เปลี่ยนชื่อลูกค้า โปรเจ็กต์ยังผูกอยู่', r.data.customerId === c1.id);
+  r = await A.call('PUT', `/projects/${cp.id}`, { client: 'คุณใหม่', phone: '0800000000' });
+  ok('เปลี่ยนชื่อลูกค้าในโปรเจ็กต์ → ย้ายไปผูกลูกค้าชื่อใหม่', r.data.customerId && r.data.customerId !== c1.id, r.data.customerId);
+  const moved = r.data.customerId;
+  r = await A.call('PUT', `/projects/${cp.id}`, { customerId: c1.id });
+  ok('เลือกลูกค้าเดิมกลับจากรายชื่อได้', r.data.customerId === c1.id);
+
+  r = await A.call('DELETE', `/customers/${c1.id}`);
+  ok('ลบลูกค้าได้', r.status === 200 && (await A.call('GET', `/customers/${c1.id}`)).status === 404);
+  r = await A.call('GET', `/projects/${cp.id}`);
+  ok('ลบลูกค้าแล้ว โปรเจ็กต์ยังอยู่ ชื่อลูกค้ายังอยู่ แค่ไม่ผูก', r.status === 200 && r.data.customerId === null && r.data.client === 'คุณใหม่');
+  ok('ลบลูกค้าแล้ว ใบเสนอราคายังอยู่', (await A.call('GET', `/quotes/${cq.id}`)).data.customerId === null);
+
+  // records from before the customer list existed: the link step that runs on upgrade and after the data import
+  await A.call('DELETE', `/customers/${moved}`);
+  const link = () => execFileSync('node', ['--input-type=module', '-e', "import { db, LINK_CUSTOMERS, close } from './server/db.js'; await db.exec(LINK_CUSTOMERS); await close();"], { cwd: PROJECT_DIR, env: { ...process.env } });
+  link();
+  r = await A.call('GET', '/customers');
+  const back = r.data.filter((c) => c.name === 'คุณใหม่');
+  const total = r.data.length;
+  ok('ข้อมูลเดิมที่ยังไม่ผูกลูกค้า: สร้างลูกค้าจากชื่อ พร้อมเบอร์โทร', back.length === 1 && back[0].phone === '0800000000' && back[0].projectCount === 1, JSON.stringify(back));
+  ok('ข้อมูลเดิม: ใบเสนอราคาที่ชื่อ "คุณสมหญิง" ได้ลูกค้าของตัวเอง', r.data.some((c) => c.name === 'คุณสมหญิง' && c.quoteCount === 1));
+  link();
+  ok('รันขั้นตอนผูกลูกค้าซ้ำ ไม่สร้างลูกค้าเพิ่ม', (await A.call('GET', '/customers')).data.length === total);
+
+  await A.call('DELETE', `/projects/${cp.id}`);
+  await A.call('DELETE', `/quotes/${cq.id}`);
+}
+
 // --- forgotten password, sign out everywhere
 {
   const outbox = () => (fs.existsSync(process.env.MAIL_OUTBOX_FILE) ? fs.readFileSync(process.env.MAIL_OUTBOX_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
