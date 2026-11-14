@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
-import { lineAmount, projectPrice, quoteTotals, VAT_MODES } from '../shared/quote-math.js';
+import { lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -857,6 +857,57 @@ app.get('/api/activities', route(async (req) =>
   db.prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(req.user.id, Math.min(Math.max(Math.trunc(Number(req.query.limit)) || 50, 1), 200)),
 ));
 
+/**
+ * Sales, cost and profit of sold jobs (approved or completed) whose day falls inside from–to,
+ * by month, by customer and job by job. A job's day is its event date, or the day it was created
+ * when no event date is set. Either bound may be left out.
+ */
+async function salesReport(userId, rows, from, to) {
+  const names = new Map((await db.prepare('SELECT id, name FROM customers WHERE user_id = ?').all(userId)).map((c) => [c.id, c.name]));
+  const jobs = rows
+    .filter((r) => r.sold)
+    .map((r) => ({
+      id: String(r.id),
+      code: r.code,
+      title: r.title,
+      date: (r.event_date || r.created_at).slice(0, 10),
+      customerId: r.customer_id ? String(r.customer_id) : null,
+      customer: names.get(r.customer_id) || r.client || '',
+      statusText: PROJECT_STATUS[r.status],
+      sales: wholeBaht(r.sales),
+      cost: wholeBaht(r.cost),
+      profit: wholeBaht(r.sales) - wholeBaht(r.cost),
+    }))
+    .filter((j) => (!from || j.date >= from) && (!to || j.date <= to))
+    .sort((a, b) => a.date.localeCompare(b.date) || Number(a.id) - Number(b.id));
+
+  const sum = (list) => ({
+    jobs: list.length,
+    sales: list.reduce((s, j) => s + j.sales, 0),
+    cost: list.reduce((s, j) => s + j.cost, 0),
+    profit: list.reduce((s, j) => s + j.profit, 0),
+  });
+  const group = (keyOf) => {
+    const groups = new Map();
+    for (const j of jobs) {
+      const key = keyOf(j);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(j);
+    }
+    return groups;
+  };
+
+  const byMonth = [...group((j) => j.date.slice(0, 7))]
+    .map(([key, list]) => ({ key, month: `${TH_MONTHS[Number(key.slice(5)) - 1]} ${Number(key.slice(0, 4)) + 543}`, ...sum(list) }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  // jobs not tied to a customer are grouped by the name typed on them
+  const byCustomer = [...group((j) => (j.customerId ? `id:${j.customerId}` : `name:${j.customer.toLowerCase()}`))]
+    .map(([, list]) => ({ customerId: list[0].customerId, name: list[0].customer, ...sum(list) }))
+    .sort((a, b) => b.sales - a.sales || a.name.localeCompare(b.name, 'th'));
+
+  return { from, to, totals: sum(jobs), byMonth, byCustomer, jobs };
+}
+
 app.get('/api/reports', route(async (req) => {
   const rows = await projectFinancials(req.user.id);
   const byType = {};
@@ -869,6 +920,7 @@ app.get('/api/reports', route(async (req) => {
       t.profit += r.profit;
     }
   }
+  const sales = await salesReport(req.user.id, rows, date(req.query.from), date(req.query.to));
   const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: rows.filter((r) => r.status === s).length }));
   const sold = rows.filter((r) => r.sold);
   return {
@@ -881,6 +933,7 @@ app.get('/api/reports', route(async (req) => {
     chart: monthSeries(rows, 12),
     byType: Object.values(byType).sort((a, b) => b.sales - a.sales),
     byStatus,
+    sales,
   };
 }));
 
