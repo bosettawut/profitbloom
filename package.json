@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web -c magenta,cyan \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "node --watch server/index.js",
+    "dev:api": "node --env-file-if-exists=.env --watch server/index.js",
     "dev:web": "vite",
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
