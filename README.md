@@ -21,6 +21,8 @@ npm run dev
 เปิด http://localhost:5173 แล้วสมัครสมาชิกได้เลย
 (`npm run dev` รันทั้ง API ที่พอร์ต 3001 และหน้าเว็บที่พอร์ต 5173 โดย Vite ส่งต่อ `/api` ไปที่ API)
 
+ถ้าต้องการตั้งค่าเองบนเครื่อง (เปลี่ยนพอร์ต, ส่งอีเมลจริง, ชี้ฐานข้อมูลอื่น) คัดลอก `.env.example` เป็น `.env` แล้วแก้ค่าในนั้น `npm run dev` จะอ่านไฟล์นี้ให้เอง ค่าที่พิมพ์นำหน้าคำสั่งมีผลเหนือค่าในไฟล์ ไฟล์ `.env` ไม่ถูก commit และระบบจริงบน Vercel ไม่ใช้ไฟล์นี้
+
 ข้อมูลเก็บในฐานข้อมูล `profitbloom` ของ PostgreSQL บนเครื่อง (ตารางถูกสร้างให้อัตโนมัติ) ถ้าต้องการเริ่มใหม่ทั้งหมด: `dropdb profitbloom && createdb profitbloom`
 ถ้า PostgreSQL ไม่ได้อยู่ที่ `localhost:5432` ให้กำหนด `DATABASE_URL` เช่น `postgresql://user:pass@host:5432/profitbloom`
 
