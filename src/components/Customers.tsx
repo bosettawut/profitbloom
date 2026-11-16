@@ -4,6 +4,7 @@ import { api, baht, type Customer, type CustomerDetail, type CustomerInput, type
 import { ProjectItem, statusPill } from './ProjectItem';
 import { StatsCard } from './StatsCard';
 import { salePrice } from '../lib/job';
+import { nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
 
 const formatDate = (iso: string) =>
   iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : 'ยังไม่กำหนดวัน';
@@ -107,7 +108,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState('name');
+  const [sort, setSort] = useState<Sort>({ key: 'name', dir: 'asc' });
   const [adding, setAdding] = useState(false);
   const { flash, node: toast } = useToast();
 
@@ -119,16 +120,24 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
   }, []);
 
   const term = searchTerm.trim().toLowerCase();
-  const shown = customers
-    .filter((c) => !term || [c.name, c.phone, c.email, c.lineId, c.address, c.notes].some((v) => v.toLowerCase().includes(term)))
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'sales': return b.totalSales - a.totalSales;
-        case 'projects': return b.projectCount - a.projectCount;
-        case 'recent': return Number(b.id) - Number(a.id);
-        default: return a.name.localeCompare(b.name, 'th');
-      }
-    });
+  const found = customers.filter((c) => !term || [c.name, c.phone, c.email, c.lineId, c.address, c.notes].some((v) => v.toLowerCase().includes(term)));
+  /** what each sortable column orders by */
+  const sortValue: Record<string, (c: CustomerSummary) => string | number> = {
+    name: (c) => c.name,
+    phone: (c) => c.phone,
+    lineId: (c) => c.lineId,
+    email: (c) => c.email,
+    projects: (c) => c.projectCount,
+    quotes: (c) => c.quoteCount,
+    sales: (c) => c.totalSales,
+    lastEvent: (c) => c.lastEventDate,
+    recent: (c) => Number(c.id),
+  };
+  /** numbers and dates start biggest/newest first, text starts A→Z */
+  const firstDir = (key: string): Sort['dir'] => (['projects', 'quotes', 'sales', 'lastEvent', 'recent'].includes(key) ? 'desc' : 'asc');
+  const sortBy = (key: string, dir = firstDir(key)) => setSort((cur) => nextSort(cur, key, dir));
+  const shown = sortRows(found, sortValue[sort.key] ?? sortValue.name, sort.dir);
+  const paged = usePaged(shown, [term, sort.key, sort.dir].join('|'));
 
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
@@ -136,7 +145,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div>
           <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">ลูกค้า</h1>
-          <p className="text-sm text-ink-muted mt-1">รายชื่อลูกค้าของร้าน แตะการ์ดเพื่อดูโปรเจ็กต์และใบเสนอราคาของแต่ละคน</p>
+          <p className="text-sm text-ink-muted mt-1">รายชื่อลูกค้าของร้าน แตะที่ลูกค้าเพื่อดูโปรเจ็กต์และใบเสนอราคาของแต่ละคน</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button onClick={() => setAdding(true)} className="pb-btn-primary flex-1 lg:flex-none whitespace-nowrap">
@@ -159,7 +168,8 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <select className="pb-input text-ink-muted md:w-56" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="เรียงลำดับ">
+          {/* phones have no column headings to sort by */}
+          <select className="pb-input text-ink-muted md:hidden" value={sort.key} onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })} aria-label="เรียงลำดับ">
             <option value="name">เรียงตามชื่อ</option>
             <option value="sales">เรียงตามยอดซื้อรวม</option>
             <option value="projects">เรียงตามจำนวนโปรเจ็กต์</option>
@@ -180,9 +190,45 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
         </div>
       )}
 
-      {/* Customers grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-        {shown.map((c) => (
+      {/* Table (desktop) */}
+      {paged.rows.length > 0 && (
+        <div className="hidden md:block pb-card overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-canvas/60 border-b border-line">
+                  <SortHeader label="ลูกค้า" sortKey="name" sort={sort} onSort={sortBy} />
+                  <SortHeader label="เบอร์โทร" sortKey="phone" sort={sort} onSort={sortBy} />
+                  <SortHeader label="LINE" sortKey="lineId" sort={sort} onSort={sortBy} />
+                  <SortHeader label="อีเมล" sortKey="email" sort={sort} onSort={sortBy} />
+                  <SortHeader label="งานล่าสุด" sortKey="lastEvent" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="โปรเจ็กต์" sortKey="projects" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="ใบเสนอราคา" sortKey="quotes" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="ยอดซื้อรวม" sortKey="sales" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                </tr>
+              </thead>
+              <tbody>
+                {paged.rows.map((c) => (
+                  <tr key={c.id} onClick={() => onOpenCustomer(c.id)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
+                    <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{c.name}</span></td>
+                    <td className="px-3 py-3 text-ink whitespace-nowrap">{c.phone || '-'}</td>
+                    <td className="px-3 py-3 text-ink max-w-[9rem] truncate">{c.lineId || '-'}</td>
+                    <td className="px-3 py-3 text-ink max-w-[13rem] truncate">{c.email || '-'}</td>
+                    <td className="px-3 py-3 text-ink whitespace-nowrap">{c.lastEventDate ? formatDate(c.lastEventDate) : '-'}</td>
+                    <td className="px-3 py-3 text-right text-ink">{c.projectCount}</td>
+                    <td className="px-3 py-3 text-right text-ink">{c.quoteCount}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(c.totalSales)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cards (phone) */}
+      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+        {paged.rows.map((c) => (
           <div key={c.id} onClick={() => onOpenCustomer(c.id)} className="pb-card cursor-pointer transition-all duration-300 overflow-hidden">
             <div className="p-4 md:p-6 border-b border-line">
               <h3 className="text-base md:text-lg text-ink mb-1 line-clamp-2 font-semibold">{c.name}</h3>
@@ -209,6 +255,8 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
           </div>
         ))}
       </div>
+
+      <Pagination paged={paged} unit="ลูกค้า" />
 
       {adding && (
         <CustomerForm
