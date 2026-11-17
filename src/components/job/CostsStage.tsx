@@ -56,7 +56,8 @@ function CommitNumber({ value, onCommit, disabled, ...rest }: { value: number; o
   const commit = () => {
     setEditing(false);
     if (text.trim() !== '' && Number.isFinite(Number(text))) onCommit(Number(text));
-    else setText(String(value));
+    // back to the current value; when the commit goes through, the new value arrives right after and replaces it
+    setText(String(value));
   };
   return (
     <input
@@ -129,7 +130,11 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
   // the job's own margin and price are the sum of its headings; changing either here moves every heading
   const margin = h.margin;
   const setMargin = (m: number) => {
-    const markup = marginToMarkup(Math.min(95, Math.max(0, m)));
+    const target = Math.min(95, Math.max(0, m));
+    const markup = marginToMarkup(target);
+    // headings given their own margins would all be overwritten: say so first
+    const own = groups.map((g) => Number(markupToMargin(g.markup).toFixed(1)));
+    if (new Set(own).size > 1 && !window.confirm(`หัวข้อมี Margin ไม่เท่ากัน (${own.map((x) => `${x}%`).join(', ')})\nตั้งทุกหัวข้อเป็น ${Number(target.toFixed(1))}% ใช่หรือไม่?`)) return;
     patch({ profitMargin: markup, costGroups: groups.map((g) => ({ ...g, markup })) });
   };
   const setPrice = (price: number) => {
