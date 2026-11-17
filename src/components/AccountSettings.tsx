@@ -16,12 +16,13 @@ interface AccountSettingsProps {
 const inputClass = 'pb-input';
 
 interface CostCategoriesCardProps {
+  className?: string;
   categories: ShopCategory[];
   onChange: (categories: ShopCategory[]) => void;
 }
 
 /** The shop's own cost categories. Each change is saved straight away, separately from the form around it. */
-function CostCategoriesCard({ categories, onChange }: CostCategoriesCardProps) {
+function CostCategoriesCard({ className = '', categories, onChange }: CostCategoriesCardProps) {
   const [names, setNames] = useState<Record<string, string>>({});
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -78,7 +79,7 @@ function CostCategoriesCard({ categories, onChange }: CostCategoriesCardProps) {
   };
 
   return (
-    <div className="pb-card p-6 md:p-8 space-y-4">
+    <div className={`pb-card p-6 md:p-8 space-y-4 ${className}`}>
       <div>
         <h3 className="text-base md:text-lg text-ink font-semibold">หมวดต้นทุน</h3>
         <p className="text-sm text-ink-muted">หมวดที่เลือกได้ตอนใส่รายการต้นทุนของงาน เพิ่มหมวดของร้านเองได้ การเปลี่ยนแปลงตรงนี้บันทึกทันที</p>
@@ -186,7 +187,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
 
   return (
     <div>
-      <div className="p-5 md:p-10 pb-28 md:pb-10 max-w-3xl">
+      <div className="p-5 md:p-10 pb-28 md:pb-10">
         <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">ตั้งค่า</h1>
         <p className="text-ink-muted mb-8">ข้อมูลร้าน โลโก้ และบัญชีของคุณ</p>
 
@@ -206,150 +207,155 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
           ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="pb-card p-6 md:p-8 space-y-4">
-            <div>
-              <h3 className="text-base md:text-lg text-ink font-semibold">ร้าน / บริษัท</h3>
-              <p className="text-sm text-ink-muted">ชื่อและโลโก้นี้จะแสดงแทน ProfitBloom ในเมนู และบนใบเสนอราคาที่ส่งให้ลูกค้า</p>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center gap-5 py-2">
-              {/* live preview of how the sidebar header will look */}
-              <div className="flex items-center gap-3 rounded-2xl px-4 py-3 bg-gradient-to-br from-[#7C4DDB] to-[#35235e] text-white sm:w-64 shrink-0">
-                <div className="w-11 h-11 rounded-xl bg-white/95 p-1 shrink-0">
-                  <img src={form.businessLogo || brandLogo({ ...user, businessLogo: '' })} alt="" className="w-full h-full object-contain" />
-                </div>
-                <div className="min-w-0">
-                  <p className="font-semibold truncate">{form.businessName.trim() || 'ProfitBloom'}</p>
-                  <p className="text-xs text-white/65">ตัวอย่างในเมนู</p>
-                </div>
+        {/* one column on small screens, in the order-N sequence; two columns on wide ones */}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-6 xl:grid xl:grid-cols-2 xl:items-start">
+          <div className="contents xl:flex xl:flex-col xl:gap-6">
+            <div className="pb-card p-6 md:p-8 space-y-4 order-1">
+              <div>
+                <h3 className="text-base md:text-lg text-ink font-semibold">ร้าน / บริษัท</h3>
+                <p className="text-sm text-ink-muted">ชื่อและโลโก้นี้จะแสดงแทน ProfitBloom ในเมนู และบนใบเสนอราคาที่ส่งให้ลูกค้า</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoFile} />
-                <button type="button" onClick={() => fileInput.current?.click()} className="pb-btn-secondary">
-                  <ImagePlus className="w-4 h-4" />
-                  {form.businessLogo ? 'เปลี่ยนโลโก้' : 'อัปโหลดโลโก้'}
-                </button>
-                {form.businessLogo && (
-                  <button type="button" onClick={() => setForm((f) => ({ ...f, businessLogo: '' }))} className="pb-btn-secondary !text-rose-600">
-                    <Trash2 className="w-4 h-4" />
-                    ใช้โลโก้ ProfitBloom
+
+              <div className="flex flex-col sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center gap-5 py-2">
+                {/* live preview of how the sidebar header will look */}
+                <div className="flex items-center gap-3 rounded-2xl px-4 py-3 bg-gradient-to-br from-[#7C4DDB] to-[#35235e] text-white sm:w-64 shrink-0">
+                  <div className="w-11 h-11 rounded-xl bg-white/95 p-1 shrink-0">
+                    <img src={form.businessLogo || brandLogo({ ...user, businessLogo: '' })} alt="" className="w-full h-full object-contain" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-semibold truncate">{form.businessName.trim() || 'ProfitBloom'}</p>
+                    <p className="text-xs text-white/65">ตัวอย่างในเมนู</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoFile} />
+                  <button type="button" onClick={() => fileInput.current?.click()} className="pb-btn-secondary">
+                    <ImagePlus className="w-4 h-4" />
+                    {form.businessLogo ? 'เปลี่ยนโลโก้' : 'อัปโหลดโลโก้'}
                   </button>
-                )}
-                <p className="w-full text-xs text-ink-muted">PNG, JPG หรือ WebP ภาพสี่เหลี่ยมจัตุรัสพื้นใสจะดูดีที่สุด</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <label className="pb-label">ชื่อร้าน / บริษัท (แสดงแทน ProfitBloom)</label>
-                <input className={inputClass} value={form.businessName} onChange={set('businessName')} placeholder="เช่น ร้านดอกไม้บลูม" />
-              </div>
-              <div className="md:col-span-2">
-                <label className="pb-label">ที่อยู่</label>
-                <textarea className={inputClass} rows={2} value={form.businessAddress} onChange={set('businessAddress')} />
-              </div>
-              <div>
-                <label className="pb-label">เบอร์โทรศัพท์</label>
-                <input className={inputClass} value={form.businessPhone} onChange={set('businessPhone')} />
-              </div>
-              <div>
-                <label className="pb-label">เลขประจำตัวผู้เสียภาษี</label>
-                <input className={inputClass} value={form.businessTaxId} onChange={set('businessTaxId')} />
-              </div>
-            </div>
-          </div>
-
-          <div className="pb-card p-6 md:p-8 space-y-4">
-            <div>
-              <h3 className="text-base md:text-lg text-ink font-semibold">กติกาธุรกิจ</h3>
-              <p className="text-sm text-ink-muted">เกณฑ์ที่ระบบใช้ตัดสินว่างานไหนปลอดภัยหรือเสี่ยง — ปรับให้ตรงกับร้านของคุณ</p>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-4">
-              {([
-                ['highRiskMargin', 'เสี่ยงสูง เมื่อ Margin ต่ำกว่า (%)', 'งานจะถูกจัดเป็น High Risk'],
-                ['minMargin', 'Margin ขั้นต่ำที่รับได้ (%)', 'ใช้เป็นราคาต่ำสุดที่แนะนำ'],
-                ['goodMargin', 'Margin ที่ดี (%)', 'ใช้เป็นราคาสูงสุดที่แนะนำ'],
-                ['depositPct', 'มัดจำมาตรฐาน (%)', 'ค่าเริ่มต้นของงานใหม่'],
-                ['dailyWage', 'ค่าแรงต่อคนต่อวัน (บาท)', 'ใช้ในเช็คก่อนรับงานและการจำลอง'],
-                ['vehicleCost', 'ค่ารถต่อคัน (บาท)', 'ใช้ในการจำลองสถานการณ์'],
-                ['laborOverrunPct', 'เตือนค่าแรงเกินงบ เมื่อเกิน (%)', 'Labor Overrun หลังจบงาน'],
-              ] as Array<[keyof Rules, string, string]>).map(([k, label, hint]) => (
-                <div key={k}>
-                  <label className="pb-label">{label}</label>
-                  <input
-                    className={inputClass}
-                    type="number"
-                    min="0"
-                    inputMode="decimal"
-                    value={rules[k]}
-                    onChange={(e) => setRules({ ...rules, [k]: e.target.value === '' ? 0 : Number(e.target.value) })}
-                  />
-                  <p className="text-xs text-ink-muted mt-1">{hint}</p>
+                  {form.businessLogo && (
+                    <button type="button" onClick={() => setForm((f) => ({ ...f, businessLogo: '' }))} className="pb-btn-secondary !text-rose-600">
+                      <Trash2 className="w-4 h-4" />
+                      ใช้โลโก้ ProfitBloom
+                    </button>
+                  )}
+                  <p className="w-full text-xs text-ink-muted">PNG, JPG หรือ WebP ภาพสี่เหลี่ยมจัตุรัสพื้นใสจะดูดีที่สุด</p>
                 </div>
-              ))}
-              <div>
-                <label className="pb-label">VAT ในใบเสนอราคา</label>
-                <select className={inputClass} value={form.vatMode} onChange={(e) => setForm({ ...form, vatMode: e.target.value as VatMode })}>
-                  <option value="exclusive">บวก VAT เพิ่มจากราคา</option>
-                  <option value="inclusive">ราคารวม VAT แล้ว (ถอด VAT)</option>
-                  <option value="none">ไม่มี VAT</option>
-                </select>
-                <p className="text-xs text-ink-muted mt-1">ค่าเริ่มต้นของใบเสนอราคาใหม่ เปลี่ยนเป็นรายใบได้</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="pb-label">ชื่อร้าน / บริษัท (แสดงแทน ProfitBloom)</label>
+                  <input className={inputClass} value={form.businessName} onChange={set('businessName')} placeholder="เช่น ร้านดอกไม้บลูม" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="pb-label">ที่อยู่</label>
+                  <textarea className={inputClass} rows={2} value={form.businessAddress} onChange={set('businessAddress')} />
+                </div>
+                <div>
+                  <label className="pb-label">เบอร์โทรศัพท์</label>
+                  <input className={inputClass} value={form.businessPhone} onChange={set('businessPhone')} />
+                </div>
+                <div>
+                  <label className="pb-label">เลขประจำตัวผู้เสียภาษี</label>
+                  <input className={inputClass} value={form.businessTaxId} onChange={set('businessTaxId')} />
+                </div>
               </div>
             </div>
-            <button type="button" onClick={() => setRules(DEFAULT_RULES)} className="text-sm text-[#5A42C6] font-medium hover:underline">
-              ใช้ค่าเริ่มต้นของ ProfitBloom
-            </button>
+
+            <div className="pb-card p-6 md:p-8 space-y-4 order-4">
+              <h3 className="text-base md:text-lg text-ink font-semibold">บัญชีผู้ใช้</h3>
+              <div>
+                <label className="pb-label">ชื่อ</label>
+                <input className={inputClass} value={form.name} onChange={set('name')} required />
+              </div>
+              <div>
+                <label className="pb-label">อีเมล</label>
+                <input className={`${inputClass} bg-[#F7F6FA] text-ink-muted`} value={user.email} disabled />
+              </div>
+            </div>
+
+            <div className="pb-card p-6 md:p-8 space-y-4 order-5">
+              <h3 className="text-base md:text-lg text-ink font-semibold">เปลี่ยนรหัสผ่าน</h3>
+              <p className="text-sm text-ink-muted">เว้นว่างไว้หากไม่ต้องการเปลี่ยน</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="pb-label">รหัสผ่านปัจจุบัน</label>
+                  <input className={inputClass} type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" />
+                </div>
+                <div>
+                  <label className="pb-label">รหัสผ่านใหม่</label>
+                  <input className={inputClass} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} autoComplete="new-password" />
+                </div>
+              </div>
+              <p className="text-xs text-ink-muted">เมื่อเปลี่ยนรหัสผ่าน เครื่องอื่นที่เข้าสู่ระบบค้างไว้จะถูกออกจากระบบ</p>
+              <div className="pt-4 border-t border-line flex flex-col sm:flex-row sm:items-center xl:flex-col xl:items-start 2xl:flex-row 2xl:items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-ink">ออกจากระบบทุกเครื่อง</p>
+                  <p className="text-sm text-ink-muted">ใช้เมื่อเคยเข้าสู่ระบบไว้บนเครื่องอื่น หรือสงสัยว่ามีคนอื่นเข้าบัญชี</p>
+                </div>
+                <button type="button" onClick={handleLogoutAll} className="pb-btn-secondary shrink-0 whitespace-nowrap">
+                  <MonitorSmartphone className="w-4 h-4" />
+                  ออกจากระบบทุกเครื่อง
+                </button>
+              </div>
+            </div>
           </div>
 
-          <CostCategoriesCard categories={user.costCategories} onChange={(costCategories) => onUserUpdated({ ...user, costCategories })} />
-
-          <div className="pb-card p-6 md:p-8 space-y-4">
-            <h3 className="text-base md:text-lg text-ink font-semibold">บัญชีผู้ใช้</h3>
-            <div>
-              <label className="pb-label">ชื่อ</label>
-              <input className={inputClass} value={form.name} onChange={set('name')} required />
-            </div>
-            <div>
-              <label className="pb-label">อีเมล</label>
-              <input className={`${inputClass} bg-[#F7F6FA] text-ink-muted`} value={user.email} disabled />
-            </div>
-          </div>
-
-          <div className="pb-card p-6 md:p-8 space-y-4">
-            <h3 className="text-base md:text-lg text-ink font-semibold">เปลี่ยนรหัสผ่าน</h3>
-            <p className="text-sm text-ink-muted">เว้นว่างไว้หากไม่ต้องการเปลี่ยน</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="contents xl:flex xl:flex-col xl:gap-6">
+            <div className="pb-card p-6 md:p-8 space-y-4 order-2">
               <div>
-                <label className="pb-label">รหัสผ่านปัจจุบัน</label>
-                <input className={inputClass} type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} autoComplete="current-password" />
+                <h3 className="text-base md:text-lg text-ink font-semibold">กติกาธุรกิจ</h3>
+                <p className="text-sm text-ink-muted">เกณฑ์ที่ระบบใช้ตัดสินว่างานไหนปลอดภัยหรือเสี่ยง — ปรับให้ตรงกับร้านของคุณ</p>
               </div>
-              <div>
-                <label className="pb-label">รหัสผ่านใหม่</label>
-                <input className={inputClass} type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} autoComplete="new-password" />
+              <div className="grid sm:grid-cols-2 gap-4">
+                {([
+                  ['highRiskMargin', 'เสี่ยงสูง เมื่อ Margin ต่ำกว่า (%)', 'งานจะถูกจัดเป็น High Risk'],
+                  ['minMargin', 'Margin ขั้นต่ำที่รับได้ (%)', 'ใช้เป็นราคาต่ำสุดที่แนะนำ'],
+                  ['goodMargin', 'Margin ที่ดี (%)', 'ใช้เป็นราคาสูงสุดที่แนะนำ'],
+                  ['depositPct', 'มัดจำมาตรฐาน (%)', 'ค่าเริ่มต้นของงานใหม่'],
+                  ['dailyWage', 'ค่าแรงต่อคนต่อวัน (บาท)', 'ใช้ในเช็คก่อนรับงานและการจำลอง'],
+                  ['vehicleCost', 'ค่ารถต่อคัน (บาท)', 'ใช้ในการจำลองสถานการณ์'],
+                  ['laborOverrunPct', 'เตือนค่าแรงเกินงบ เมื่อเกิน (%)', 'Labor Overrun หลังจบงาน'],
+                ] as Array<[keyof Rules, string, string]>).map(([k, label, hint]) => (
+                  <div key={k}>
+                    <label className="pb-label">{label}</label>
+                    <input
+                      className={inputClass}
+                      type="number"
+                      min="0"
+                      inputMode="decimal"
+                      value={rules[k]}
+                      onChange={(e) => setRules({ ...rules, [k]: e.target.value === '' ? 0 : Number(e.target.value) })}
+                    />
+                    <p className="text-xs text-ink-muted mt-1">{hint}</p>
+                  </div>
+                ))}
+                <div className="xl:col-span-2 2xl:col-span-1">
+                  <label className="pb-label">VAT ในใบเสนอราคา</label>
+                  <select className={inputClass} value={form.vatMode} onChange={(e) => setForm({ ...form, vatMode: e.target.value as VatMode })}>
+                    <option value="exclusive">บวก VAT เพิ่มจากราคา</option>
+                    <option value="inclusive">ราคารวม VAT แล้ว (ถอด VAT)</option>
+                    <option value="none">ไม่มี VAT</option>
+                  </select>
+                  <p className="text-xs text-ink-muted mt-1">ค่าเริ่มต้นของใบเสนอราคาใหม่ เปลี่ยนเป็นรายใบได้</p>
+                </div>
               </div>
-            </div>
-            <p className="text-xs text-ink-muted">เมื่อเปลี่ยนรหัสผ่าน เครื่องอื่นที่เข้าสู่ระบบค้างไว้จะถูกออกจากระบบ</p>
-            <div className="pt-4 border-t border-line flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-ink">ออกจากระบบทุกเครื่อง</p>
-                <p className="text-sm text-ink-muted">ใช้เมื่อเคยเข้าสู่ระบบไว้บนเครื่องอื่น หรือสงสัยว่ามีคนอื่นเข้าบัญชี</p>
-              </div>
-              <button type="button" onClick={handleLogoutAll} className="pb-btn-secondary shrink-0 whitespace-nowrap">
-                <MonitorSmartphone className="w-4 h-4" />
-                ออกจากระบบทุกเครื่อง
+              <button type="button" onClick={() => setRules(DEFAULT_RULES)} className="text-sm text-[#5A42C6] font-medium hover:underline">
+                ใช้ค่าเริ่มต้นของ ProfitBloom
               </button>
             </div>
+
+            <CostCategoriesCard className="order-3" categories={user.costCategories} onChange={(costCategories) => onUserUpdated({ ...user, costCategories })} />
           </div>
 
           {message && (
-            <div className={`p-3 rounded-lg border text-sm ${message.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+            <div className={`order-6 xl:col-span-2 p-3 rounded-lg border text-sm ${message.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
               {message.text}
             </div>
           )}
 
-          <div className="flex flex-col md:flex-row gap-3">
+          <div className="order-7 xl:col-span-2 flex flex-col md:flex-row gap-3">
             <button
               type="submit"
               disabled={saving}
