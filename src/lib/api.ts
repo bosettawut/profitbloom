@@ -25,6 +25,14 @@ export interface User {
   rules: Partial<Rules>;
   /** how new quotes treat VAT unless changed on the quote */
   vatMode: VatMode;
+  /** cost categories the shop added to the built-in ones */
+  costCategories: ShopCategory[];
+}
+
+/** A cost category the shop added; cost items refer to it by id ('c12'). */
+export interface ShopCategory {
+  id: string;
+  name: string;
 }
 
 export interface AdminShop {
@@ -273,6 +281,11 @@ export const api = {
   createCustomer: (body: CustomerInput) => request<Customer>('POST', '/customers', body),
   updateCustomer: (id: string, body: CustomerInput) => request<Customer>('PUT', `/customers/${id}`, body),
   deleteCustomer: (id: string) => request<{ ok: true }>('DELETE', `/customers/${id}`),
+
+  createCostCategory: (name: string) => request<ShopCategory>('POST', '/cost-categories', { name }),
+  renameCostCategory: (id: string, name: string) => request<ShopCategory>('PUT', `/cost-categories/${id}`, { name }),
+  /** moved: how many cost items were refiled under "อื่น ๆ" */
+  deleteCostCategory: (id: string) => request<{ ok: true; moved: number }>('DELETE', `/cost-categories/${id}`),
 
   adminShops: () => request<AdminShop[]>('GET', '/admin/shops'),
   adminUpdateShop: (id: number, body: { plan?: User['plan']; disabled?: boolean }) => request<AdminShop>('PUT', `/admin/shops/${id}`, body),

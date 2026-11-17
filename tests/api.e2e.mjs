@@ -289,6 +289,40 @@ r = await ADM.call('PUT', `/admin/shops/${shopA.id}`, { disabled: false });
 r = await A.call('POST', '/auth/login', { email: 'a@x.test', password: 'newpassword1' });
 ok('เปิดใช้งานแล้ว ร้าน A login ได้ + ข้อมูลยังอยู่', r.status === 200 && (await A.call('GET', '/projects')).data.length === 2);
 
+// --- cost categories the shop adds
+{
+  let r = await A.call('GET', '/auth/me');
+  ok('ร้านใหม่ยังไม่มีหมวดต้นทุนของตัวเอง', Array.isArray(r.data.user.costCategories) && r.data.user.costCategories.length === 0, JSON.stringify(r.data.user.costCategories));
+  ok('เพิ่มหมวดโดยไม่กรอกชื่อ → 400', (await A.call('POST', '/cost-categories', { name: '  ' })).status === 400);
+  ok('เพิ่มหมวดชื่อซ้ำกับหมวดมาตรฐาน → 400', (await A.call('POST', '/cost-categories', { name: 'ค่าแรง' })).status === 400);
+  r = await A.call('POST', '/cost-categories', { name: ' ค่าสถานที่ ' });
+  const cat = r.data;
+  ok('เพิ่มหมวด "ค่าสถานที่" ได้ และได้รหัสหมวด', r.status === 201 && /^c\d+$/.test(cat.id) && cat.name === 'ค่าสถานที่', JSON.stringify(r.data));
+  ok('เพิ่มหมวดชื่อซ้ำกับหมวดของร้าน → 400', (await A.call('POST', '/cost-categories', { name: 'ค่าสถานที่' })).status === 400);
+  r = await A.call('GET', '/auth/me');
+  ok('หมวดใหม่มากับข้อมูลผู้ใช้', r.data.user.costCategories.length === 1 && r.data.user.costCategories[0].id === cat.id);
+
+  r = await A.call('POST', '/projects', { title: 'งานหมวดใหม่', profitMargin: 50, costItems: [{ name: 'เช่าห้อง', category: cat.id, quantity: 1, price: 1000 }, { name: 'หมวดมั่ว', category: 'c999999', quantity: 1, price: 1 }] });
+  const job = r.data;
+  ok('รายการต้นทุนใช้หมวดของร้านได้ หมวดที่ไม่มีจริงกลายเป็นหมวดแรก', r.status === 201 && job.costItems[0].category === cat.id && job.costItems[1].category === 'material', JSON.stringify(job.costItems.map((i) => i.category)));
+  r = await B.call('POST', '/projects', { title: 'ร้านอื่น', costItems: [{ name: 'x', category: cat.id, quantity: 1, price: 1 }] });
+  ok('ร้านอื่นใช้หมวดของร้านนี้ไม่ได้', r.data.costItems[0].category === 'material');
+  ok('ร้านอื่นแก้หรือลบหมวดของร้านนี้ไม่ได้', (await B.call('PUT', `/cost-categories/${cat.id}`, { name: 'x' })).status === 404 && (await B.call('DELETE', `/cost-categories/${cat.id}`)).status === 404);
+
+  r = await A.call('PUT', `/cost-categories/${cat.id}`, { name: 'ค่าเช่าสถานที่' });
+  ok('เปลี่ยนชื่อหมวดได้ รหัสเดิม', r.status === 200 && r.data.id === cat.id && r.data.name === 'ค่าเช่าสถานที่');
+  ok('เปลี่ยนชื่อเป็นชื่อเดิมของตัวเองได้', (await A.call('PUT', `/cost-categories/${cat.id}`, { name: 'ค่าเช่าสถานที่' })).status === 200);
+  ok('รหัสหมวดมั่ว → 404', (await A.call('PUT', '/cost-categories/abc', { name: 'x' })).status === 404 && (await A.call('DELETE', '/cost-categories/material')).status === 404);
+
+  r = await A.call('DELETE', `/cost-categories/${cat.id}`);
+  ok('ลบหมวด → บอกจำนวนรายการที่ย้าย', r.status === 200 && r.data.moved === 1, JSON.stringify(r.data));
+  r = await A.call('GET', `/projects/${job.id}`);
+  ok('รายการที่ใช้หมวดที่ลบ ย้ายไป "อื่น ๆ" ยอดเงินเท่าเดิม', r.data.costItems[0].category === 'other' && r.data.costItems[0].price === 1000 && r.data.costItems.length === 2);
+  ok('ลบแล้วไม่มีหมวดของร้านเหลือ', (await A.call('GET', '/cost-categories')).data.length === 0);
+  await A.call('DELETE', `/projects/${job.id}`);
+  await B.call('DELETE', `/projects/${(await B.call('GET', '/projects')).data.find((x) => x.title === 'ร้านอื่น').id}`);
+}
+
 // --- customers
 {
   r = await A.call('GET', '/customers');

@@ -103,7 +103,7 @@ async function startSession(res, userId) {
   res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, expires, path: '/' });
 }
 
-const publicUser = (u) => ({
+const publicUser = async (u) => ({
   id: u.id,
   name: u.name,
   email: u.email,
@@ -119,7 +119,20 @@ const publicUser = (u) => ({
   rules: parseRules(u.rules),
   // how new quotes treat VAT unless changed on the quote itself
   vatMode: u.vat_mode,
+  // cost categories this shop added to the built-in ones
+  costCategories: await customCategories(u.id),
 });
+
+/** The built-in cost categories. owner_labor and teardown also answer two of the job conditions. */
+const COST_CATEGORIES = ['material', 'rental', 'labor', 'owner_labor', 'transport', 'teardown', 'other'];
+const BUILT_IN_CATEGORY_NAMES = ['ดอกไม้/วัสดุ', 'เช่าอุปกรณ์/พร็อพ', 'ค่าแรง', 'ค่าแรงเจ้าของ', 'ขนส่ง/รถ', 'เก็บงาน/ขนส่งกลับ', 'อื่น ๆ'];
+const MAX_CUSTOM_CATEGORIES = 30;
+/** how a cost item refers to a category the shop added */
+const categoryKey = (id) => `c${id}`;
+const customCategories = async (userId) =>
+  (await db.prepare('SELECT id, name FROM cost_categories WHERE user_id = ? ORDER BY id').all(userId)).map((c) => ({ id: categoryKey(c.id), name: c.name }));
+/** every category a shop's cost items may use */
+const allowedCategories = async (userId) => [...COST_CATEGORIES, ...(await customCategories(userId)).map((c) => c.id)];
 
 // business rules for the decision engine; anything missing falls back to the app defaults
 const RULE_LIMITS = {
@@ -194,7 +207,7 @@ app.post('/api/auth/register', route(async (req, res) => {
     .prepare("INSERT INTO users (name, email, password_hash, plan, trial_ends_at) VALUES (?, ?, ?, 'trial', ?) RETURNING id")
     .run(name, email, hashPassword(password), trialEnds);
   await startSession(res, Number(lastInsertRowid));
-  return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid)) };
+  return { user: await publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid)) };
 }));
 
 app.post('/api/auth/login', route(async (req, res) => {
@@ -212,7 +225,7 @@ app.post('/api/auth/login', route(async (req, res) => {
   await forget(key);
   if (user.disabled) throw new HttpError(403, 'บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อทีม ProfitBloom');
   await startSession(res, user.id);
-  return { user: publicUser(user) };
+  return { user: await publicUser(user) };
 }));
 
 app.post('/api/auth/logout', route(async (req, res) => {
@@ -221,7 +234,7 @@ app.post('/api/auth/logout', route(async (req, res) => {
   return { ok: true };
 }));
 
-app.get('/api/auth/me', route(async (req) => ({ user: req.user ? publicUser(req.user) : null })));
+app.get('/api/auth/me', route(async (req) => ({ user: req.user ? await publicUser(req.user) : null })));
 
 // ---------- forgotten password ----------
 
@@ -289,7 +302,7 @@ app.post('/api/auth/reset', route(async (req, res) => {
   });
   await forget(`login-account:${user.email}`);
   await startSession(res, user.id);
-  return { user: publicUser(user) };
+  return { user: await publicUser(user) };
 }));
 
 // everything below requires login
@@ -345,7 +358,7 @@ app.put('/api/account', route(async (req) => {
     await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.user.id);
     await db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.sessionToken);
   }
-  return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) };
+  return { user: await publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) };
 }));
 
 // ---------- customers ----------
@@ -426,6 +439,53 @@ async function customerSummaries(userId) {
     };
   });
 }
+
+// ---------- cost categories the shop adds ----------
+
+async function readCategoryName(userId, body, selfId = null) {
+  const name = str(body.name, 50);
+  if (!name) throw new HttpError(400, 'กรุณากรอกชื่อหมวด');
+  const taken = [...BUILT_IN_CATEGORY_NAMES, ...(await db.prepare('SELECT id, name FROM cost_categories WHERE user_id = ?').all(userId)).filter((c) => c.id !== selfId).map((c) => c.name)];
+  if (taken.some((t) => t.toLowerCase() === name.toLowerCase())) throw new HttpError(400, `มีหมวด "${name}" อยู่แล้ว`);
+  return name;
+}
+async function getCategory(userId, key) {
+  const id = /^c\d+$/.test(String(key)) ? Number(String(key).slice(1)) : 0;
+  const c = id && (await db.prepare('SELECT * FROM cost_categories WHERE id = ? AND user_id = ?').get(id, userId));
+  if (!c) throw new HttpError(404, 'ไม่พบหมวดนี้');
+  return c;
+}
+
+app.get('/api/cost-categories', route(async (req) => customCategories(req.user.id)));
+
+app.post('/api/cost-categories', route(async (req, res) => {
+  const name = await readCategoryName(req.user.id, req.body);
+  const { n } = await db.prepare('SELECT COUNT(*) AS n FROM cost_categories WHERE user_id = ?').get(req.user.id);
+  if (n >= MAX_CUSTOM_CATEGORIES) throw new HttpError(400, `เพิ่มหมวดได้ไม่เกิน ${MAX_CUSTOM_CATEGORIES} หมวด`);
+  const { lastInsertRowid } = await db.prepare('INSERT INTO cost_categories (user_id, name) VALUES (?, ?) RETURNING id').run(req.user.id, name);
+  res.status(201);
+  return { id: categoryKey(lastInsertRowid), name };
+}));
+
+app.put('/api/cost-categories/:id', route(async (req) => {
+  const existing = await getCategory(req.user.id, req.params.id);
+  const name = await readCategoryName(req.user.id, req.body, existing.id);
+  await db.prepare('UPDATE cost_categories SET name = ? WHERE id = ?').run(name, existing.id);
+  return { id: categoryKey(existing.id), name };
+}));
+
+// costs filed under a removed category move to "อื่น ๆ", so no job loses a cost line
+app.delete('/api/cost-categories/:id', route(async (req) => {
+  const existing = await getCategory(req.user.id, req.params.id);
+  let moved = 0;
+  await transaction(async () => {
+    ({ changes: moved } = await db
+      .prepare("UPDATE cost_items SET category = 'other' WHERE category = ? AND project_id IN (SELECT id FROM projects WHERE user_id = ?)")
+      .run(categoryKey(existing.id), req.user.id));
+    await db.prepare('DELETE FROM cost_categories WHERE id = ?').run(existing.id);
+  });
+  return { ok: true, moved };
+}));
 
 app.get('/api/customers', route(async (req) => customerSummaries(req.user.id)));
 
@@ -540,7 +600,7 @@ async function getProject(userId, id) {
   return p;
 }
 
-function readProjectBody(body, existing) {
+function readProjectBody(body, existing, categories = COST_CATEGORIES) {
   const title = str(body.title, 200);
   if (!title) throw new HttpError(400, 'กรุณากรอกชื่อโปรเจ็กต์');
   const status = body.status && PROJECT_STATUS[body.status] ? body.status : undefined;
@@ -570,7 +630,7 @@ function readProjectBody(body, existing) {
       ? body.costItems.slice(0, 500).map((i) => ({
           group: i.groupId,
           name: str(i.name, 200),
-          category: COST_CATEGORIES.includes(i.category) ? i.category : 'material',
+          category: categories.includes(i.category) ? i.category : 'material',
           quantity: num(i.quantity, { min: 0 }),
           price: num(i.price, { min: 0 }),
           actual: i.actual === null || i.actual === undefined || i.actual === '' ? null : num(i.actual, { min: 0 }),
@@ -580,7 +640,6 @@ function readProjectBody(body, existing) {
   };
 }
 
-const COST_CATEGORIES = ['material', 'rental', 'labor', 'owner_labor', 'transport', 'teardown', 'other'];
 function optNum(v, min, max) {
   if (v === null || v === undefined || v === '') return null;
   return num(v, { min, max });
@@ -631,7 +690,7 @@ app.get('/api/projects', route(async (req) =>
 app.get('/api/projects/:id', route(async (req) => serializeProject(await getProject(req.user.id, req.params.id))));
 
 app.post('/api/projects', route(async (req, res) => {
-  const d = readProjectBody(req.body);
+  const d = readProjectBody(req.body, undefined, await allowedCategories(req.user.id));
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
@@ -651,7 +710,7 @@ app.post('/api/projects', route(async (req, res) => {
 
 app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
-  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing);
+  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
     await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
