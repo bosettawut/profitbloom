@@ -10,6 +10,7 @@ import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
 import { CustomerPicker } from '../CustomerPicker';
+import { useCustomerContactPrompt } from '../CustomerContactPrompt';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -36,7 +37,7 @@ interface Props {
   project: Project;
   user: User;
   onBack: () => void;
-  onUpdate: (p: Project) => Promise<Project>;
+  onUpdate: (p: Project & { updateCustomer?: boolean }) => Promise<Project>;
   onDelete: (id: string) => Promise<void>;
   onCreateQuote: (p: Project) => void;
   startStage?: Stage;
@@ -67,11 +68,16 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
     setTimeout(() => setToast(''), 3000);
   };
 
+  const contactPrompt = useCustomerContactPrompt();
+
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
+    const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
+    const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
+    if (updateCustomer === null) return false;
     setSaving(true);
     try {
-      await onUpdate({ ...draft, ...override });
+      await onUpdate({ ...draft, ...override, updateCustomer });
       flash('บันทึกแล้ว');
       return true;
     } catch (err) {
@@ -262,6 +268,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
         </div>
       )}
 
+      {contactPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );

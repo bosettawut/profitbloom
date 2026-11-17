@@ -413,6 +413,20 @@ async function resolveCustomer(userId, customerId, name, phone, email) {
   return Number(lastInsertRowid);
 }
 
+/**
+ * Carries the phone number and email typed on a project or quote over to the customer's own record.
+ * An empty field on the customer is always filled in; a different value replaces what the customer
+ * has only when the shop said so (`overwrite`), because a job is sometimes arranged with someone else.
+ */
+async function syncCustomerContact(customerId, phone, email, overwrite) {
+  if (!customerId) return;
+  const c = await db.prepare('SELECT phone, email FROM customers WHERE id = ?').get(customerId);
+  const pick = (typed, kept) => (typed && (overwrite || !kept) ? typed : kept);
+  const next = { phone: pick(phone, c.phone), email: pick(email, c.email) };
+  if (next.phone === c.phone && next.email === c.email) return;
+  await db.prepare(`UPDATE customers SET phone = ?, email = ?, updated_at = ${NOW} WHERE id = ?`).run(next.phone, next.email, customerId);
+}
+
 /** which customer a save points at: `customerId` in the request picks one, a changed name is looked up again */
 function customerChoice(body, existing, nameKey, existingName) {
   if ('customerId' in body) return body.customerId ? rowId(body.customerId) ?? -1 : null;
@@ -694,6 +708,7 @@ app.post('/api/projects', route(async (req, res) => {
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
+    await syncCustomerContact(customerId, d.phone, d.email, req.body.updateCustomer === true);
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
                   deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
@@ -713,6 +728,7 @@ app.put('/api/projects/:id', route(async (req) => {
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
+    await syncCustomerContact(customerId, d.phone, d.email, req.body.updateCustomer === true);
     await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
                   reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
@@ -851,6 +867,7 @@ app.post('/api/quotes', route(async (req, res) => {
     const code = await nextCode('quotes', req.user.id, 'QT');
     const status = d.status || 'draft';
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
+    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
     const lockedPrice = await lockedPriceOf(d.project_id);
     checkLockedPrice(lockedPrice, d, d.items || []);
     const { lastInsertRowid } = await db
@@ -876,6 +893,7 @@ app.put('/api/quotes/:id', route(async (req) => {
   const status = d.status || existing.status;
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
+    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
     // only a change to the lines or the discount can break the lock; old quotes can still change status
     if ('items' in req.body || 'discountRate' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
     await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, vat_mode=?, status=?, updated_at=${NOW}

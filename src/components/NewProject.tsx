@@ -7,6 +7,7 @@ import { emailError, phoneError } from '../../shared/contact.js';
 import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
+import { useCustomerContactPrompt } from './CustomerContactPrompt';
 
 interface NewProjectProps {
   user: User;
@@ -77,6 +78,8 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     setTimeout(() => setToast(''), 3000);
   };
 
+  const contactPrompt = useCustomerContactPrompt();
+
   const missing = () => {
     if (!draft.title.trim()) return 'กรุณากรอกชื่องาน';
     if (!draft.eventDate) return 'กรุณาเลือกวันที่จัดงาน';
@@ -95,11 +98,14 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
       setStep(1);
       return flash(m);
     }
+    const updateCustomer = await contactPrompt.ask({ customerId: draft.customerId, name: draft.client, phone: draft.phone, email: draft.email });
+    if (updateCustomer === null) return;
     setSaving(true);
     try {
       const { id, code, statusText, createdDate, ...body } = draft;
       const created = await api.createProject({
         ...body,
+        updateCustomer,
         costItems: draft.costItems.filter((i) => i.name.trim() || i.quantity * i.price > 0),
       });
       onCreated(created);
@@ -181,6 +187,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
         )}
       </div>
 
+      {contactPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );
