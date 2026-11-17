@@ -301,6 +301,15 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('เพิ่มลูกค้าครบทุกช่อง', r.status === 201 && c1.lineId === '@ying' && c1.address === '1 ถนนสุขุมวิท' && c1.notes === 'ชอบสีขาว', JSON.stringify(c1));
   r = await A.call('PUT', `/customers/${c1.id}`, { phone: '0899999999' });
   ok('แก้ไขลูกค้าเฉพาะบางช่อง ช่องอื่นคงเดิม', r.status === 200 && r.data.phone === '0899999999' && r.data.name === 'คุณสมหญิง' && r.data.lineId === '@ying');
+
+  // phone numbers: Thai 9–10 digits or international, with the usual separators; anything else is refused
+  const phoneTry = async (phone) => (await A.call('PUT', `/customers/${c1.id}`, { phone })).status;
+  ok('เบอร์โทรมั่ว (ยาวเกิน, สั้นเกิน, มีตัวอักษร, ไม่ขึ้นต้นด้วย 0) → 400', (await Promise.all(['0821111111111111', '08123', 'abc', '1234567890', '081-234-567x'].map(phoneTry))).every((st) => st === 400));
+  ok('เบอร์โทรที่ถูกรูปแบบ → บันทึกได้', (await Promise.all(['081-234-5678', '02 123 4567', '(02) 123-4567', '+66 81 234 5678', '02-123-4567 ต่อ 12', ''].map(phoneTry))).every((st) => st === 200));
+  ok('เบอร์โทรมั่วในโปรเจ็กต์ใหม่ → 400 พร้อมข้อความ', await A.call('POST', '/projects', { title: 'เบอร์ผิด', phone: '0821111111111111' }).then((x) => x.status === 400 && x.data.error.includes('เบอร์โทรศัพท์ไม่ถูกต้อง')));
+  ok('เบอร์โทรมั่วในใบเสนอราคาใหม่ → 400', (await A.call('POST', '/quotes', { clientName: 'คุณเอ', clientPhone: '12', items: [{ description: 'x', quantity: 1, unitPrice: 1 }] })).status === 400);
+  ok('เบอร์โทรร้านมั่วในหน้าตั้งค่า → 400', (await A.call('PUT', '/account', { name: 'สมใจ', businessPhone: 'โทรมาเลย' })).status === 400);
+  await A.call('PUT', `/customers/${c1.id}`, { phone: '0899999999' });
   r = await A.call('PUT', `/customers/${c1.id}`, { name: '' });
   ok('แก้ชื่อลูกค้าเป็นว่าง ถูกปฏิเสธ', r.status === 400);
 
