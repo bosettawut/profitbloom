@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
+import { phoneError } from '../shared/contact.js';
 import { jobPricing, lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
@@ -38,6 +39,13 @@ const num = (v, { min = -Infinity, max = Infinity } = {}) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
   return Math.min(max, Math.max(min, n));
+};
+/** A phone number from a form. A number that was already stored is left alone, so old records can still be saved. */
+const phone = (v, stored = '') => {
+  const value = str(v, 50);
+  const error = value === stored ? '' : phoneError(value);
+  if (error) throw new HttpError(400, error);
+  return value;
 };
 const date = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 /** a row id from the URL or the request body; anything that isn't a plain positive integer is null */
@@ -293,7 +301,7 @@ app.put('/api/account', route(async (req) => {
     name,
     str(req.body.businessName, 200),
     str(req.body.businessAddress, 500),
-    str(req.body.businessPhone, 50),
+    phone(req.body.businessPhone, req.user.business_phone),
     str(req.body.businessTaxId, 50),
     req.user.id,
   );
@@ -354,12 +362,12 @@ async function getCustomer(userId, id) {
   return c;
 }
 
-function readCustomerBody(body) {
+function readCustomerBody(body, existing) {
   const name = str(body.name, 200);
   if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   return {
     name,
-    phone: str(body.phone, 50),
+    phone: phone(body.phone, existing?.phone),
     email: str(body.email, 200),
     line_id: str(body.lineId, 100),
     address: str(body.address, 1000),
@@ -438,7 +446,7 @@ app.post('/api/customers', route(async (req, res) => {
 
 app.put('/api/customers/:id', route(async (req) => {
   const existing = await getCustomer(req.user.id, req.params.id);
-  const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body });
+  const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body }, existing);
   await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
     .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, existing.id, req.user.id);
   return serializeCustomer(await getCustomer(req.user.id, existing.id));
@@ -525,7 +533,7 @@ async function getProject(userId, id) {
   return p;
 }
 
-function readProjectBody(body) {
+function readProjectBody(body, existing) {
   const title = str(body.title, 200);
   if (!title) throw new HttpError(400, 'กรุณากรอกชื่อโปรเจ็กต์');
   const status = body.status && PROJECT_STATUS[body.status] ? body.status : undefined;
@@ -533,7 +541,7 @@ function readProjectBody(body) {
     title,
     project_type: str(body.projectType, 50) || 'อื่นๆ',
     client: str(body.client, 200),
-    phone: str(body.phone, 50),
+    phone: phone(body.phone, existing?.phone),
     email: str(body.email, 200),
     event_date: date(body.eventDate),
     budget: num(body.budget, { min: 0 }),
@@ -636,7 +644,7 @@ app.post('/api/projects', route(async (req, res) => {
 
 app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
-  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body });
+  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing);
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
     await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
@@ -709,13 +717,13 @@ async function getQuote(userId, id) {
   return q;
 }
 
-async function readQuoteBody(userId, body) {
+async function readQuoteBody(userId, body, existing) {
   const projectId = body.projectId ? rowId(body.projectId) : null;
   if (body.projectId) await getProject(userId, projectId);
   return {
     project_id: projectId,
     client_name: str(body.clientName, 200),
-    client_phone: str(body.clientPhone, 50),
+    client_phone: phone(body.clientPhone, existing?.client_phone),
     client_email: str(body.clientEmail, 200),
     project_title: str(body.projectTitle, 200),
     event_date: date(body.eventDate),
@@ -797,7 +805,7 @@ app.put('/api/quotes/:id', route(async (req) => {
   const existing = await getQuote(req.user.id, req.params.id);
   const merged = { ...(await serializeQuote(existing)), ...req.body };
   if (!('status' in req.body)) merged.status = existing.status;
-  const d = await readQuoteBody(req.user.id, merged);
+  const d = await readQuoteBody(req.user.id, merged, existing);
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const status = d.status || existing.status;
   await transaction(async () => {
