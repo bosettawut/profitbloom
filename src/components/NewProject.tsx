@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
-import { phoneError } from '../../shared/contact.js';
+import { emailError, phoneError } from '../../shared/contact.js';
 import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
@@ -80,7 +80,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const missing = () => {
     if (!draft.title.trim()) return 'กรุณากรอกชื่องาน';
     if (!draft.eventDate) return 'กรุณาเลือกวันที่จัดงาน';
-    return phoneError(draft.phone);
+    return phoneError(draft.phone) || emailError(draft.email);
   };
   const next = () => {
     const m = step === 1 ? missing() : '';

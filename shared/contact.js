@@ -14,3 +14,10 @@ export function phoneError(value) {
   const ok = /^\+?[\d\s\-()]+$/.test(number) && (number.startsWith('+') ? digits.length >= 8 && digits.length <= 15 : /^0\d{8,9}$/.test(digits));
   return ok ? '' : 'เบอร์โทรศัพท์ไม่ถูกต้อง กรุณากรอกตัวเลข 9–10 หลัก เช่น 081-234-5678';
 }
+
+/** '' when an email address is acceptable (or left empty), otherwise a message for the user. */
+export function emailError(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(text) ? '' : 'อีเมลไม่ถูกต้อง กรุณากรอกในรูปแบบ name@example.com';
+}
