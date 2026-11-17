@@ -64,6 +64,8 @@ function CommitNumber({ value, onCommit, disabled, ...rest }: { value: number; o
       className={input}
       type="number"
       inputMode="decimal"
+      // emptied and left, this box goes back to its last value (see commit), so it must not be refilled with 0
+      data-keep-empty
       disabled={disabled}
       value={text}
       onFocus={() => setEditing(true)}

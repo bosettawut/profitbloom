@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { LandingPage } from './landing/LandingPage';
 import { api } from './lib/api';
+import { tidyNumberInputs } from './lib/number-inputs';
 import './index.css';
+
+tidyNumberInputs();
 
 /**
  * Tiny path router:
