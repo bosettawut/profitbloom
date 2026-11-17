@@ -14,9 +14,11 @@
 
 import { jobPricing } from '../../shared/quote-math.js';
 
-export type CostCategory = 'material' | 'rental' | 'labor' | 'owner_labor' | 'transport' | 'teardown' | 'other';
+export type BuiltInCategory = 'material' | 'rental' | 'labor' | 'owner_labor' | 'transport' | 'teardown' | 'other';
+/** a built-in category, or one the shop added in its settings ('c12') */
+export type CostCategory = BuiltInCategory | `c${number}`;
 
-export const COST_CATEGORIES: Array<{ id: CostCategory; label: string }> = [
+const BUILT_IN_CATEGORIES: Array<{ id: CostCategory; label: string }> = [
   { id: 'material', label: 'ดอกไม้/วัสดุ' },
   { id: 'rental', label: 'เช่าอุปกรณ์/พร็อพ' },
   { id: 'labor', label: 'ค่าแรง' },
@@ -25,6 +27,12 @@ export const COST_CATEGORIES: Array<{ id: CostCategory; label: string }> = [
   { id: 'teardown', label: 'เก็บงาน/ขนส่งกลับ' },
   { id: 'other', label: 'อื่น ๆ' },
 ];
+/** The categories to choose from: the built-in ones, with the shop's own just before "อื่น ๆ". */
+export let COST_CATEGORIES = BUILT_IN_CATEGORIES;
+/** Called with the signed-in shop's own categories (none when signed out). */
+export function setShopCategories(own: Array<{ id: string; name: string }>) {
+  COST_CATEGORIES = [...BUILT_IN_CATEGORIES.slice(0, -1), ...own.map((c) => ({ id: c.id as CostCategory, label: c.name })), BUILT_IN_CATEGORIES[BUILT_IN_CATEGORIES.length - 1]];
+}
 export const categoryLabel = (c: CostCategory) => COST_CATEGORIES.find((x) => x.id === c)?.label ?? 'อื่น ๆ';
 
 export interface Rules {

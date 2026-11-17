@@ -1,8 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
-import { api, User, type VatMode } from '../lib/api';
+import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Plus, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { api, User, type ShopCategory, type VatMode } from '../lib/api';
 import { brandLogo, resizeLogo } from '../lib/brand';
-import { DEFAULT_RULES, withDefaults, type Rules } from '../lib/decision';
+import { COST_CATEGORIES, DEFAULT_RULES, withDefaults, type Rules } from '../lib/decision';
 
 interface AccountSettingsProps {
   user: User;
@@ -14,6 +14,116 @@ interface AccountSettingsProps {
 }
 
 const inputClass = 'pb-input';
+
+interface CostCategoriesCardProps {
+  categories: ShopCategory[];
+  onChange: (categories: ShopCategory[]) => void;
+}
+
+/** The shop's own cost categories. Each change is saved straight away, separately from the form around it. */
+function CostCategoriesCard({ categories, onChange }: CostCategoriesCardProps) {
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const builtIn = COST_CATEGORIES.filter((c) => !categories.some((own) => own.id === c.id));
+
+  const run = async (work: () => Promise<string>) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      setNote({ ok: true, text: await work() });
+    } catch (err) {
+      setNote({ ok: false, text: (err as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const add = () => {
+    if (!newName.trim()) return setNote({ ok: false, text: 'กรุณากรอกชื่อหมวด' });
+    return run(async () => {
+      const made = await api.createCostCategory(newName);
+      onChange([...categories, made]);
+      setNewName('');
+      return `เพิ่มหมวด "${made.name}" แล้ว`;
+    });
+  };
+  const rename = (c: ShopCategory) => {
+    const typed = (names[c.id] ?? c.name).trim();
+    const reset = () => setNames(({ [c.id]: _, ...rest }) => rest);
+    if (!typed || typed === c.name) return reset();
+    return run(async () => {
+      try {
+        const saved = await api.renameCostCategory(c.id, typed);
+        onChange(categories.map((x) => (x.id === c.id ? saved : x)));
+        return `เปลี่ยนชื่อหมวดเป็น "${saved.name}" แล้ว`;
+      } finally {
+        reset();
+      }
+    });
+  };
+  const remove = (c: ShopCategory) => {
+    if (!window.confirm(`ลบหมวด "${c.name}" ใช่หรือไม่?\nรายการต้นทุนที่ใช้หมวดนี้จะย้ายไปอยู่หมวด "อื่น ๆ"`)) return;
+    return run(async () => {
+      const { moved } = await api.deleteCostCategory(c.id);
+      onChange(categories.filter((x) => x.id !== c.id));
+      return moved ? `ลบหมวด "${c.name}" แล้ว ย้าย ${moved} รายการไปหมวด "อื่น ๆ"` : `ลบหมวด "${c.name}" แล้ว`;
+    });
+  };
+  /** Enter saves this box only; it must not submit the settings form around it */
+  const onEnter = (action: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    action();
+  };
+
+  return (
+    <div className="pb-card p-6 md:p-8 space-y-4">
+      <div>
+        <h3 className="text-base md:text-lg text-ink font-semibold">หมวดต้นทุน</h3>
+        <p className="text-sm text-ink-muted">หมวดที่เลือกได้ตอนใส่รายการต้นทุนของงาน เพิ่มหมวดของร้านเองได้ การเปลี่ยนแปลงตรงนี้บันทึกทันที</p>
+      </div>
+      <div>
+        <p className="pb-label">หมวดมาตรฐาน (แก้ไขไม่ได้)</p>
+        <div className="flex flex-wrap gap-2">
+          {builtIn.map((c) => (
+            <span key={c.id} className="px-2.5 py-1 rounded-full text-xs font-medium bg-[#F1F0F5] text-ink-muted">{c.label}</span>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="pb-label">หมวดของร้าน</p>
+        {categories.length === 0 && <p className="text-sm text-ink-muted">ยังไม่มีหมวดที่เพิ่มเอง</p>}
+        <div className="space-y-2">
+          {categories.map((c) => (
+            <div key={c.id} className="flex items-center gap-2">
+              <input
+                className={inputClass}
+                aria-label={`ชื่อหมวด ${c.name}`}
+                maxLength={50}
+                value={names[c.id] ?? c.name}
+                onChange={(e) => setNames({ ...names, [c.id]: e.target.value })}
+                onBlur={() => rename(c)}
+                onKeyDown={onEnter(() => rename(c))}
+              />
+              <button type="button" onClick={() => remove(c)} disabled={busy} aria-label={`ลบหมวด ${c.name}`} title="ลบหมวด" className="p-2 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50 shrink-0">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input className={inputClass} aria-label="ชื่อหมวดใหม่" placeholder="เช่น ค่าสถานที่" maxLength={50} value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={onEnter(add)} />
+        <button type="button" onClick={add} disabled={busy} className="pb-btn-secondary shrink-0 whitespace-nowrap">
+          <Plus className="w-4 h-4" />
+          เพิ่มหมวด
+        </button>
+      </div>
+      {note && <p className={`text-sm ${note.ok ? 'text-emerald-700' : 'text-rose-600'}`}>{note.text}</p>}
+    </div>
+  );
+}
 
 export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, onNavigate }: AccountSettingsProps) {
   const [form, setForm] = useState({
@@ -192,6 +302,8 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
               ใช้ค่าเริ่มต้นของ ProfitBloom
             </button>
           </div>
+
+          <CostCategoriesCard categories={user.costCategories} onChange={(costCategories) => onUserUpdated({ ...user, costCategories })} />
 
           <div className="pb-card p-6 md:p-8 space-y-4">
             <h3 className="text-base md:text-lg text-ink font-semibold">บัญชีผู้ใช้</h3>

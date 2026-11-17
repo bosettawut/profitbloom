@@ -44,6 +44,7 @@ import { AuthScreen, type AuthMode } from './components/AuthScreen';
 import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
 import { CustomerPage, Customers } from './components/Customers';
+import { setShopCategories } from './lib/decision';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
 import { trialDaysLeft } from './lib/plans';
@@ -92,6 +93,8 @@ interface AppProps {
 
 export default function App({ authMode = 'login', path, go }: AppProps) {
   const [user, setUser] = useState<User | null>(null);
+  // the category menus read this list; set while rendering so every screen below sees the signed-in shop's categories
+  setShopCategories(user?.costCategories ?? []);
   const [authChecked, setAuthChecked] = useState(false);
   const [chartType, setChartType] = useState<'line' | 'bar'>('bar');
   const [chartRange, setChartRange] = useState<'6' | '12' | 'year'>('6');
