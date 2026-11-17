@@ -223,10 +223,14 @@ export interface SalesReport {
   jobs: Array<{ id: string; code: string; title: string; date: string; customerId: string | null; customer: string; statusText: string; sales: number; cost: number; profit: number }>;
 }
 
-export type ProjectInput = Partial<Omit<Project, 'costItems'>> & {
+/** set on a save to also store the typed phone number and email on the customer's own record */
+interface CustomerUpdate {
+  updateCustomer?: boolean;
+}
+export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate & {
   costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
-export type QuoteInput = Partial<Omit<Quote, 'items'>> & {
+export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
   items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'>>;
 };
 

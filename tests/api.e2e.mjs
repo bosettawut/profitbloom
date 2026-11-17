@@ -289,6 +289,38 @@ r = await ADM.call('PUT', `/admin/shops/${shopA.id}`, { disabled: false });
 r = await A.call('POST', '/auth/login', { email: 'a@x.test', password: 'newpassword1' });
 ok('เปิดใช้งานแล้ว ร้าน A login ได้ + ข้อมูลยังอยู่', r.status === 200 && (await A.call('GET', '/projects')).data.length === 2);
 
+// --- a job's phone number and email carried over to the customer
+{
+  const customer = async (id) => (await A.call('GET', `/customers/${id}`)).data;
+  let r = await A.call('POST', '/customers', { name: 'คุณติดต่อ', phone: '081-000-0001' });
+  const c = r.data;
+  r = await A.call('POST', '/projects', { title: 'งานติดต่อ 1', customerId: c.id, client: c.name, phone: '081-000-0002', email: 'contact@x.test' });
+  const job = r.data;
+  let now = await customer(c.id);
+  ok('เบอร์ในโปรเจ็กต์ต่างจากลูกค้า ไม่ได้สั่งอัปเดต → เบอร์ลูกค้าคงเดิม แต่อีเมลที่ลูกค้ายังไม่มีถูกเติมให้', r.status === 201 && job.phone === '081-000-0002' && now.phone === '081-000-0001' && now.email === 'contact@x.test', JSON.stringify([now.phone, now.email]));
+  r = await A.call('PUT', `/projects/${job.id}`, { phone: '081-000-0003', email: 'new@x.test', updateCustomer: true });
+  now = await customer(c.id);
+  ok('แก้โปรเจ็กต์พร้อมสั่งอัปเดตลูกค้า → ลูกค้าได้เบอร์และอีเมลใหม่', r.status === 200 && now.phone === '081-000-0003' && now.email === 'new@x.test', JSON.stringify([now.phone, now.email]));
+  r = await A.call('PUT', `/projects/${job.id}`, { phone: '', email: '', updateCustomer: true });
+  now = await customer(c.id);
+  ok('ลบเบอร์ในโปรเจ็กต์ → ไม่ลบเบอร์ของลูกค้า แม้สั่งอัปเดต', r.status === 200 && r.data.phone === '' && now.phone === '081-000-0003' && now.email === 'new@x.test');
+  r = await A.call('POST', '/quotes', { customerId: c.id, clientName: c.name, clientPhone: '081-000-0004', items: [{ description: 'x', quantity: 1, unitPrice: 1 }] });
+  const quote = r.data;
+  ok('ใบเสนอราคา: ไม่ได้สั่งอัปเดต → เบอร์ลูกค้าคงเดิม', r.status === 201 && (await customer(c.id)).phone === '081-000-0003');
+  r = await A.call('PUT', `/quotes/${quote.id}`, { clientPhone: '081-000-0005', updateCustomer: true });
+  ok('ใบเสนอราคา: สั่งอัปเดต → ลูกค้าได้เบอร์ใหม่', r.status === 200 && (await customer(c.id)).phone === '081-000-0005');
+  r = await A.call('GET', `/projects/${job.id}`);
+  ok('อัปเดตลูกค้าแล้ว เอกสารอื่นของลูกค้าไม่ถูกแก้', r.data.phone === '');
+  r = await A.call('POST', '/projects', { title: 'งานติดต่อ 2', client: 'คุณติดต่อ', phone: '081-000-0006', updateCustomer: true });
+  ok('พิมพ์ชื่อเอง (ไม่ได้เลือกจากรายชื่อ) แล้วสั่งอัปเดต → ลูกค้าชื่อเดียวกันได้เบอร์ใหม่', r.status === 201 && r.data.customerId === c.id && (await customer(c.id)).phone === '081-000-0006');
+  r = await A.call('PUT', `/projects/${job.id}`, { phone: 'เบอร์มั่ว', updateCustomer: true });
+  ok('เบอร์ผิดรูปแบบ → ถูกปฏิเสธ ลูกค้าไม่ถูกแก้', r.status === 400 && (await customer(c.id)).phone === '081-000-0006');
+  for (const id of [job.id, r.data?.id].filter(Boolean)) await A.call('DELETE', `/projects/${id}`);
+  for (const p of (await A.call('GET', '/projects')).data.filter((x) => x.title.startsWith('งานติดต่อ'))) await A.call('DELETE', `/projects/${p.id}`);
+  await A.call('DELETE', `/quotes/${quote.id}`);
+  await A.call('DELETE', `/customers/${c.id}`);
+}
+
 // --- cost categories the shop adds
 {
   let r = await A.call('GET', '/auth/me');

@@ -5,6 +5,7 @@ import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
+import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
 import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, wholeBaht } from '../../shared/quote-math.js';
 
 interface QuoteItem {
@@ -69,6 +70,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
   const [vatMode, setVatMode] = useState<VatMode>(user.vatMode);
   const [discountRate, setDiscountRate] = useState(0);
   const [notification, setNotification] = useState('');
+  const contactPrompt = useCustomerContactPrompt();
+  /** the contact details this quote started with (from its project, or as last saved): unchanged, they are not asked about */
+  const startContact = useRef<TypedContact | undefined>(
+    fromProject ? { customerId: fromProject.customerId, name: fromProject.client, phone: fromProject.phone, email: fromProject.email } : undefined,
+  );
 
   useEffect(() => {
     if (!quoteId) return;
@@ -78,6 +84,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         setStatus(q.status);
         setProjectId(q.projectId);
         setCustomerId(q.customerId);
+        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail };
         setCreatedDate(q.createdDate);
         setQuoteData({
           clientName: q.clientName,
@@ -155,12 +162,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       showNotification(`ยอดรายการยังไม่เท่าราคาที่ล็อกไว้ ${money(lockedPrice ?? 0)} กด "ปรับส่วนต่างอัตโนมัติ"`);
       return null;
     }
+    const contact: TypedContact = { customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail };
+    const updateCustomer = await contactPrompt.ask(contact, startContact.current);
+    if (updateCustomer === null) return null;
     setSaving(true);
     try {
       const body = {
         ...quoteData,
         projectId,
         customerId,
+        updateCustomer,
         taxRate,
         discountRate,
         vatMode,
@@ -171,6 +182,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       };
       const saved = savedId ? await api.updateQuote(savedId, body) : await api.createQuote(body);
       setSavedId(saved.id);
+      startContact.current = contact;
       setQuoteCode(saved.code);
       setStatus(saved.status);
       setLockedPrice(saved.lockedPrice);
@@ -650,6 +662,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       </div>
 
       {/* Notification */}
+      {contactPrompt.node}
       {notification && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">
           {notification}
