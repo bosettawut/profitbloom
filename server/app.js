@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
-import { phoneError } from '../shared/contact.js';
+import { emailError, phoneError } from '../shared/contact.js';
 import { jobPricing, lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
@@ -44,6 +44,13 @@ const num = (v, { min = -Infinity, max = Infinity } = {}) => {
 const phone = (v, stored = '') => {
   const value = str(v, 50);
   const error = value === stored ? '' : phoneError(value);
+  if (error) throw new HttpError(400, error);
+  return value;
+};
+/** A customer's email address from a form; like phone(), an address that was already stored is left alone. */
+const contactEmail = (v, stored = '') => {
+  const value = str(v, 200);
+  const error = value === stored ? '' : emailError(value);
   if (error) throw new HttpError(400, error);
   return value;
 };
@@ -368,7 +375,7 @@ function readCustomerBody(body, existing) {
   return {
     name,
     phone: phone(body.phone, existing?.phone),
-    email: str(body.email, 200),
+    email: contactEmail(body.email, existing?.email),
     line_id: str(body.lineId, 100),
     address: str(body.address, 1000),
     notes: str(body.notes, 5000),
@@ -542,7 +549,7 @@ function readProjectBody(body, existing) {
     project_type: str(body.projectType, 50) || 'อื่นๆ',
     client: str(body.client, 200),
     phone: phone(body.phone, existing?.phone),
-    email: str(body.email, 200),
+    email: contactEmail(body.email, existing?.email),
     event_date: date(body.eventDate),
     budget: num(body.budget, { min: 0 }),
     notes: str(body.notes, 5000),
@@ -724,7 +731,7 @@ async function readQuoteBody(userId, body, existing) {
     project_id: projectId,
     client_name: str(body.clientName, 200),
     client_phone: phone(body.clientPhone, existing?.client_phone),
-    client_email: str(body.clientEmail, 200),
+    client_email: contactEmail(body.clientEmail, existing?.client_email),
     project_title: str(body.projectTitle, 200),
     event_date: date(body.eventDate),
     valid_until: date(body.validUntil),

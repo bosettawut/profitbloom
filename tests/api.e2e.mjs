@@ -310,6 +310,14 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('เบอร์โทรมั่วในใบเสนอราคาใหม่ → 400', (await A.call('POST', '/quotes', { clientName: 'คุณเอ', clientPhone: '12', items: [{ description: 'x', quantity: 1, unitPrice: 1 }] })).status === 400);
   ok('เบอร์โทรร้านมั่วในหน้าตั้งค่า → 400', (await A.call('PUT', '/account', { name: 'สมใจ', businessPhone: 'โทรมาเลย' })).status === 400);
   await A.call('PUT', `/customers/${c1.id}`, { phone: '0899999999' });
+
+  // customer email addresses get the same treatment
+  const emailTry = async (email) => (await A.call('PUT', `/customers/${c1.id}`, { email })).status;
+  ok('อีเมลลูกค้ามั่ว (ไม่มี @, ไม่มีโดเมน, มีช่องว่าง, จุดซ้อน) → 400', (await Promise.all(['abc', 'a@b', 'a b@c.com', '@x.com', 'a@b..com', 'a@.com'].map(emailTry))).every((st) => st === 400));
+  ok('อีเมลลูกค้าที่ถูกรูปแบบ หรือเว้นว่าง → บันทึกได้', (await Promise.all(['ying@x.test', 'first.last+tag@sub.example.co.th', ''].map(emailTry))).every((st) => st === 200));
+  ok('อีเมลมั่วในโปรเจ็กต์ใหม่ → 400 พร้อมข้อความ', await A.call('POST', '/projects', { title: 'อีเมลผิด', email: 'ไม่ใช่อีเมล' }).then((x) => x.status === 400 && x.data.error.includes('อีเมลไม่ถูกต้อง')));
+  ok('อีเมลมั่วในใบเสนอราคาใหม่ → 400', (await A.call('POST', '/quotes', { clientName: 'คุณเอ', clientEmail: 'a@b', items: [{ description: 'x', quantity: 1, unitPrice: 1 }] })).status === 400);
+  await A.call('PUT', `/customers/${c1.id}`, { email: 'ying@x.test' });
   r = await A.call('PUT', `/customers/${c1.id}`, { name: '' });
   ok('แก้ชื่อลูกค้าเป็นว่าง ถูกปฏิเสธ', r.status === 400);
 
