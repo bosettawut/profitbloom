@@ -321,6 +321,58 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   await A.call('DELETE', `/customers/${c.id}`);
 }
 
+// --- a quote written on its own, accepted, then turned into a job
+{
+  const report = async () => (await A.call('GET', '/reports?from=2031-01-01&to=2031-12-31')).data;
+  let r = await A.call('POST', '/customers', { name: 'คุณตกลง', phone: '081-000-0100' });
+  const c = r.data;
+  r = await A.call('POST', '/quotes', { customerId: c.id, clientName: c.name, clientPhone: '081-000-0100', clientEmail: 'ok@x.test', projectTitle: 'งานเปิดร้าน คุณตกลง', eventDate: '2031-03-10', notes: 'โทนขาว', vatMode: 'exclusive', taxRate: 7, discountRate: 10, status: 'approved',
+    items: [{ description: 'ซุ้มดอกไม้', quantity: 2, unitPrice: 20000 }, { description: 'ขนส่งและติดตั้ง', quantity: 1, unitPrice: 10000 }] });
+  const q = r.data;
+  ok('ใบเสนอราคาเดี่ยว: ยอดหลังส่วนลด 45,000 ไม่มีโปรเจ็กต์', r.status === 201 && q.projectId === null && q.lockedPrice === null, JSON.stringify([q.projectId, q.lockedPrice, q.totalAmount]));
+  ok('ร้านอื่นสร้างโปรเจ็กต์จากใบเสนอราคานี้ไม่ได้', (await B.call('POST', `/quotes/${q.id}/project`)).status === 404);
+
+  r = await A.call('POST', `/quotes/${q.id}/project`);
+  const p = r.data;
+  ok('สร้างโปรเจ็กต์จากใบเสนอราคา: ดึงชื่องาน ลูกค้า เบอร์ อีเมล วันงาน หมายเหตุ และสถานะอนุมัติ', r.status === 201 && p.title === 'งานเปิดร้าน คุณตกลง' && p.client === 'คุณตกลง' && p.customerId === c.id && p.phone === '081-000-0100' && p.email === 'ok@x.test' && p.eventDate === '2031-03-10' && p.notes === 'โทนขาว' && p.status === 'approved', JSON.stringify(p).slice(0, 300));
+  ok('ราคาโปรเจ็กต์ยึดตามยอดหลังส่วนลดก่อน VAT = 45,000', p.agreedPrice === 45000, p.agreedPrice);
+  ok('รายการในใบเสนอราคากลายเป็นรายการต้นทุนที่รอกรอกราคาทุน อยู่ใต้หัวข้อเดียว', p.costGroups.length === 1 && p.costItems.length === 2 && p.costItems[0].name === 'ซุ้มดอกไม้' && p.costItems[0].quantity === 2 && p.costItems.every((i) => i.price === 0 && i.groupId === p.costGroups[0].id), JSON.stringify(p.costItems));
+  r = await A.call('GET', `/quotes/${q.id}`);
+  ok('ใบเสนอราคาถูกผูกกับโปรเจ็กต์ และล็อกราคา 45,000', r.data.projectId === p.id && r.data.lockedPrice === 45000);
+  ok('สร้างซ้ำจากใบเดิมไม่ได้', (await A.call('POST', `/quotes/${q.id}/project`)).status === 400);
+
+  let rep = await report();
+  ok('ยังไม่ใส่ต้นทุน: ไม่นับในรายงานยอดขาย แต่แจ้งว่ามี 1 งาน ราคา 45,000 รออยู่', rep.sales.totals.jobs === 0 && rep.uncosted.count >= 1 && rep.uncosted.sales >= 45000, JSON.stringify([rep.sales.totals, rep.uncosted]));
+  ok('ยังไม่ใส่ต้นทุน: ไม่นับในยอดซื้อรวมของลูกค้า', (await A.call('GET', `/customers/${c.id}`)).data.totalSales === 0);
+
+  // costs go in: the price stays, the margin follows
+  const withCosts = (prices) => p.costItems.map((i, n) => ({ name: i.name, category: i.category, quantity: i.quantity, price: prices[n], groupId: i.groupId }));
+  r = await A.call('PUT', `/projects/${p.id}`, { costGroups: p.costGroups, costItems: withCosts([12000, 6000]) });
+  const price = (x) => x.costItems.reduce((s, i) => s + i.quantity * i.price * (1 + x.costGroups.find((g) => g.id === i.groupId).markup / 100), 0);
+  ok('ใส่ต้นทุน 30,000 → ราคายังเป็น 45,000 (Margin 33.3%)', r.status === 200 && r.data.agreedPrice === 45000 && Math.abs(price(r.data) - 45000) < 0.01 && Math.abs(r.data.profitMargin - 50) < 1e-6, JSON.stringify([price(r.data), r.data.profitMargin]));
+  rep = await report();
+  ok('ใส่ต้นทุนแล้ว: รายงานนับ ยอดขาย 45,000 ต้นทุน 30,000 กำไร 15,000', rep.sales.totals.jobs === 1 && rep.sales.totals.sales === 45000 && rep.sales.totals.cost === 30000 && rep.sales.totals.profit === 15000, JSON.stringify(rep.sales.totals));
+  ok('ใส่ต้นทุนแล้ว: ยอดซื้อรวมของลูกค้า 45,000', (await A.call('GET', `/customers/${c.id}`)).data.totalSales === 45000);
+  r = await A.call('PUT', `/projects/${p.id}`, { costGroups: r.data.costGroups.map((g) => ({ ...g, markup: 500 })), costItems: withCosts([12000, 6000]).map((i) => ({ ...i, groupId: r.data.costGroups[0].id })) });
+  ok('ส่ง Margin ของหัวข้อมาเอง → ราคายังเป็น 45,000', Math.abs(price(r.data) - 45000) < 0.01, price(r.data));
+  r = await A.call('PUT', `/projects/${p.id}`, { costGroups: r.data.costGroups, costItems: withCosts([20000, 10000]).map((i) => ({ ...i, groupId: r.data.costGroups[0].id })) });
+  ok('ต้นทุน 50,000 เกินราคาที่ตกลง → ราคายัง 45,000 และรายงานแสดงขาดทุน 5,000', Math.abs(price(r.data) - 45000) < 0.01 && (await report()).sales.totals.profit === -5000, JSON.stringify([price(r.data), (await report()).sales.totals]));
+
+  r = await A.call('PUT', `/quotes/${q.id}`, { items: [{ description: 'ซุ้มดอกไม้', quantity: 2, unitPrice: 30000 }] });
+  ok('แก้ใบเสนอราคาจนยอดไม่เท่าราคาที่ตกลง → ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('45,000'), JSON.stringify(r.data));
+  r = await A.call('POST', '/quotes', { clientName: 'คุณว่าง', status: 'approved', items: [] });
+  ok('ใบเสนอราคาที่ยังไม่มียอดเงิน → สร้างโปรเจ็กต์ไม่ได้', (await A.call('POST', `/quotes/${r.data.id}/project`)).status === 400);
+  await A.call('DELETE', `/quotes/${r.data.id}`);
+  r = await A.call('POST', '/quotes', { clientName: 'คุณรอ', status: 'sent', items: [{ description: 'x', quantity: 1, unitPrice: 1000 }] });
+  const waiting = (await A.call('POST', `/quotes/${r.data.id}/project`)).data;
+  ok('ใบเสนอราคาที่ยังแค่ "ส่งแล้ว" → โปรเจ็กต์ได้สถานะรออนุมัติ และตั้งชื่องานให้เมื่อใบไม่มีชื่องาน', waiting.status === 'pending' && waiting.title === 'งานของ คุณรอ', JSON.stringify([waiting.status, waiting.title]));
+  await A.call('DELETE', `/quotes/${r.data.id}`);
+  await A.call('DELETE', `/projects/${waiting.id}`);
+  await A.call('DELETE', `/quotes/${q.id}`);
+  await A.call('DELETE', `/projects/${p.id}`);
+  for (const x of (await A.call('GET', '/customers')).data.filter((x) => ['คุณตกลง', 'คุณว่าง', 'คุณรอ'].includes(x.name))) await A.call('DELETE', `/customers/${x.id}`);
+}
+
 // --- cost categories the shop adds
 {
   let r = await A.call('GET', '/auth/me');

@@ -23,6 +23,7 @@ export function toJob(p: Project): Job {
     teamSize: p.teamSize,
     ownerLabor: p.ownerLabor,
     teardown: p.teardown,
+    agreedPrice: p.agreedPrice,
   };
 }
 

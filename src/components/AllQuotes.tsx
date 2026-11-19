@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom';
 import type { User } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { QuoteDocument } from './QuoteDocument';
-import { api, Quote, QuoteStatus } from '../lib/api';
+import { api, Quote, QuoteStatus , type Project } from '../lib/api';
 import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
 
 /** the local calendar day a UTC timestamp falls on, as YYYY-MM-DD */
@@ -18,10 +18,12 @@ const STATUS_ORDER: QuoteStatus[] = ['draft', 'sent', 'approved', 'rejected', 'e
 interface AllQuotesProps {
   onNavigate?: (page: string) => void;
   onOpenQuote: (quoteId: string | null, preview?: boolean) => void;
+  /** opens a job on its cost step */
+  onOpenProjectCosts: (project: Project) => void;
   user: User;
 }
 
-export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
+export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }: AllQuotesProps) {
   const [pdfQuote, setPdfQuote] = useState<Quote | null>(null);
   const pdfRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -81,6 +83,12 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
     try {
       const saved = await api.updateQuote(quote.id, { status });
       setQuotes(list => list.map(q => (q.id === saved.id ? saved : q)));
+      // the client said yes to a quote written on its own: offer to turn it into a job and go fill in its costs
+      if (saved.status === 'approved' && quote.status !== 'approved' && !saved.projectId && saved.totalAmount > 0
+        && window.confirm(`${saved.code} อนุมัติแล้ว\nสร้างโปรเจ็กต์จากใบเสนอราคานี้ แล้วไปใส่ต้นทุนเลยไหม?\n(ข้อมูลงานและรายการจะถูกดึงมาให้ ไม่ต้องกรอกใหม่)`)) {
+        onOpenProjectCosts(await api.createProjectFromQuote(saved.id));
+        return;
+      }
       showNotification(
         saved.status === 'expired' && status !== 'expired'
           ? `${saved.code} เลยวันที่ใช้ได้แล้ว กด "แก้ไข" เพื่อเลื่อนวันที่ใช้ได้ถึงก่อน`

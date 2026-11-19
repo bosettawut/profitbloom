@@ -342,6 +342,11 @@ const MIGRATIONS = [
   CREATE INDEX idx_cost_categories_user ON cost_categories(user_id);
   ALTER TABLE cost_categories ENABLE ROW LEVEL SECURITY;
   `,
+
+  // 7 — a job made from a quote the client already accepted: its price is that quote's, whatever the costs come to
+  `
+  ALTER TABLE projects ADD COLUMN agreed_price DOUBLE PRECISION;
+  `,
 ];
 
 async function schemaVersion(q) {

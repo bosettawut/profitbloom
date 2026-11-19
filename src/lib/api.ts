@@ -121,6 +121,8 @@ export interface Project {
   costItems: CostItem[];
   /** the whole job's markup on cost in %, worked out from its headings when saved */
   profitMargin: number;
+  /** set when the job was made from an accepted quote: its price is fixed at this amount */
+  agreedPrice: number | null;
   depositPct: number;
   setupDays: number;
   eventDays: number;
@@ -204,6 +206,8 @@ export interface Reports {
   byType: Array<{ type: string; projects: number; sold: number; sales: number; profit: number }>;
   byStatus: Array<{ status: ProjectStatus; statusText: string; count: number }>;
   sales: SalesReport;
+  /** accepted jobs left out of the figures because their costs are not in yet */
+  uncosted: { count: number; sales: number };
 }
 
 export interface SalesSum {
@@ -296,6 +300,8 @@ export const api = {
 
   quotes: () => request<Quote[]>('GET', '/quotes'),
   quote: (id: string) => request<Quote>('GET', `/quotes/${id}`),
+  /** makes a job out of a quote written on its own; the job's price is the quote's */
+  createProjectFromQuote: (quoteId: string) => request<Project>('POST', `/quotes/${quoteId}/project`),
   createQuote: (body: QuoteInput) => request<Quote>('POST', '/quotes', body),
   updateQuote: (id: string, body: QuoteInput) => request<Quote>('PUT', `/quotes/${id}`, body),
   deleteQuote: (id: string) => request<{ ok: true }>('DELETE', `/quotes/${id}`),

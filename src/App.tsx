@@ -317,7 +317,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
         return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} />;
       case 'quotes':
       case 'quotes-all':
-        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} user={user} />;
+        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} onOpenProjectCosts={(p) => handleProjectSelect(p, true)} user={user} />;
       case 'quotes-new':
         return (
           <NewQuote
@@ -326,6 +326,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             quoteId={view.quoteId ?? null}
             fromProject={view.fromProjectId ? selectedProject : null}
             startInPreview={!!view.preview}
+            onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
             onDone={() => navigate('quotes-all')}
           />
         );

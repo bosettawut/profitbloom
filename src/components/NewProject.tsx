@@ -47,6 +47,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     statusText: 'ร่าง',
     createdDate: '',
     profitMargin: marginToMarkup(rules.goodMargin),
+    agreedPrice: null,
     depositPct: rules.depositPct,
     setupDays: 1,
     eventDays: 1,

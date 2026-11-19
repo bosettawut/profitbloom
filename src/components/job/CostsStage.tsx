@@ -100,6 +100,8 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
   const items = draft.costItems.filter((i) => !i.isExtra);
   const groups = draft.costGroups;
   const job = toJob(draft);
+  /** a job made from an accepted quote: the price is fixed, so margins are shown but not set here */
+  const agreed = draft.agreedPrice ?? null;
   const newGroup = () => blankGroup(marginToMarkup(rules.goodMargin), groups.length === 0 ? 'รายการต้นทุน' : '');
   const setItem = (id: number, change: Partial<CostItem>) =>
     patch({
@@ -198,7 +200,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
                   </div>
                   <div>
                     <label className="pb-label">Margin (%)</label>
-                    <CommitNumber min="0" max="95" step="0.1" aria-label="Margin ของหัวข้อ" value={Number(markupToMargin(g.markup).toFixed(1))} onCommit={(m) => setGroup(g.id, { markup: marginToMarkup(Math.min(95, Math.max(0, m))) })} />
+                    <CommitNumber min="0" max="95" step="0.1" aria-label="Margin ของหัวข้อ" disabled={agreed !== null} value={Number(markupToMargin(agreed === null ? g.markup : sums?.markup ?? 0).toFixed(1))} onCommit={(m) => setGroup(g.id, { markup: marginToMarkup(Math.min(95, Math.max(0, m))) })} />
                   </div>
                   <button type="button" onClick={() => removeGroup(g)} aria-label="ลบหัวข้อ" title="ลบหัวข้อ" className="p-2 mb-0.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
                     <Trash2 className="w-4 h-4" />
@@ -298,15 +300,19 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
             </div>
             <div>
               <label className="pb-label">Margin (%)</label>
-              <CommitNumber min="0" max="95" step="0.1" aria-label="Margin" value={Number(margin.toFixed(1))} onCommit={setMargin} />
+              <CommitNumber min="0" max="95" step="0.1" aria-label="Margin" disabled={agreed !== null} value={Number(margin.toFixed(1))} onCommit={setMargin} />
             </div>
             <div>
               <label className="pb-label">ราคาขาย (บาท)</label>
-              <CommitNumber min="0" aria-label="ราคาขาย" value={Math.round(h.price)} disabled={h.cost <= 0} onCommit={setPrice} />
+              <CommitNumber min="0" aria-label="ราคาขาย" value={Math.round(h.price)} disabled={agreed !== null || h.cost <= 0} onCommit={setPrice} />
             </div>
           </div>
-          <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin ที่นี่จะตั้งทุกหัวข้อให้เท่ากัน แก้ราคาขายจะปรับทุกหัวข้อตามสัดส่วน</p>
-          <div className="mt-4 flex flex-wrap gap-2">
+          {agreed !== null ? (
+            <p className="mt-2 text-xs text-ink-muted">ราคาขายยึดตามใบเสนอราคาที่ลูกค้าตกลงแล้ว ฿{fmt(agreed)} จึงแก้ที่นี่ไม่ได้ · Margin คำนวณจากต้นทุนที่กรอก</p>
+          ) : (
+            <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin ที่นี่จะตั้งทุกหัวข้อให้เท่ากัน แก้ราคาขายจะปรับทุกหัวข้อตามสัดส่วน</p>
+          )}
+          <div className={`mt-4 flex flex-wrap gap-2 ${agreed !== null ? 'hidden' : ''}`}>
             {[
               [`Margin ขั้นต่ำ ${rules.minMargin}%`, rules.minMargin],
               [`Margin ที่ดี ${rules.goodMargin}%`, rules.goodMargin],
@@ -323,7 +329,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
           </div>
           <div className="mt-5 pt-4 border-t border-line space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-ink-muted">ต้นทุนรวม</span><span className="text-ink">฿{fmt(h.cost)}</span></div>
-            <div className="flex justify-between"><span className="text-ink-muted">กำไร</span><span className="text-emerald-600 font-medium">฿{fmt(h.profit)}</span></div>
+            <div className="flex justify-between"><span className="text-ink-muted">กำไร</span><span className={`font-medium ${h.profit < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{h.profit < 0 ? '−' : ''}฿{fmt(Math.abs(h.profit))}</span></div>
             <div className="flex justify-between text-base"><span className="font-semibold text-ink">ราคาเสนอขาย</span><span className="font-semibold text-ink">฿{fmt(h.price)}</span></div>
           </div>
         </div>
