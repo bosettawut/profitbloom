@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin, Lock } from 'lucide-react';
+import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin, Lock, FolderPlus } from 'lucide-react';
 import { api, Project, QuoteStatus, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
@@ -21,6 +21,8 @@ interface NewQuoteProps {
   quoteId: string | null;
   fromProject: Project | null;
   startInPreview: boolean;
+  /** opens a job on its cost step */
+  onOpenProjectCosts: (project: Project) => void;
   onDone: () => void;
 }
 
@@ -28,7 +30,7 @@ const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 /** every amount on a quote is whole baht */
 const money = (n: number) => `฿${n.toLocaleString('th-TH', { maximumFractionDigits: 0 })}`;
 
-export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }: NewQuoteProps) {
+export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
@@ -222,6 +224,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       return null;
     } finally {
       setExporting(false);
+    }
+  };
+
+  /** an approved quote that was written on its own becomes a job, and the costs get filled in there */
+  const makeProject = async () => {
+    const saved = await persist();
+    if (!saved) return;
+    try {
+      onOpenProjectCosts(await api.createProjectFromQuote(saved.id));
+    } catch (err) {
+      showNotification((err as Error).message);
     }
   };
 
@@ -617,6 +630,13 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                 <Eye className="w-4 h-4" />
                 ดูตัวอย่าง
               </button>
+
+              {savedId && status === 'approved' && !projectId && (
+                <button onClick={makeProject} disabled={saving} className="pb-btn-secondary !py-3 disabled:opacity-60">
+                  <FolderPlus className="w-4 h-4" />
+                  สร้างโปรเจ็กต์และใส่ต้นทุน
+                </button>
+              )}
 
               <button onClick={exportPdf} disabled={saving || exporting} className="pb-btn-secondary !py-3 disabled:opacity-60">
                 <Download className="w-4 h-4" />

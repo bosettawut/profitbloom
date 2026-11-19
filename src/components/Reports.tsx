@@ -209,6 +209,12 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
             <p className="text-xs text-ink-muted text-right">{rangeText} · {sales.totals.jobs} งาน</p>
           </div>
 
+          {data.uncosted.count > 0 && (
+            <p className="mb-4 px-4 py-3 rounded-2xl bg-amber-50 text-amber-700 text-sm">
+              มี {data.uncosted.count} งานที่ลูกค้าตกลงแล้วแต่ยังไม่ได้ใส่ต้นทุน (ราคารวม {baht(data.uncosted.sales)}) ยังไม่นับในรายงาน จนกว่าจะใส่ต้นทุน
+            </p>
+          )}
+
           {salesRows.length === 0 ? (
             <p className="text-sm text-ink-muted py-4">ไม่มีงานที่อนุมัติหรือเสร็จสิ้นในช่วงวันที่นี้</p>
           ) : (

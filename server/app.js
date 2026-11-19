@@ -582,6 +582,8 @@ async function serializeProject(p) {
     status: p.status,
     statusText: PROJECT_STATUS[p.status] || p.status,
     profitMargin: p.profit_margin,
+    // set when the job was made from an accepted quote: the price is fixed and the margin follows from the costs
+    agreedPrice: p.agreed_price,
     depositPct: p.deposit_pct,
     setupDays: p.setup_days,
     eventDays: p.event_days,
@@ -693,6 +695,15 @@ async function replaceCosts(projectId, d, oneMarkup = false) {
     priced.push({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId });
   }
   const { cost, price } = jobPricing(priced, saved);
+  const { agreed_price: agreed } = await db.prepare('SELECT agreed_price FROM projects WHERE id = ?').get(projectId);
+  if (agreed !== null && cost > 0) {
+    // the price was settled with the client: every heading gets the one markup that makes the costs come to it
+    // (negative when the costs are more than the price)
+    const markup = (agreed / cost - 1) * 100;
+    await db.prepare('UPDATE cost_groups SET markup = ? WHERE project_id = ?').run(markup, projectId);
+    await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(markup, projectId);
+    return;
+  }
   const overall = cost > 0 ? (price / cost - 1) * 100 : saved[0]?.markup ?? d.profit_margin;
   await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(overall, projectId);
 }
@@ -833,7 +844,8 @@ function checkLockedPrice(lockedPrice, d, items) {
 
 async function lockedPriceOf(projectId) {
   if (!projectId) return null;
-  const p = await db.prepare('SELECT profit_margin FROM projects WHERE id = ?').get(projectId);
+  const p = await db.prepare('SELECT profit_margin, agreed_price FROM projects WHERE id = ?').get(projectId);
+  if (p.agreed_price !== null) return p.agreed_price;
   const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
   const groups = await db.prepare('SELECT id, name, markup FROM cost_groups WHERE project_id = ?').all(projectId);
   const price = projectPrice(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), p.profit_margin, groups);
@@ -859,6 +871,41 @@ app.get('/api/quotes', route(async (req) =>
 ));
 
 app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(req.user.id, req.params.id))));
+
+/**
+ * Turns a quote that was written on its own into a job, once the client has said yes: the job takes the
+ * quote's details and its lines (as cost items waiting for a cost), and its price is the quote's amount
+ * after the discount and before VAT. The quote is tied to the new job and held to that price.
+ */
+app.post('/api/quotes/:id/project', route(async (req, res) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  if (quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้มีโปรเจ็กต์อยู่แล้ว');
+  const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode });
+  if (!(afterDiscount > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนสร้างโปรเจ็กต์');
+  const rules = parseRules(req.user.rules);
+  const title = quote.project_title || `งานของ ${quote.client_name}`;
+  const project = await transaction(async () => {
+    const code = await nextCode('projects', req.user.id, 'EV');
+    const status = QUOTE_TO_PROJECT_STATUS[quote.status] || 'approved';
+    const { lastInsertRowid } = await db
+      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, notes, status, profit_margin, deposit_pct, agreed_price)
+                VALUES (?, ?, ?, ?, 'อื่นๆ', ?, ?, ?, ?, ?, ?, 0, ?, ?) RETURNING id`)
+      .run(req.user.id, code, quote.customer_id, title, quote.client_name, quote.client_phone, quote.client_email, quote.event_date, quote.notes, status,
+        Number.isFinite(rules.depositPct) ? rules.depositPct : 30, afterDiscount);
+    const projectId = Number(lastInsertRowid);
+    await replaceCosts(projectId, {
+      profit_margin: 0,
+      groups: [{ id: 1, name: 'รายการต้นทุน', markup: 0 }],
+      items: items.filter((i) => i.description).map((i) => ({ group: 1, name: i.description, category: 'material', quantity: i.quantity > 0 ? i.quantity : 1, price: 0, actual: null, is_extra: 0 })),
+    });
+    await db.prepare(`UPDATE quotes SET project_id = ?, locked_price = ?, updated_at = ${NOW} WHERE id = ?`).run(projectId, afterDiscount, quote.id);
+    await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่จากใบเสนอราคา ${quote.code} - ${title}`, 'เพิ่มแล้ว');
+    return await getProject(req.user.id, projectId);
+  });
+  res.status(201);
+  return serializeProject(project);
+}));
 
 app.post('/api/quotes', route(async (req, res) => {
   const d = await readQuoteBody(req.user.id, req.body);
@@ -928,8 +975,12 @@ async function projectFinancials(userId) {
               WHERE p.user_id = ? GROUP BY p.id`)
     .all(userId))
     .map((p) => {
-      const profit = p.cost * (p.profit_margin / 100);
-      return { ...p, profit, sales: p.cost + profit, month: (p.event_date || p.created_at).slice(0, 7), sold: ['approved', 'completed'].includes(p.status) };
+      const agreed = p.agreed_price !== null;
+      const profit = agreed ? p.agreed_price - p.cost : p.cost * (p.profit_margin / 100);
+      // a job taken at an agreed price with no costs entered yet would count as pure profit: it waits until it has costs
+      const uncosted = agreed && p.cost === 0;
+      const won = ['approved', 'completed'].includes(p.status);
+      return { ...p, profit, sales: p.cost + profit, month: (p.event_date || p.created_at).slice(0, 7), sold: won && !uncosted, uncosted: won && uncosted };
     });
 }
 
@@ -1060,6 +1111,8 @@ app.get('/api/reports', route(async (req) => {
     byType: Object.values(byType).sort((a, b) => b.sales - a.sales),
     byStatus,
     sales,
+    // accepted jobs left out of every figure above because their costs are not in yet
+    uncosted: { count: rows.filter((r) => r.uncosted).length, sales: rows.filter((r) => r.uncosted).reduce((s, r) => s + r.sales, 0) },
   };
 }));
 

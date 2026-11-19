@@ -205,3 +205,28 @@ test('Learning loop: average overrun per category from reviewed jobs', () => {
   near(l[0].overrunPct, 10);
   assert.equal(l[0].jobs, 2);
 });
+
+test('A job taken at an agreed price: the price stands and the margin follows from the costs', () => {
+  const groups = [{ id: 1, name: 'ดอกไม้', markup: 80 }, { id: 2, name: 'ทีมงาน', markup: 10 }];
+  const item = (groupId: number, price: number) => ({ name: 'x', category: 'material' as const, quantity: 1, price, groupId });
+
+  // no costs yet: the price is known, the profit is not
+  const empty = job({ agreedPrice: 45000, groups, costItems: [item(1, 0), item(2, 0)] });
+  assert.equal(numbers(empty).price, 45000);
+  assert.equal(health(empty, DEFAULT_RULES).score, 0);
+  assert.ok(risks(empty, DEFAULT_RULES).some((r) => r.id === 'uncosted' && r.severity === 'high'));
+
+  // costs of 30,000: still 45,000, whatever markups the headings carry; each heading gets its share
+  const costed = job({ agreedPrice: 45000, groups, costItems: [item(1, 20000), item(2, 10000)] });
+  const n = numbers(costed);
+  assert.equal(n.price, 45000);
+  assert.equal(n.profit, 15000);
+  assert.ok(Math.abs(n.margin - 33.333) < 0.01);
+  assert.deepEqual(n.headings.map((h) => Math.round(h.price)), [30000, 15000]);
+  assert.ok(!risks(costed, DEFAULT_RULES).some((r) => r.id === 'uncosted'));
+
+  // costs above the price: a loss, not a higher price
+  const loss = numbers(job({ agreedPrice: 45000, groups, costItems: [item(1, 40000), item(2, 10000)] }));
+  assert.equal(loss.price, 45000);
+  assert.equal(loss.profit, -5000);
+});

@@ -99,6 +99,8 @@ export interface Job {
   ownerLabor: boolean | null;
   /** same for teardown and the trip back, and the "เก็บงาน/ขนส่งกลับ" category */
   teardown: boolean | null;
+  /** the price settled with the client (a job made from an accepted quote): fixed, so the margin follows from the costs */
+  agreedPrice?: number | null;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
@@ -117,7 +119,12 @@ export const marginToMarkup = (margin: number) => (margin >= 100 ? 10000 : (marg
 export const priceForMargin = (cost: number, margin: number) => (margin >= 100 ? Infinity : cost / (1 - margin / 100));
 
 export function numbers(job: Job) {
-  const { cost, price, headings: priced } = jobPricing(job.costItems, job.groups, job.profitMargin);
+  const worked = jobPricing(job.costItems, job.groups, job.profitMargin);
+  const agreed = job.agreedPrice ?? null;
+  const cost = worked.cost;
+  // an agreed price stands whatever the costs are; each heading takes the share of it that its costs are of the total
+  const price = agreed ?? worked.price;
+  const priced = agreed === null ? worked.headings : worked.headings.map((g) => ({ ...g, price: cost > 0 ? agreed * (g.cost / cost) : 0, markup: cost > 0 ? (agreed / cost - 1) * 100 : 0 }));
   const profit = price - cost;
   const margin = price > 0 ? (profit / price) * 100 : 0;
   const deposit = price * (job.depositPct / 100);
@@ -152,7 +159,9 @@ export function risks(job: Job, rules: Rules): Risk[] {
   const timeline = job.setupDays + job.eventDays;
   const has = (c: CostCategory) => categoryCost(job, c) > 0;
 
-  if (job.costItems.filter((i) => !i.isExtra).length === 0)
+  if (job.agreedPrice != null && n.cost === 0)
+    out.push({ id: 'uncosted', severity: 'high', title: 'ยังไม่ได้ใส่ต้นทุน', detail: `งานนี้ตกลงราคากับลูกค้าแล้ว ${fmt(n.price)} บาท ใส่ต้นทุนของแต่ละรายการ ระบบถึงจะบอกกำไรได้` });
+  else if (job.costItems.filter((i) => !i.isExtra).length === 0)
     out.push({ id: 'no-costs', severity: 'high', title: 'ยังไม่มีรายการต้นทุน', detail: 'ใส่ต้นทุนอย่างน้อยหนึ่งรายการ ระบบถึงจะคำนวณกำไรได้' });
   if (n.price > 0 && n.margin < rules.highRiskMargin)
     out.push({ id: 'margin-high-risk', severity: 'high', title: `Margin ${n.margin.toFixed(1)}% ต่ำกว่า ${rules.highRiskMargin}% — เสี่ยงสูง`, detail: `ราคาที่ควรเสนออย่างน้อย ${fmt(priceForMargin(n.cost, rules.minMargin))} บาท (Margin ${rules.minMargin}%)` });
@@ -178,13 +187,14 @@ export function health(job: Job, rules: Rules) {
   const n = numbers(job);
   const list = risks(job, rules);
   let score = 100;
-  if (n.price <= 0) score = 0;
+  // a price with no costs against it says nothing about profit yet
+  if (n.price <= 0 || (job.agreedPrice != null && n.cost === 0)) score = 0;
   else if (n.margin < 0) score -= 60;
   else if (n.margin < rules.highRiskMargin) score -= 45;
   else if (n.margin < rules.minMargin) score -= 25;
   else if (n.margin < rules.goodMargin) score -= 10;
   for (const r of list) {
-    if (r.id.startsWith('margin') || r.id === 'no-costs') continue; // already counted above
+    if (r.id.startsWith('margin') || r.id === 'no-costs' || r.id === 'uncosted') continue; // already counted above
     score -= r.severity === 'high' ? 15 : r.severity === 'medium' ? 6 : 3;
   }
   score = Math.max(0, Math.min(100, Math.round(score)));
