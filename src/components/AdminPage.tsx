@@ -133,10 +133,10 @@ export function AdminPage({ user }: AdminPageProps) {
                     {(shop.businessName || shop.name).charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <p className="font-medium text-ink truncate flex items-center gap-2">
-                      {shop.businessName || <span className="text-ink-muted">ยังไม่ตั้งชื่อร้าน</span>}
-                      {shop.role === 'admin' && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-xs">แอดมิน</span>}
-                      {shop.disabled && <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs">ถูกระงับ</span>}
+                    <p className="font-medium text-ink flex items-center gap-2 min-w-0">
+                      <span className={`truncate ${shop.businessName ? '' : 'text-ink-muted'}`}>{shop.businessName || 'ยังไม่ตั้งชื่อร้าน'}</span>
+                      {shop.role === 'admin' && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-xs shrink-0">แอดมิน</span>}
+                      {shop.disabled && <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 text-xs shrink-0">ถูกระงับ</span>}
                     </p>
                     <p className="text-sm text-ink-muted truncate">
                       {shop.name} · {shop.email}
@@ -152,7 +152,7 @@ export function AdminPage({ user }: AdminPageProps) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 text-sm lg:w-80 shrink-0">
+                <div className="grid grid-cols-[auto_auto_1fr] gap-x-6 gap-y-4 text-sm lg:w-80 shrink-0">
                   <div>
                     <p className="text-ink-muted text-xs">โปรเจ็กต์</p>
                     <p className="font-medium text-ink">{shop.projects}</p>
