@@ -1,6 +1,6 @@
 import { statusPill } from './ProjectItem';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X } from 'lucide-react';
+import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X, Check, PencilLine, FileText, Clock, CircleCheck, Flag, Ban, type LucideIcon } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
 import { api, Project, ProjectStatus, type User } from '../lib/api';
 import { LEVEL_STYLE, projectHealth } from '../lib/job';
@@ -16,7 +16,7 @@ interface StatusOption {
   id: string;
   name: string;
   description: string;
-  icon: string;
+  icon: LucideIcon;
   className: string;
 }
 
@@ -45,43 +45,43 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     {
       id: 'draft',
       name: 'ร่าง',
-      description: 'โปรเจ็กต์ยังอยู่ในขั้นตอนการเตรียม',
-      icon: '📝',
+      description: 'ยังเตรียมงานอยู่ ยังไม่ได้ส่งราคา',
+      icon: PencilLine,
       className: 'status-draft'
     },
     {
       id: 'quote_created',
       name: 'สร้างใบเสนอราคาแล้ว',
-      description: 'สร้างใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
-      icon: '📄',
+      description: 'มีใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
+      icon: FileText,
       className: 'status-quote-created'
     },
     {
       id: 'pending',
       name: 'รอการอนุมัติ',
       description: 'ส่งใบเสนอราคาแล้ว รอลูกค้าตอบกลับ',
-      icon: '⏳',
+      icon: Clock,
       className: 'status-pending'
     },
     {
       id: 'approved',
       name: 'อนุมัติแล้ว',
-      description: 'ลูกค้าอนุมัติแล้ว เริ่มดำเนินการ',
-      icon: '✅',
+      description: 'ลูกค้าตกลงแล้ว เริ่มทำงานได้',
+      icon: CircleCheck,
       className: 'status-approved'
     },
     {
       id: 'completed',
       name: 'เสร็จสิ้น',
-      description: 'ดำเนินการเสร็จสิ้นแล้ว สร้างใบเสร็จแล้ว',
-      icon: '🎉',
+      description: 'จัดงานเสร็จและปิดงานแล้ว',
+      icon: Flag,
       className: 'status-completed'
     },
     {
       id: 'cancelled',
       name: 'ยกเลิก',
-      description: 'ยกเลิกโปรเจ็กต์',
-      icon: '❌',
+      description: 'ลูกค้าไม่ทำต่อ หรือยกเลิกงานนี้',
+      icon: Ban,
       className: 'status-cancelled'
     }
   ];
@@ -481,57 +481,37 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Status Update Modal */}
       {isStatusModalOpen && selectedProject && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-4 md:p-6 border-b border-line">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-base md:text-lg text-ink mb-2 font-semibold">อัปเดตสถานะโปรเจ็กต์</h3>
-                  <p className="text-sm text-ink-muted line-clamp-2">{selectedProject.title}</p>
-                </div>
-                <button
-                  onClick={closeStatusModal}
-                  className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                >
-                  <X className="w-5 h-5 md:w-6 md:h-6" />
-                </button>
-              </div>
+        <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={closeStatusModal}>
+          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-1">
+              <h3 className="text-lg font-semibold text-ink">เปลี่ยนสถานะโปรเจ็กต์</h3>
+              <button type="button" onClick={closeStatusModal} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
             </div>
+            <p className="text-sm text-ink-muted mb-4 line-clamp-2">{selectedProject.title}</p>
 
-            <div className="p-4 md:p-6">
-              <div className="space-y-3 mb-6">
-                {statusOptions.map((option) => (
-                  <div
+            <div className="flex flex-col gap-1">
+              {statusOptions.map((option) => {
+                const current = selectedProject.status === option.id;
+                const Icon = option.icon;
+                return (
+                  <button
                     key={option.id}
+                    type="button"
                     onClick={() => updateProjectStatus(option.id)}
-                    className={`p-3 md:p-4 border-2 rounded-xl cursor-pointer transition-all hover:border-[#673AB7] hover:bg-canvas/60 ${
-                      selectedProject.status === option.id 
-                        ? 'border-[#673AB7] bg-canvas/60' 
-                        : 'border-line'
-                    }`}
+                    aria-current={current || undefined}
+                    className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-2xl transition-colors ${current ? 'bg-[#F1F0F5]' : 'hover:bg-[#F1F0F5]/60'}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="text-xl md:text-2xl">{option.icon}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-ink mb-1 text-sm md:text-base">{option.name}</div>
-                        <div className="text-xs md:text-sm text-ink-muted line-clamp-2">{option.description}</div>
-                        <div className="text-xs text-ink mt-1 font-medium">
-                          ความคืบหน้า: {getProgressFromStatus(option.id)}%
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-3 justify-end">
-                <button
-                  onClick={closeStatusModal}
-                  className="px-4 md:px-6 py-3 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm md:text-base"
-                >
-                  ยกเลิก
-                </button>
-              </div>
+                    <span className={`flex items-center justify-center w-9 h-9 shrink-0 rounded-full border ${statusPill(option.id)}`}>
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium text-ink">{option.name}</span>
+                      <span className="block text-xs text-ink-muted">{option.description}</span>
+                    </span>
+                    {current && <Check className="w-4 h-4 shrink-0 text-[#673AB7]" aria-label="สถานะปัจจุบัน" />}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
