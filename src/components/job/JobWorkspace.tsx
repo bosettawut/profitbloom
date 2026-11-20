@@ -134,7 +134,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             value={draft.status}
             onChange={(e) => patch({ status: e.target.value as ProjectStatus })}
             aria-label="สถานะงาน"
-            className={`rounded-full px-3 py-2 text-sm font-medium outline-none ${statusPill(draft.status)}`}
+            className={`self-stretch rounded-full px-3 py-1.5 text-sm font-medium outline-none ${statusPill(draft.status)}`}
           >
             {STATUSES.map(([id, t]) => <option key={id} value={id}>{t}</option>)}
           </select>

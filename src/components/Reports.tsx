@@ -130,7 +130,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
         <div className="pb-card p-6 md:p-8 mb-8">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
             <div>
-              <h3 className="text-xl text-ink-muted mb-1 font-semibold">ยอดขายและกำไร 12 เดือนล่าสุด</h3>
+              <h3 className="text-base md:text-lg text-ink mb-1 font-semibold">ยอดขายและกำไร 12 เดือนล่าสุด</h3>
               <p className="text-sm text-ink-muted">นับตามวันที่จัดงาน</p>
             </div>
             <div className="flex bg-canvas rounded-full p-1">
@@ -299,7 +299,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
           <div className="pb-card lg:col-span-2 p-6 md:p-8">
-            <h3 className="text-xl text-ink-muted mb-6 font-semibold">แยกตามประเภทงาน</h3>
+            <h3 className="text-base md:text-lg text-ink mb-6 font-semibold">แยกตามประเภทงาน</h3>
             {data.byType.length === 0 ? (
               <p className="text-sm text-ink-muted">ยังไม่มีข้อมูล</p>
             ) : (
@@ -331,7 +331,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
           </div>
 
           <div className="pb-card p-6 md:p-8">
-            <h3 className="text-xl text-ink-muted mb-6 font-semibold">โปรเจ็กต์ตามสถานะ</h3>
+            <h3 className="text-base md:text-lg text-ink mb-6 font-semibold">โปรเจ็กต์ตามสถานะ</h3>
             <div className="space-y-4">
               {data.byStatus.map((s) => (
                 <div key={s.status}>

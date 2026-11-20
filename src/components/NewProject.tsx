@@ -128,7 +128,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-6 md:mb-8">
         <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
-        <p className="text-sm md:text-base text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
+        <p className="text-sm text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
       </div>
 
       <div className="mb-6 md:mb-8 px-1 flex items-center">
@@ -171,18 +171,18 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
       {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} />}
       {step === 3 && <HealthPanel h={h} budget={draft.budget} />}
 
-      <div className="mt-6 flex flex-col-reverse md:flex-row gap-3">
+      <div className="mt-6 flex flex-col-reverse md:flex-row md:justify-end gap-3">
         {step > 1 && (
           <button onClick={() => setStep(step - 1)} className="pb-btn-secondary">
             <ArrowLeft className="w-4 h-4" /> ย้อนกลับ
           </button>
         )}
         {step < 3 ? (
-          <button onClick={next} className="pb-btn-primary flex-1">
+          <button onClick={next} className="pb-btn-primary md:min-w-[14rem]">
             ถัดไป <ArrowRight className="w-4 h-4" />
           </button>
         ) : (
-          <button onClick={save} disabled={saving} className="pb-btn-primary flex-1 disabled:opacity-60">
+          <button onClick={save} disabled={saving} className="pb-btn-primary md:min-w-[14rem] disabled:opacity-60">
             <Save className="w-4 h-4" /> {saving ? 'กำลังบันทึก...' : 'บันทึกโปรเจ็กต์'}
           </button>
         )}
