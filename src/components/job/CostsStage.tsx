@@ -24,7 +24,7 @@ interface Props {
   lessons: ReturnType<typeof learnings>;
 }
 
-const input = 'pb-input !py-2';
+const input = 'pb-input pb-input-sm';
 let tempId = -1;
 
 /** a new heading; it gets a real id when the job is saved */

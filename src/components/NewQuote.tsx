@@ -280,9 +280,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6 md:space-y-8">
+        <div className="lg:col-span-2 space-y-6">
           {/* Client Information */}
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">ข้อมูลลูกค้า</h3>
@@ -440,12 +440,19 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
             {/* Desktop View - Table */}
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full table-fixed">
+                <colgroup>
+                  <col />
+                  <col className="w-28" />
+                  <col className="w-40" />
+                  <col className="w-36" />
+                  <col className="w-28" />
+                </colgroup>
                 <thead>
                   <tr className="bg-canvas/60 border-b border-line">
                     <th className="text-left p-4 text-ink font-medium">รายละเอียด</th>
-                    <th className="text-left p-4 text-ink font-medium">จำนวน</th>
-                    <th className="text-left p-4 text-ink font-medium">ราคาต่อหน่วย</th>
+                    <th className="text-right p-4 text-ink font-medium">จำนวน</th>
+                    <th className="text-right p-4 text-ink font-medium">ราคาต่อหน่วย</th>
                     <th className="text-right p-4 text-ink font-medium">รวม</th>
                     <th className="text-center p-4 text-ink font-medium">การจัดการ</th>
                   </tr>
@@ -467,7 +474,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           type="number"
                           value={item.quantity}
                           onChange={(e) => updateQuoteItem(item.id, 'quantity', parseFloat(e.target.value) || 0)}
-                          className="w-full bg-transparent text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
+                          className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
                       <td className="p-4">
@@ -476,10 +483,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           step="0.01"
                           value={item.unitPrice}
                           onChange={(e) => updateQuoteItem(item.id, 'unitPrice', parseFloat(e.target.value) || 0)}
-                          className="w-full bg-transparent text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
+                          className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
-                      <td className="p-4 text-right">
+                      <td className="p-4 text-right whitespace-nowrap">
                         <span className="text-ink font-medium">
                           {money(item.total)}
                         </span>

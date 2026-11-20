@@ -94,11 +94,11 @@ export function QuickCheck({ user, onCreated }: Props) {
           <div className="grid sm:grid-cols-2 gap-4 mb-5">
             <div>
               <label className="pb-label">ชื่องาน (ไม่บังคับ)</label>
-              <input className="pb-input !py-2" value={title} placeholder="เช่น งานแต่ง คุณนิภา" onChange={(e) => setTitle(e.target.value)} />
+              <input className="pb-input pb-input-sm" value={title} placeholder="เช่น งานแต่ง คุณนิภา" onChange={(e) => setTitle(e.target.value)} />
             </div>
             <div>
               <label className="pb-label">ประเภทงาน</label>
-              <select className="pb-input !py-2" value={type} onChange={(e) => setType(e.target.value)}>
+              <select className="pb-input pb-input-sm" value={type} onChange={(e) => setType(e.target.value)}>
                 {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </div>
@@ -108,7 +108,7 @@ export function QuickCheck({ user, onCreated }: Props) {
               <div key={k} className={k === 'budget' ? 'sm:col-span-2' : ''}>
                 <label className="pb-label !text-ink">{label}</label>
                 <input
-                  className={`pb-input !py-2 ${k === 'budget' ? '!text-lg font-semibold' : ''}`}
+                  className={`pb-input pb-input-sm ${k === 'budget' ? '!text-lg font-semibold' : ''}`}
                   type="number"
                   min="0"
                   inputMode="decimal"

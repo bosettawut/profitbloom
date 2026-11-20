@@ -625,14 +625,28 @@ html {
     background: #ffffff;
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 0.7rem 0.95rem;
+    --pb-input-py: 0.7rem;
+    padding: var(--pb-input-py) 0.95rem;
     font-size: 0.95rem;
     font-weight: 500;
+    line-height: 1.5;
     color: var(--ink);
     outline: none;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
+  /* the compact size used inside dense forms */
+  .pb-input-sm { --pb-input-py: 0.5rem; }
+  /* Safari gives text boxes, date boxes and dropdowns three different natural heights,
+     so single-line fields get theirs from the same sum instead of from their contents */
+  input.pb-input,
+  select.pb-input {
+    height: calc(1.5em + var(--pb-input-py) * 2 + 2px);
+  }
   .pb-input::placeholder { color: #8C879D; }
+  /* number boxes look like the text boxes beside them: Safari otherwise shows stepper arrows all the time */
+  input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
   /* a native dropdown ignores line-height and comes out taller than the text box beside it,
      so draw our own arrow and let it follow the same line-height */
   select.pb-input {
