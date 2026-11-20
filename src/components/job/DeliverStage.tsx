@@ -11,7 +11,7 @@ interface Props {
   patch: (p: Partial<Project>) => void;
 }
 
-const input = 'pb-input !py-2';
+const input = 'pb-input pb-input-sm';
 
 /** Track the budget during the job: actual cost per line, plus anything bought on the day. */
 export function DeliverStage({ draft, job, rules, patch }: Props) {

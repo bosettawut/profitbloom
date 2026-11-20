@@ -114,7 +114,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const infoField = (label: string, key: keyof Project, type = 'text') => (
     <div>
       <label className="pb-label">{label}</label>
-      <input className="pb-input !py-2" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      <input className="pb-input pb-input-sm" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
     </div>
   );
 
@@ -174,7 +174,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="pb-label">ประเภทงาน</label>
-                <select className="pb-input !py-2" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
+                <select className="pb-input pb-input-sm" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
                   {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
                 </select>
               </div>
@@ -184,7 +184,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
               <div>
                 <label className="pb-label">ลูกค้า</label>
                 <CustomerPicker
-                  className="pb-input !py-2"
+                  className="pb-input pb-input-sm"
                   value={draft.client}
                   onChange={(client) => patch({ client, customerId: null })}
                   onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}

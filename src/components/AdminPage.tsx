@@ -173,7 +173,7 @@ export function AdminPage({ user }: AdminPageProps) {
                     value={shop.plan}
                     disabled={savingId === shop.id}
                     onChange={(e) => update(shop, { plan: e.target.value as User['plan'] })}
-                    className="pb-input !w-40 !py-2 disabled:opacity-60"
+                    className="pb-input pb-input-sm !w-40 disabled:opacity-60"
                   >
                     {(Object.keys(PLAN_LABEL) as User['plan'][]).map((p) => (
                       <option key={p} value={p}>{PLAN_LABEL[p]}</option>
