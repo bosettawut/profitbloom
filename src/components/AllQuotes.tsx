@@ -128,7 +128,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div>
           <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">ใบเสนอราคา</h1>
-          <p className="text-sm md:text-base text-ink-muted mt-1">จัดการใบเสนอราคาของคุณ</p>
+          <p className="text-sm text-ink-muted mt-1">จัดการใบเสนอราคาของคุณ</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button 

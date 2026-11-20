@@ -340,7 +340,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
       </div>
 
       {/* Totals */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 mb-4 md:mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4 lg:gap-6 mb-4 md:mb-6">
         <StatsCard icon={Wallet} iconBg="bg-amber-50 text-amber-500" value={baht(customer.totalSales)} label="ยอดซื้อรวม" change={`จาก ${customer.soldCount} งานที่อนุมัติหรือเสร็จสิ้น`} positive />
         <StatsCard icon={FolderOpen} iconBg="bg-violet-50 text-[#673AB7]" value={String(customer.projectCount)} label="โปรเจ็กต์" change={customer.lastEventDate ? `งานล่าสุด ${formatDate(customer.lastEventDate)}` : 'ยังไม่มีวันจัดงาน'} positive />
         <div className="col-span-2 lg:col-span-1">

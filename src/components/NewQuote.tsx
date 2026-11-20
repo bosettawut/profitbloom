@@ -275,7 +275,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           <ArrowLeft className="w-4 h-4" /> ใบเสนอราคาทั้งหมด
         </button>
         <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">{savedId ? `ใบเสนอราคา ${quoteCode}` : 'สร้างใบเสนอราคาใหม่'}</h2>
-        <p className="text-sm md:text-base text-ink-muted">
+        <p className="text-sm text-ink-muted">
           {fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (ราคาต่อหน่วยรวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
         </p>
       </div>
@@ -625,20 +625,20 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             <div className="grid grid-cols-1 gap-3 mt-6">
               <button
                 onClick={handlePreview}
-                className="pb-btn-secondary !py-3"
+                className="pb-btn-secondary"
               >
                 <Eye className="w-4 h-4" />
                 ดูตัวอย่าง
               </button>
 
               {savedId && status === 'approved' && !projectId && (
-                <button onClick={makeProject} disabled={saving} className="pb-btn-secondary !py-3 disabled:opacity-60">
+                <button onClick={makeProject} disabled={saving} className="pb-btn-secondary disabled:opacity-60">
                   <FolderPlus className="w-4 h-4" />
                   สร้างโปรเจ็กต์และใส่ต้นทุน
                 </button>
               )}
 
-              <button onClick={exportPdf} disabled={saving || exporting} className="pb-btn-secondary !py-3 disabled:opacity-60">
+              <button onClick={exportPdf} disabled={saving || exporting} className="pb-btn-secondary disabled:opacity-60">
                 <Download className="w-4 h-4" />
                 {exporting ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF'}
               </button>

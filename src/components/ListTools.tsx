@@ -78,10 +78,10 @@ export function Pagination({ paged, unit }: PaginationProps) {
       <p>
         แสดง {start + 1}–{Math.min(start + pageSize, total)} จาก {total} {unit}
       </p>
-      <div className="flex items-center gap-2">
+      <div className="flex items-stretch gap-2">
         <select
           aria-label="จำนวนต่อหน้า"
-          className="bg-white rounded-full px-3 py-2 text-sm text-ink outline-none shadow-card"
+          className="bg-white rounded-full px-3 py-1 text-sm text-ink outline-none shadow-card"
           value={pageSize}
           onChange={(e) => paged.setPageSize(Number(e.target.value))}
         >
@@ -92,7 +92,7 @@ export function Pagination({ paged, unit }: PaginationProps) {
         <button type="button" onClick={() => paged.setPage(page - 1)} disabled={page <= 1} aria-label="หน้าก่อนหน้า" className="pb-btn-secondary !px-3 !py-2 disabled:opacity-40">
           <ChevronLeft className="w-4 h-4" />
         </button>
-        <span className="text-ink whitespace-nowrap">หน้า {page} / {pages}</span>
+        <span className="flex items-center text-ink whitespace-nowrap">หน้า {page} / {pages}</span>
         <button type="button" onClick={() => paged.setPage(page + 1)} disabled={page >= pages} aria-label="หน้าถัดไป" className="pb-btn-secondary !px-3 !py-2 disabled:opacity-40">
           <ChevronRight className="w-4 h-4" />
         </button>

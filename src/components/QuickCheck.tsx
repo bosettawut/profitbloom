@@ -91,7 +91,7 @@ export function QuickCheck({ user, onCreated }: Props) {
 
       <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-5 items-start">
         <div className="pb-card p-5 md:p-6">
-          <div className="grid sm:grid-cols-2 gap-3 mb-5">
+          <div className="grid sm:grid-cols-2 gap-4 mb-5">
             <div>
               <label className="pb-label">ชื่องาน (ไม่บังคับ)</label>
               <input className="pb-input !py-2" value={title} placeholder="เช่น งานแต่ง คุณนิภา" onChange={(e) => setTitle(e.target.value)} />

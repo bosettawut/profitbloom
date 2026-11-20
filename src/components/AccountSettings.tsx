@@ -189,7 +189,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
     <div>
       <div className="p-5 md:p-10 pb-28 md:pb-10">
         <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">ตั้งค่า</h1>
-        <p className="text-ink-muted mb-8">ข้อมูลร้าน โลโก้ และบัญชีของคุณ</p>
+        <p className="text-sm text-ink-muted mt-1 mb-8">ข้อมูลร้าน โลโก้ และบัญชีของคุณ</p>
 
         {/* on phones these pages aren't in the bottom bar, so reach them from here */}
         <div className="md:hidden pb-card mb-6 divide-y divide-line overflow-hidden">
@@ -355,11 +355,11 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
             </div>
           )}
 
-          <div className="order-7 xl:col-span-2 flex flex-col md:flex-row gap-3">
+          <div className="order-7 xl:col-span-2 flex flex-col md:flex-row md:justify-end gap-3">
             <button
               type="submit"
               disabled={saving}
-              className="pb-btn-primary flex-1 disabled:opacity-60"
+              className="pb-btn-primary md:order-2 md:min-w-[14rem] disabled:opacity-60"
             >
               <Save className="w-4 h-4" />
               {saving ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า'}
@@ -367,7 +367,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
             <button
               type="button"
               onClick={onLogout}
-              className="flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
+              className="flex items-center justify-center gap-2 px-5 py-[9px] rounded-full border border-red-200 text-[0.9rem] font-semibold text-red-600 hover:bg-red-50 transition-colors"
             >
               <LogOut className="w-4 h-4" />
               ออกจากระบบ
