@@ -208,6 +208,33 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   const empty = r.data;
   r = await make({ projectId: empty.id, items: line(900) });
   ok('โปรเจ็กต์ที่ยังไม่มีต้นทุน ไม่ล็อกราคา', r.status === 201 && r.data.lockedPrice === null);
+  // rounding: whole baht unless the quote says to keep the satang
+  const cents = [{ description: 'a', quantity: 3, unitPrice: 33.33 }];
+  r = await make({ taxRate: 7, discountRate: 5, items: cents });
+  ok('ใบเสนอราคาใหม่ปัดเป็นบาทเต็ม: 100 -5 +VAT 7 = 102', r.data.rounding === 'baht' && r.data.totalAmount === 102, JSON.stringify([r.data.rounding, r.data.totalAmount]));
+  const rq = r.data;
+  r = await make({ taxRate: 7, discountRate: 5, rounding: 'satang', items: cents });
+  ok('ไม่ปัดเศษ: 99.99 -5.00 = 94.99 +VAT 6.65 = 101.64', r.data.rounding === 'satang' && r.data.items[0].total === 99.99 && r.data.totalAmount === 101.64, JSON.stringify([r.data.items?.[0]?.total, r.data.totalAmount]));
+  r = await A.call('PUT', `/quotes/${rq.id}`, { rounding: 'satang' });
+  ok('สลับใบเดิมเป็นไม่ปัดเศษ: ยอดเปลี่ยน ราคาต่อหน่วยคงเดิม', r.status === 200 && r.data.totalAmount === 101.64 && r.data.items[0].unitPrice === 33.33, r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${rq.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่น การปัดเศษของใบนั้นคงเดิม', r.data.rounding === 'satang' && r.data.totalAmount === 101.64, r.data.rounding);
+  r = await A.call('GET', '/quotes');
+  ok('รายการใบเสนอราคาบอกการปัดเศษและยอดที่มีสตางค์', r.data.find((q) => q.id === rq.id)?.rounding === 'satang' && r.data.find((q) => q.id === rq.id)?.totalAmount === 101.64);
+  r = await A.call('PUT', `/quotes/${rq.id}`, { rounding: 'baht' });
+  ok('สลับกลับเป็นบาทเต็ม', r.data.rounding === 'baht' && r.data.totalAmount === 102, r.data.totalAmount);
+  r = await make({ rounding: 'bogus', items: cents });
+  ok('ค่าการปัดเศษที่ไม่รู้จัก → บาทเต็ม', r.status === 201 && r.data.rounding === 'baht', r.data.rounding);
+  r = await make({ taxRate: 7, vatMode: 'inclusive', rounding: 'satang', items: [{ description: 'a', quantity: 1, unitPrice: 1000 }] });
+  ok('ไม่ปัดเศษ + ถอด VAT: ลูกค้าจ่าย 1,000 เท่าเดิม', r.data.totalAmount === 1000, r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }] });
+  ok('ไม่ปัดเศษกับราคาที่ล็อก: 1,499.97 ไม่เท่า 1,500 ถูกปฏิเสธ', r.status === 400, r.status);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }, { description: 'ปรับยอด', quantity: 1, unitPrice: 0.03 }] });
+  ok('ไม่ปัดเศษกับราคาที่ล็อก: รายการรวม 1,500.00 พอดี บันทึกได้', r.status === 200 && r.data.totalAmount === 1605, JSON.stringify([r.status, r.data.totalAmount]));
+  r = await make({ taxRate: 7, discountRate: 5, rounding: 'satang', status: 'approved', items: cents });
+  r = await A.call('POST', `/quotes/${r.data.id}/project`);
+  ok('ใบเสนอราคาแบบไม่ปัดเศษ → โปรเจ็กต์ได้ราคาที่ตกลงพร้อมสตางค์ (94.99)', r.status === 201 && r.data.agreedPrice === 94.99, JSON.stringify([r.status, r.data.agreedPrice]));
+  if (r.data?.id) await A.call('DELETE', `/projects/${r.data.id}`);
   for (const id of [lp.id, empty.id]) await A.call('DELETE', `/projects/${id}`);
   for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
 }

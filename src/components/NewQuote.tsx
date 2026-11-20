@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin, Lock, FolderPlus } from 'lucide-react';
-import { api, Project, QuoteStatus, User, VatMode } from '../lib/api';
+import { api, baht, Project, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
-import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, wholeBaht } from '../../shared/quote-math.js';
+import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -27,8 +27,6 @@ interface NewQuoteProps {
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
-/** every amount on a quote is whole baht */
-const money = (n: number) => `฿${n.toLocaleString('th-TH', { maximumFractionDigits: 0 })}`;
 
 export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
@@ -52,9 +50,12 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
   // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
   const [lockedPrice, setLockedPrice] = useState<number | null>(() => {
-    const price = fromProject ? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
+    const price = fromProject ? fromProject.agreedPrice ?? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
     return price > 0 ? price : null;
   });
+  // amounts are whole baht unless the quote says to keep the satang; a job price that has satang can only be met that way
+  const [rounding, setRounding] = useState<Rounding>(() => (lockedPrice !== null && !Number.isInteger(lockedPrice) ? 'satang' : 'baht'));
+  const money = (n: number) => baht(n, rounding === 'satang' ? 2 : 0);
 
   // it lists each cost item at its selling price (cost + its heading's margin) in whole baht; rounding each
   // line can leave the sum a few baht off the job's price, so one line takes up the difference
@@ -64,8 +65,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin) / 100));
       return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0 };
     });
-    const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice)) || lines;
-    return fitted.map((i) => ({ ...i, total: lineAmount(i) }));
+    const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
+    return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
   });
 
   const [taxRate, setTaxRate] = useState(7);
@@ -101,6 +102,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
         setVatMode(q.vatMode);
+        setRounding(q.rounding);
         setLockedPrice(q.lockedPrice);
         if (startInPreview) setShowPreview(true);
       })
@@ -108,16 +110,21 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       .finally(() => setLoading(false));
   }, [quoteId, startInPreview]);
 
-  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode });
+  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding });
   /** how far the lines are from the locked job price (0 = they match) */
-  const lockGap = lockedPrice === null ? 0 : afterDiscount - lockedPrice;
+  const lockGap = lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
 
   const fitToLock = () => {
     if (lockedPrice === null) return;
-    const fitted = fitToPrice(quoteItems, lockedPrice, discountRate);
+    const fitted = fitToPrice(quoteItems, lockedPrice, discountRate, rounding);
     if (!fitted) return showNotification('ปรับอัตโนมัติไม่ได้กับส่วนลดนี้ ลองเปลี่ยนส่วนลดหรือแก้รายการเอง');
-    setQuoteItems(fitted.map((i) => ({ ...i, total: lineAmount(i) })));
+    setQuoteItems(fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) })));
     showNotification('ปรับยอดรายการให้ตรงกับราคาที่ล็อกแล้ว');
+  };
+
+  const changeRounding = (next: Rounding) => {
+    setRounding(next);
+    setQuoteItems((items) => items.map((i) => ({ ...i, total: lineAmount(i, next) })));
   };
 
   const updateQuoteItem = (id: number, field: string, value: string | number) => {
@@ -125,7 +132,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       if (item.id === id) {
         const updatedItem = { ...item, [field]: value };
         if (field === 'quantity' || field === 'unitPrice') {
-          updatedItem.total = lineAmount(updatedItem);
+          updatedItem.total = lineAmount(updatedItem, rounding);
         }
         return updatedItem;
       }
@@ -177,6 +184,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         taxRate,
         discountRate,
         vatMode,
+        rounding,
         status: nextStatus === 'expired' ? undefined : nextStatus,
         items: quoteItems
           .filter(item => item.description.trim() || item.total > 0)
@@ -207,7 +215,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   };
 
   const docRef = useRef<HTMLDivElement>(null);
-  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, vatMode, items: quoteItems };
+  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, vatMode, rounding, items: quoteItems };
   const [exporting, setExporting] = useState(false);
 
   /** Saves first so the PDF always carries a real quote number, then downloads it. */
@@ -510,7 +518,22 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
           {/* Tax and Discount Settings */}
           <div className="pb-card p-4 md:p-6">
-            <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">การคำนวณเพิ่มเติม</h3>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 md:mb-6">
+              <h3 className="text-base md:text-lg text-ink font-semibold">การคำนวณเพิ่มเติม</h3>
+              <div role="group" aria-label="การปัดเศษ" className="flex bg-canvas rounded-full p-1">
+                {(['baht', 'satang'] as const).map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    aria-pressed={rounding === r}
+                    onClick={() => changeRounding(r)}
+                    className={`px-3 py-1.5 text-xs rounded-full transition-colors ${rounding === r ? 'bg-white text-ink shadow-card font-medium' : 'text-ink-muted hover:text-ink'}`}
+                  >
+                    {r === 'baht' ? 'ปัดเป็นบาทเต็ม' : 'ไม่ปัดเศษ'}
+                  </button>
+                ))}
+              </div>
+            </div>
             
             <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
               <div>
@@ -550,6 +573,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 </div>
               )}
             </div>
+            <p className="text-xs text-ink-muted mt-3 md:mt-4">
+              {rounding === 'baht'
+                ? 'ทุกยอดในใบเสนอราคาปัดเป็นบาทเต็ม (ตั้งแต่ 50 สตางค์ปัดขึ้น)'
+                : 'ทุกยอดในใบเสนอราคาคิดถึงสตางค์ (ทศนิยม 2 ตำแหน่ง)'}
+            </p>
           </div>
         </div>
 

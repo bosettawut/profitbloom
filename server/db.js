@@ -347,6 +347,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE projects ADD COLUMN agreed_price DOUBLE PRECISION;
   `,
+
+  // 8 — a quote chooses how its amounts are rounded: to whole baht (as every quote so far) or to the satang
+  `
+  ALTER TABLE quotes ADD COLUMN rounding TEXT NOT NULL DEFAULT 'baht';
+  `,
 ];
 
 async function schemaVersion(q) {
