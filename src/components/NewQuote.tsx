@@ -280,9 +280,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6">
+        <div className="xl:col-span-2 space-y-6">
           {/* Client Information */}
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">ข้อมูลลูกค้า</h3>
@@ -440,27 +440,27 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
             {/* Desktop View - Table */}
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full table-fixed">
+              <table className="w-full min-w-[34rem] table-fixed">
                 <colgroup>
                   <col />
-                  <col className="w-28" />
-                  <col className="w-40" />
-                  <col className="w-36" />
-                  <col className="w-28" />
+                  <col className="w-[5.5rem]" />
+                  <col className="w-32" />
+                  <col className="w-[8.5rem]" />
+                  <col className="w-14" />
                 </colgroup>
                 <thead>
                   <tr className="bg-canvas/60 border-b border-line">
-                    <th className="text-left p-4 text-ink font-medium">รายละเอียด</th>
-                    <th className="text-right p-4 text-ink font-medium">จำนวน</th>
-                    <th className="text-right p-4 text-ink font-medium">ราคาต่อหน่วย</th>
-                    <th className="text-right p-4 text-ink font-medium">รวม</th>
-                    <th className="text-center p-4 text-ink font-medium">การจัดการ</th>
+                    <th className="text-left px-3 py-4 text-ink font-medium">รายละเอียด</th>
+                    <th className="text-right px-3 py-4 text-ink font-medium">จำนวน</th>
+                    <th className="text-right px-3 py-4 text-ink font-medium whitespace-nowrap">ราคา/หน่วย</th>
+                    <th className="text-right px-3 py-4 text-ink font-medium">รวม</th>
+                    <th className="px-3 py-4"><span className="sr-only">ลบรายการ</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {quoteItems.map((item) => (
                     <tr key={item.id} className="border-b border-line hover:bg-canvas/60">
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="text"
                           value={item.description}
@@ -469,7 +469,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           placeholder="รายละเอียดสินค้า/บริการ"
                         />
                       </td>
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="number"
                           value={item.quantity}
@@ -477,7 +477,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="number"
                           step="0.01"
@@ -486,14 +486,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
-                      <td className="p-4 text-right whitespace-nowrap">
+                      <td className="px-3 py-4 text-right whitespace-nowrap">
                         <span className="text-ink font-medium">
                           {money(item.total)}
                         </span>
                       </td>
-                      <td className="p-4 text-center">
+                      <td className="px-1 py-4 text-center">
                         <button
                           onClick={() => removeQuoteItem(item.id)}
+                          aria-label="ลบรายการ"
+                          title="ลบรายการ"
                           className="p-2 text-red-500 hover:bg-red-100 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -552,9 +554,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </div>
 
         {/* Summary Sidebar */}
-        <div className="space-y-6">
+        <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
           {/* Financial Summary */}
-          <div className="pb-card p-4 md:p-6 sticky top-4">
+          <div className="pb-card p-4 md:p-6">
             <h4 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">สรุปการเงิน</h4>
             
             <div className="space-y-3 md:space-y-4">
