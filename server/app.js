@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
 import { emailError, phoneError } from '../shared/contact.js';
-import { jobPricing, lineAmount, projectPrice, quoteTotals, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
+import { jobPricing, lineAmount, projectPrice, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -773,7 +773,8 @@ const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', appro
 async function serializeQuote(q) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
   const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price }));
-  const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode });
+  const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
+  const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding });
   const today = new Date().toISOString().slice(0, 10);
   const status = ['draft', 'sent'].includes(q.status) && q.valid_until && q.valid_until < today ? 'expired' : q.status;
   return {
@@ -792,6 +793,8 @@ async function serializeQuote(q) {
     taxRate: q.tax_rate,
     discountRate: q.discount_rate,
     vatMode: q.vat_mode,
+    /** 'baht': every amount is whole baht; 'satang': amounts keep two decimals */
+    rounding,
     /** the job's price when the quote was made; the lines must come to this after the discount */
     lockedPrice: q.locked_price,
     status,
@@ -800,7 +803,7 @@ async function serializeQuote(q) {
     createdAt: q.created_at,
     itemCount: items.length,
     totalAmount: totals.total,
-    items: lines.map((i) => ({ ...i, total: lineAmount(i) })),
+    items: lines.map((i) => ({ ...i, total: lineAmount(i, rounding) })),
   };
 }
 
@@ -825,6 +828,7 @@ async function readQuoteBody(userId, body, existing) {
     tax_rate: num(body.taxRate ?? 7, { min: 0, max: 100 }),
     discount_rate: num(body.discountRate ?? 0, { min: 0, max: 100 }),
     vat_mode: VAT_MODES.includes(body.vatMode) ? body.vatMode : undefined,
+    rounding: ROUNDINGS.includes(body.rounding) ? body.rounding : undefined,
     status: body.status && QUOTE_STATUS[body.status] && body.status !== 'expired' ? body.status : undefined,
     items: Array.isArray(body.items)
       ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit_price: num(i.unitPrice, { min: 0 }) }))
@@ -835,8 +839,8 @@ async function readQuoteBody(userId, body, existing) {
 /** a quote made from a job must come to the job's price, so the profit worked out for the job holds */
 function checkLockedPrice(lockedPrice, d, items) {
   if (lockedPrice === null || lockedPrice === undefined) return;
-  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: d.discount_rate });
-  if (afterDiscount !== lockedPrice) {
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: d.discount_rate, rounding: d.rounding });
+  if (afterDiscount !== toSatang(lockedPrice)) {
     const baht = (n) => `฿${n.toLocaleString('th-TH')}`;
     throw new HttpError(400, `ยอดรวมรายการ ${baht(afterDiscount)} ไม่เท่ากับราคาโปรเจ็กต์ที่ล็อกไว้ ${baht(lockedPrice)} กด "ปรับส่วนต่างอัตโนมัติ" หรือแก้รายการให้ยอดตรงกัน`);
   }
@@ -881,7 +885,7 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
   const quote = await getQuote(req.user.id, req.params.id);
   if (quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้มีโปรเจ็กต์อยู่แล้ว');
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
-  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode });
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding: quote.rounding });
   if (!(afterDiscount > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนสร้างโปรเจ็กต์');
   const rules = parseRules(req.user.rules);
   const title = quote.project_title || `งานของ ${quote.client_name}`;
@@ -918,10 +922,10 @@ app.post('/api/quotes', route(async (req, res) => {
     const lockedPrice = await lockedPriceOf(d.project_id);
     checkLockedPrice(lockedPrice, d, d.items || []);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, vat_mode, locked_price, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, vat_mode, rounding, locked_price, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate,
-        d.vat_mode || req.user.vat_mode, lockedPrice, status);
+        d.vat_mode || req.user.vat_mode, d.rounding || 'baht', lockedPrice, status);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
@@ -942,10 +946,10 @@ app.put('/api/quotes/:id', route(async (req) => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
     await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
     // only a change to the lines or the discount can break the lock; old quotes can still change status
-    if ('items' in req.body || 'discountRate' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
-    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, vat_mode=?, status=?, updated_at=${NOW}
+    if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
+    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, vat_mode=?, rounding=?, status=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.vat_mode || existing.vat_mode, status, existing.id, req.user.id);
+      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
     if (status !== existing.status) {
       await syncProjectStatus(req.user.id, d.project_id, status);

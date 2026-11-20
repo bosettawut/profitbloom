@@ -11,7 +11,7 @@
     "start": "NODE_ENV=production node server/index.js",
     "make-admin": "node server/make-admin.js",
     "migrate-data": "node server/migrate-from-sqlite.js",
-    "test": "node --test tests/decision.test.ts && node tests/run.mjs"
+    "test": "node --test tests/decision.test.ts tests/quote-math.test.mjs && node tests/run.mjs"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "1.2.3",

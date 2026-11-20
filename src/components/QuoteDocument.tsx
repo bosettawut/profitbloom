@@ -1,7 +1,7 @@
 import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import type { User } from '../lib/api';
 import { brandLogo, brandName } from '../lib/brand';
-import { lineAmount, quoteTotals, type VatMode } from '../../shared/quote-math.js';
+import { lineAmount, quoteTotals, type Rounding, type VatMode } from '../../shared/quote-math.js';
 
 export interface QuoteDocData {
   code: string;
@@ -16,6 +16,7 @@ export interface QuoteDocData {
   taxRate: number;
   discountRate: number;
   vatMode: VatMode;
+  rounding?: Rounding;
   items: Array<{ description: string; quantity: number; unitPrice: number }>;
 }
 
@@ -24,8 +25,7 @@ interface QuoteDocumentProps {
   quote: QuoteDocData;
 }
 
-/** amounts are whole baht; a unit price keeps its satang only when it has any */
-const money = (n: number) => n.toLocaleString('th-TH', { maximumFractionDigits: 0 });
+/** a unit price keeps its satang only when it has any */
 const unitMoney = (n: number) => n.toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const thaiDate = (iso: string) =>
   iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : '-';
@@ -37,6 +37,9 @@ const thaiDate = (iso: string) =>
 export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote }, ref) {
   const items = quote.items.filter((i) => i.description.trim() || i.quantity * i.unitPrice > 0);
   const { subtotal, discount, beforeVat, vat, total, rate } = quoteTotals({ ...quote, items });
+  // amounts are whole baht, or show their satang when the quote keeps them
+  const digits = quote.rounding === 'satang' ? 2 : 0;
+  const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
   return (
     <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13 }}>
@@ -100,7 +103,7 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
               <td className="py-2.5 px-2">{item.description || '-'}</td>
               <td className="text-right py-2.5 px-2">{item.quantity.toLocaleString('th-TH')}</td>
               <td className="text-right py-2.5 px-2">{unitMoney(item.unitPrice)}</td>
-              <td className="text-right py-2.5 px-2" style={{ fontWeight: 600 }}>{money(lineAmount(item))}</td>
+              <td className="text-right py-2.5 px-2" style={{ fontWeight: 600 }}>{money(lineAmount(item, quote.rounding))}</td>
             </tr>
           ))}
         </tbody>

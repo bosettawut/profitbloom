@@ -5,7 +5,7 @@ import { flushSync } from 'react-dom';
 import type { User } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { QuoteDocument } from './QuoteDocument';
-import { api, Quote, QuoteStatus , type Project } from '../lib/api';
+import { api, baht, Quote, QuoteStatus , type Project } from '../lib/api';
 import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
 
 /** the local calendar day a UTC timestamp falls on, as YYYY-MM-DD */
@@ -265,7 +265,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                     <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
                     <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
                     <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
-                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{quote.totalAmount.toLocaleString('th-TH', { maximumFractionDigits: 2 })}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, quote.rounding === 'satang' ? 2 : 0)}</td>
                     <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <select
                         value={quote.status}
@@ -342,7 +342,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                 <div>
                   <div className="text-xs text-ink-muted mb-1">จำนวนเงิน</div>
                   <div className="font-medium text-ink text-sm md:text-base">
-                    ฿{quote.totalAmount.toLocaleString('th-TH', { maximumFractionDigits: 2 })}
+                    {baht(quote.totalAmount, quote.rounding === 'satang' ? 2 : 0)}
                   </div>
                 </div>
                 <div>

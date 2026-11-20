@@ -1,7 +1,7 @@
 import type { CostCategory, Rules } from './decision';
-import type { VatMode } from '../../shared/quote-math.js';
+import type { Rounding, VatMode } from '../../shared/quote-math.js';
 
-export type { VatMode };
+export type { Rounding, VatMode };
 
 export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'completed' | 'cancelled';
 export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'expired';
@@ -158,6 +158,8 @@ export interface Quote {
   taxRate: number;
   discountRate: number;
   vatMode: VatMode;
+  /** 'baht': every amount is whole baht; 'satang': amounts keep two decimals */
+  rounding: Rounding;
   /** the job's price when the quote was made; the lines must come to this after the discount */
   lockedPrice: number | null;
   status: QuoteStatus;

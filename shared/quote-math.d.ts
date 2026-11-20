@@ -1,7 +1,11 @@
 export type VatMode = 'exclusive' | 'inclusive' | 'none';
 export const VAT_MODES: VatMode[];
+/** 'baht' rounds every amount on a quote to whole baht, 'satang' keeps two decimals */
+export type Rounding = 'baht' | 'satang';
+export const ROUNDINGS: Rounding[];
 export function wholeBaht(n: number): number;
-export function lineAmount(item: { quantity: number; unitPrice: number }): number;
+export function toSatang(n: number): number;
+export function lineAmount(item: { quantity: number; unitPrice: number }, rounding?: Rounding): number;
 export interface QuoteTotals {
   subtotal: number;
   discount: number;
@@ -17,6 +21,7 @@ export function quoteTotals(q: {
   discountRate?: number;
   taxRate?: number;
   vatMode?: VatMode;
+  rounding?: Rounding;
 }): QuoteTotals;
 export interface PricedItem {
   quantity: number;
@@ -38,4 +43,4 @@ export interface JobPricing {
 export function jobPricing(costItems: PricedItem[], groups?: PricedGroup[] | null, markupPct?: number): JobPricing;
 export function markupOf(item: { groupId?: number | null }, groups?: PricedGroup[] | null, markupPct?: number): number;
 export function projectPrice(costItems: PricedItem[], markupPct: number, groups?: PricedGroup[] | null): number;
-export function fitToPrice<T extends { quantity: number; unitPrice: number }>(items: T[], target: number, discountRate?: number): T[] | null;
+export function fitToPrice<T extends { quantity: number; unitPrice: number }>(items: T[], target: number, discountRate?: number, rounding?: Rounding): T[] | null;
