@@ -20,6 +20,12 @@ export interface QuoteTotals {
   total: number;
   /** the VAT % actually applied (0 when the quote has no VAT) */
   rate: number;
+  /** the withholding-tax % applied (0 when none is withheld) */
+  whtRate: number;
+  /** tax the customer holds back: a % of the price without VAT */
+  withholding: number;
+  /** what the customer actually transfers: total less withholding */
+  payable: number;
 }
 export function quoteTotals(q: {
   items: Array<{ quantity: number; unitPrice: number; roundUp?: boolean }>;
@@ -27,6 +33,7 @@ export function quoteTotals(q: {
   taxRate?: number;
   vatMode?: VatMode;
   rounding?: Rounding;
+  whtRate?: number;
 }): QuoteTotals;
 export interface PricedItem {
   quantity: number;

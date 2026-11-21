@@ -171,6 +171,11 @@ export interface Quote {
   createdAt: string;
   itemCount: number;
   totalAmount: number;
+  /** withholding tax: the % the customer holds back from the price without VAT (0 = none) */
+  whtRate: number;
+  withholding: number;
+  /** what the customer actually transfers: totalAmount less withholding */
+  payableAmount: number;
   items: QuoteItem[];
 }
 

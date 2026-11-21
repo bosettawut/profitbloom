@@ -357,6 +357,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE quote_items ADD COLUMN round_up INTEGER NOT NULL DEFAULT 0;
   `,
+
+  // 10 — withholding tax on a quote: the % the customer holds back from the price without VAT (0 = none)
+  `
+  ALTER TABLE quotes ADD COLUMN wht_rate DOUBLE PRECISION NOT NULL DEFAULT 0;
+  `,
 ];
 
 async function schemaVersion(q) {
