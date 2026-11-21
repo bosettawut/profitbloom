@@ -12,6 +12,7 @@ import {
   marginToMarkup,
   markupToMargin,
   numbers,
+  remargined,
   repriced,
   review,
   risks,
@@ -146,6 +147,59 @@ test('Headings: moving the job to a new price keeps every heading\'s share, neve
   near(n.headings[1].price, 40000, 1e-6);
   near(r.profitMargin, 20, 1e-9);
   near(numbers({ ...j, groups: repriced(j, 50000).groups }).price, 100000, 1e-6);
+});
+
+test('Headings: a new overall margin is shared out, so headings with different margins stay different', () => {
+  const j = job({
+    groups: [{ id: 1, name: 'รายการต้นทุน', markup: marginToMarkup(35) }, { id: 2, name: 'test', markup: marginToMarkup(14) }],
+    costItems: [item('ดอกไม้และวัสดุ', 'material', 10000, 1), item('ค่าแรงทีมงาน', 'labor', 10000, 1), item('ขนส่ง', 'transport', 100, 1), item('ดอกไม้', 'material', 10000, 2)],
+  });
+  const before = numbers(j);
+  near(before.margin, 29.26, 0.01);
+  const r = remargined(j, 35);
+  const n = numbers({ ...j, groups: r.groups });
+  near(n.margin, 35, 1e-9);
+  near(n.price, 30100 / 0.65, 1e-6);
+  // both headings went up, and each still has the share of the price it had before
+  near(n.headings[0].margin, 40.27, 0.01);
+  near(n.headings[1].margin, 20.97, 0.01);
+  near(n.headings[0].price / n.price, before.headings[0].price / before.price, 1e-12);
+  near(r.profitMargin, (n.price / 30100 - 1) * 100, 1e-9);
+  // the same as typing the price that gives 35%
+  assert.deepEqual(r, repriced(j, 30100 / 0.65));
+});
+
+test('Headings: lowering the overall margin never takes a heading below its cost', () => {
+  const j = job({
+    groups: [{ id: 1, name: 'ก', markup: marginToMarkup(35) }, { id: 2, name: 'ข', markup: marginToMarkup(14) }, { id: 3, name: 'ว่าง', markup: marginToMarkup(5) }],
+    costItems: [item('ดอกไม้', 'material', 20100, 1), item('ทีม', 'labor', 10000, 2)],
+  });
+  const n = numbers({ ...j, groups: remargined(j, 10).groups });
+  near(n.margin, 10, 1e-9);
+  // the 14% heading cannot give up enough, so it stops at its cost and the other one covers the rest
+  near(n.headings[1].price, 10000, 1e-6);
+  near(n.headings[1].margin, 0, 1e-9);
+  near(n.headings[0].price, 30100 / 0.9 - 10000, 1e-6);
+  assert.ok(remargined(j, 10).groups.every((g) => g.markup >= 0));
+  // all the way down: every heading at its cost
+  const flat = numbers({ ...j, groups: remargined(j, 0).groups });
+  near(flat.price, 30100, 1e-6);
+  near(flat.headings[0].margin, 0, 1e-9);
+});
+
+test('Headings: with equal margins, or nothing costed yet, every heading takes the overall margin', () => {
+  const equal = job({
+    groups: [{ id: 1, name: 'ก', markup: marginToMarkup(35) }, { id: 2, name: 'ข', markup: marginToMarkup(35) }],
+    costItems: [item('ดอกไม้', 'material', 7000, 1), item('ทีม', 'labor', 3000, 2)],
+  });
+  for (const g of remargined(equal, 25).groups) near(markupToMargin(g.markup), 25, 1e-9);
+  const empty = job({ groups: [{ id: 1, name: 'ก', markup: marginToMarkup(35) }, { id: 2, name: 'ข', markup: marginToMarkup(14) }] });
+  const r = remargined(empty, 30);
+  for (const g of r.groups) near(markupToMargin(g.markup), 30, 1e-9);
+  near(r.profitMargin, marginToMarkup(30), 1e-9);
+  // out-of-range margins are held to 0–95
+  near(numbers({ ...equal, groups: remargined(equal, 120).groups }).margin, 95, 1e-9);
+  near(numbers({ ...equal, groups: remargined(equal, -5).groups }).margin, 0, 1e-9);
 });
 
 test('Job conditions come from the cost categories', () => {
