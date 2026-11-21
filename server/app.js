@@ -774,7 +774,7 @@ async function serializeQuote(q) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
   const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up }));
   const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
-  const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding });
+  const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding, whtRate: q.wht_rate });
   const today = new Date().toISOString().slice(0, 10);
   const status = ['draft', 'sent'].includes(q.status) && q.valid_until && q.valid_until < today ? 'expired' : q.status;
   return {
@@ -803,6 +803,10 @@ async function serializeQuote(q) {
     createdAt: q.created_at,
     itemCount: items.length,
     totalAmount: totals.total,
+    /** withholding tax: the % the customer holds back from the price without VAT, the amount, and what is left to transfer */
+    whtRate: totals.whtRate,
+    withholding: totals.withholding,
+    payableAmount: totals.payable,
     items: lines.map((i) => ({ ...i, total: lineAmount(i, rounding) })),
   };
 }
@@ -827,6 +831,7 @@ async function readQuoteBody(userId, body, existing) {
     notes: str(body.notes, 5000),
     tax_rate: num(body.taxRate ?? 7, { min: 0, max: 100 }),
     discount_rate: num(body.discountRate ?? 0, { min: 0, max: 100 }),
+    wht_rate: num(body.whtRate ?? 0, { min: 0, max: 100 }),
     vat_mode: VAT_MODES.includes(body.vatMode) ? body.vatMode : undefined,
     rounding: ROUNDINGS.includes(body.rounding) ? body.rounding : undefined,
     status: body.status && QUOTE_STATUS[body.status] && body.status !== 'expired' ? body.status : undefined,
@@ -924,9 +929,9 @@ app.post('/api/quotes', route(async (req, res) => {
     const lockedPrice = await lockedPriceOf(d.project_id);
     checkLockedPrice(lockedPrice, d, d.items || []);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, vat_mode, rounding, locked_price, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
-      .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate,
+      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate,
         d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
@@ -949,9 +954,9 @@ app.put('/api/quotes/:id', route(async (req) => {
     await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
     // only a change to the lines or the discount can break the lock; old quotes can still change status
     if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
-    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, vat_mode=?, rounding=?, status=?, updated_at=${NOW}
+    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, wht_rate=?, vat_mode=?, rounding=?, status=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status, existing.id, req.user.id);
+      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
     if (status !== existing.status) {
       await syncProjectStatus(req.user.id, d.project_id, status);

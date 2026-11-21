@@ -15,6 +15,8 @@ export interface QuoteDocData {
   notes: string;
   taxRate: number;
   discountRate: number;
+  /** withholding tax %, 0 or missing when the customer holds nothing back */
+  whtRate?: number;
   vatMode: VatMode;
   rounding?: Rounding;
   items: Array<{ description: string; quantity: number; unitPrice: number; roundUp?: boolean }>;
@@ -36,9 +38,9 @@ const thaiDate = (iso: string) =>
  */
 export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote }, ref) {
   const items = quote.items.filter((i) => i.description.trim() || i.quantity * i.unitPrice > 0);
-  const { subtotal, discount, beforeVat, vat, total, rate } = quoteTotals({ ...quote, items });
+  const { subtotal, discount, beforeVat, vat, total, rate, whtRate, withholding, payable } = quoteTotals({ ...quote, items });
   // amounts show their satang only when some amount on this quote has any
-  const amounts = [subtotal, discount, vat, total, ...items.map((i) => lineAmount(i, quote.rounding))];
+  const amounts = [subtotal, discount, vat, total, withholding, ...items.map((i) => lineAmount(i, quote.rounding))];
   const digits = amounts.some((n) => !Number.isInteger(n)) ? 2 : 0;
   const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
@@ -139,6 +141,15 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
               <td className="pt-2.5" style={{ fontSize: 15, fontWeight: 700 }}>ยอดรวมสุทธิ</td>
               <td className="pt-2.5 text-right" style={{ fontSize: 17, fontWeight: 700, color: '#673AB7' }}>฿{money(total)}</td>
             </tr>
+            {withholding > 0 && (
+              <>
+                <tr><td className="pt-2 pb-1 text-[#5B566D]">หัก ณ ที่จ่าย {whtRate}%</td><td className="pt-2 pb-1 text-right">-{money(withholding)}</td></tr>
+                <tr style={{ borderTop: '1px solid #ECEAF2' }}>
+                  <td className="pt-2" style={{ fontWeight: 700 }}>ยอดชำระ</td>
+                  <td className="pt-2 text-right" style={{ fontWeight: 700 }}>฿{money(payable)}</td>
+                </tr>
+              </>
+            )}
           </tbody>
         </table>
       </div>

@@ -251,6 +251,29 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await A.call('POST', `/quotes/${r.data.id}/project`);
   ok('ใบเสนอราคาแบบไม่ปัดเศษ → โปรเจ็กต์ได้ราคาที่ตกลงพร้อมสตางค์ (94.99)', r.status === 201 && r.data.agreedPrice === 94.99, JSON.stringify([r.status, r.data.agreedPrice]));
   if (r.data?.id) await A.call('DELETE', `/projects/${r.data.id}`);
+  // withholding tax: a % of the price without VAT, taken off what the customer transfers
+  const big = [{ description: 'ค่าจัดงาน', quantity: 1, unitPrice: 10000 }];
+  r = await make({ taxRate: 7, items: big });
+  ok('ใบใหม่ไม่หัก ณ ที่จ่าย: ยอดชำระ = ยอดรวมสุทธิ', r.data.whtRate === 0 && r.data.withholding === 0 && r.data.payableAmount === 10700, JSON.stringify([r.data.whtRate, r.data.withholding, r.data.payableAmount]));
+  const wq = r.data;
+  r = await A.call('PUT', `/quotes/${wq.id}`, { whtRate: 3 });
+  ok('หัก ณ ที่จ่าย 3% ของยอดก่อน VAT: 10,700 - 300 = 10,400 และยอดรวมสุทธิคงเดิม', r.status === 200 && r.data.withholding === 300 && r.data.payableAmount === 10400 && r.data.totalAmount === 10700, JSON.stringify([r.data.withholding, r.data.payableAmount, r.data.totalAmount]));
+  r = await A.call('PUT', `/quotes/${wq.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่น อัตราหัก ณ ที่จ่ายคงเดิม', r.data.whtRate === 3 && r.data.payableAmount === 10400, r.data.whtRate);
+  r = await A.call('PUT', `/quotes/${wq.id}`, { vatMode: 'inclusive', items: [{ description: 'ค่าจัดงาน', quantity: 1, unitPrice: 10700 }] });
+  ok('ราคารวม VAT: หักจากมูลค่าก่อนภาษี 10,000 = 300 เหลือชำระ 10,400', r.data.withholding === 300 && r.data.payableAmount === 10400, JSON.stringify([r.data.withholding, r.data.payableAmount]));
+  r = await A.call('PUT', `/quotes/${wq.id}`, { vatMode: 'exclusive', discountRate: 10, items: [{ description: 'ค่าจัดงาน', quantity: 3, unitPrice: 33.33 }] });
+  ok('หักหลังส่วนลดและคิดถึงสตางค์: 99.99 -10.00 = 89.99 → หัก 2.70 · รวม 96.29 · ชำระ 93.59', r.data.withholding === 2.7 && r.data.totalAmount === 96.29 && r.data.payableAmount === 93.59, JSON.stringify([r.data.withholding, r.data.totalAmount, r.data.payableAmount]));
+  r = await A.call('GET', '/quotes');
+  ok('รายการใบเสนอราคายังแสดงยอดรวมสุทธิ และบอกยอดชำระ', r.data.find((q) => q.id === wq.id)?.totalAmount === 96.29 && r.data.find((q) => q.id === wq.id)?.payableAmount === 93.59);
+  r = await A.call('PUT', `/quotes/${wq.id}`, { whtRate: 150 });
+  ok('อัตราหัก ณ ที่จ่ายเกิน 100% ถูกจำกัดไว้ที่ 100 (เหมือนส่วนลด)', r.status === 200 && r.data.whtRate === 100, r.data.whtRate);
+  r = await A.call('PUT', `/quotes/${wq.id}`, { whtRate: -1 });
+  ok('อัตราหัก ณ ที่จ่ายติดลบ กลายเป็น 0', r.status === 200 && r.data.whtRate === 0 && r.data.withholding === 0, r.data.whtRate);
+  r = await A.call('PUT', `/quotes/${wq.id}`, { whtRate: 0 });
+  ok('ตั้งกลับเป็น 0 = ไม่หัก', r.status === 200 && r.data.withholding === 0 && r.data.payableAmount === r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${lq.id}`, { whtRate: 3 });
+  ok('หัก ณ ที่จ่ายไม่กระทบราคาที่ล็อก: ยังบันทึกได้ และหัก 3% ของ 1,500 = 45', r.status === 200 && r.data.withholding === 45 && r.data.payableAmount === 1560, JSON.stringify([r.status, r.data.withholding, r.data.payableAmount]));
   for (const id of [lp.id, empty.id]) await A.call('DELETE', `/projects/${id}`);
   for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
 }

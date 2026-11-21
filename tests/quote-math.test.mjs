@@ -83,3 +83,29 @@ test('fitting to a locked price leaves rounded-up lines on whole baht', () => {
   // and not at all when every line rounds up
   assert.equal(fitToPrice(items.map((i) => ({ ...i, roundUp: true })), 150.75, 0, 'line'), null);
 });
+
+test('withholding tax is a % of the price without VAT, taken off what the customer transfers', () => {
+  const items = [{ quantity: 1, unitPrice: 10000 }];
+  const t = quoteTotals({ items, taxRate: 7, rounding: 'line', whtRate: 3 });
+  assert.deepEqual([t.total, t.withholding, t.payable], [10700, 300, 10400]);
+  // the quote's own total does not move
+  assert.equal(quoteTotals({ items, taxRate: 7, rounding: 'line' }).total, t.total);
+});
+
+test('withholding follows the discount and the VAT mode', () => {
+  const items = [{ quantity: 1, unitPrice: 10700 }];
+  const inside = quoteTotals({ items, taxRate: 7, vatMode: 'inclusive', rounding: 'line', whtRate: 3 });
+  assert.deepEqual([inside.beforeVat, inside.withholding, inside.payable], [10000, 300, 10400]);
+  const none = quoteTotals({ items, discountRate: 10, vatMode: 'none', rounding: 'line', whtRate: 3 });
+  assert.deepEqual([none.afterDiscount, none.withholding, none.payable], [9630, 288.9, 9341.1]);
+});
+
+test('withholding keeps the satang, is whole baht on an old quote, and is nothing at 0%', () => {
+  const items = [{ quantity: 3, unitPrice: 33.33 }];
+  const line = quoteTotals({ items, taxRate: 7, rounding: 'line', whtRate: 3 });
+  assert.deepEqual([line.withholding, line.payable], [3, 103.99]);
+  const old = quoteTotals({ items, taxRate: 7, rounding: 'baht', whtRate: 1.5 });
+  assert.deepEqual([old.total, old.withholding, old.payable], [107, 2, 105]);
+  const off = quoteTotals({ items, taxRate: 7, rounding: 'line' });
+  assert.deepEqual([off.whtRate, off.withholding, off.payable], [0, 0, off.total]);
+});

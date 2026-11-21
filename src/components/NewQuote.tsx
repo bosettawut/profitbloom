@@ -76,6 +76,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const [taxRate, setTaxRate] = useState(7);
   const [vatMode, setVatMode] = useState<VatMode>(user.vatMode);
   const [discountRate, setDiscountRate] = useState(0);
+  // withholding tax: only some customers (companies paying for a service) hold it back, so it starts at none
+  const [whtRate, setWhtRate] = useState(0);
   const [notification, setNotification] = useState('');
   const contactPrompt = useCustomerContactPrompt();
   /** the contact details this quote started with (from its project, or as last saved): unchanged, they are not asked about */
@@ -105,6 +107,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
+        setWhtRate(q.whtRate);
         setVatMode(q.vatMode);
         setRounding(q.rounding === 'baht' ? 'baht' : 'line');
         setLockedPrice(q.lockedPrice);
@@ -114,9 +117,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       .finally(() => setLoading(false));
   }, [quoteId, startInPreview]);
 
-  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding });
+  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate, withholding, payable } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding, whtRate });
   // show the satang only when some amount on this quote has any, so a whole-baht quote stays clean
-  const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
+  const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, withholding, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
   const money = (n: number) => baht(n, showSatang ? 2 : 0);
   /** how far the lines are from the locked job price (0 = they match) */
   const lockGap = lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
@@ -194,6 +197,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         updateCustomer,
         taxRate,
         discountRate,
+        whtRate,
         vatMode,
         rounding,
         status: nextStatus === 'expired' ? undefined : nextStatus,
@@ -226,7 +230,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   };
 
   const docRef = useRef<HTMLDivElement>(null);
-  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, vatMode, rounding, items: quoteItems };
+  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, whtRate, vatMode, rounding, items: quoteItems };
   const [exporting, setExporting] = useState(false);
 
   /** Saves first so the PDF always carries a real quote number, then downloads it. */
@@ -271,6 +275,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ${money(i.total)}`),
         '',
         `ยอดรวมสุทธิ ${money(saved.totalAmount)}`,
+        ...(saved.withholding > 0 ? [`หัก ณ ที่จ่าย ${saved.whtRate}% ${money(saved.withholding)}`, `ยอดชำระ ${money(saved.payableAmount)}`] : []),
         saved.validUntilText ? `ใบเสนอราคานี้ใช้ได้ถึง ${saved.validUntilText}` : '',
         '',
         user.businessName || user.name,
@@ -564,7 +569,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">การคำนวณเพิ่มเติม</h3>
             
-            <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
+            <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
               <div>
                 <label className="pb-label">ส่วนลด (%)</label>
                 <input
@@ -601,8 +606,22 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   />
                 </div>
               )}
+
+              <div>
+                <label className="pb-label">หัก ณ ที่จ่าย (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={whtRate}
+                  onChange={(e) => setWhtRate(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
+                  className="pb-input"
+                />
+              </div>
             </div>
-            {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-3 md:mt-4">ส่วนลดและ VAT คิดถึงสตางค์ ไม่ปัดเศษ</p>}
+            <p className="text-xs text-ink-muted mt-3 md:mt-4">หัก ณ ที่จ่าย: ใส่ 0 ถ้าลูกค้าไม่หัก ค่าบริการทั่วไปหัก 3% คิดจากยอดก่อน VAT</p>
+            {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-1">ส่วนลด VAT และหัก ณ ที่จ่าย คิดถึงสตางค์ ไม่ปัดเศษ</p>}
           </div>
         </div>
 
@@ -660,6 +679,19 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   {money(grandTotal)}
                 </span>
               </div>
+
+              {whtRate > 0 && (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-sm md:text-base text-ink-muted">หัก ณ ที่จ่าย ({whtRate}%)</span>
+                    <span className="text-sm md:text-base text-rose-600">-{money(withholding)}</span>
+                  </div>
+                  <div className="flex justify-between pt-3 md:pt-4 border-t border-line text-base md:text-lg font-medium">
+                    <span className="text-ink">ยอดชำระ</span>
+                    <span className="text-ink">{money(payable)}</span>
+                  </div>
+                </>
+              )}
             </div>
 
             {lockedPrice !== null && (

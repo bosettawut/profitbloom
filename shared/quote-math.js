@@ -33,21 +33,30 @@ export const lineAmount = (item, rounding = 'baht') => {
  *   discount       taken off the subtotal
  *   afterDiscount  what the lines come to after the discount — the figure a locked price is compared with
  *   beforeVat/vat  the price without VAT and the VAT itself
- *   total          what the customer pays
+ *   total          the quote's amount, VAT included
+ *   withholding    tax the customer holds back and pays to the revenue office for the seller: a % of the price without VAT
+ *   payable        what the customer actually transfers: total less withholding
  */
-export function quoteTotals({ items, discountRate = 0, taxRate = 0, vatMode = 'exclusive', rounding = 'baht' }) {
+export function quoteTotals({ items, discountRate = 0, taxRate = 0, vatMode = 'exclusive', rounding = 'baht', whtRate = 0 }) {
   // every sum goes back through the rounder: adding satang amounts as floats leaves 0.30000000000000004-style noise
   const r = rounder(rounding);
   const subtotal = r(items.reduce((s, i) => s + lineAmount(i, rounding), 0));
   const discount = r(subtotal * (discountRate / 100));
   const afterDiscount = r(subtotal - discount);
   const rate = vatMode === 'none' ? 0 : Number(taxRate) || 0;
+  const wht = Math.min(100, Math.max(0, Number(whtRate) || 0));
+  // withholding is worked out on the price without VAT, then taken off what the customer transfers
+  const withheld = (beforeVat, total) => {
+    const withholding = r(beforeVat * (wht / 100));
+    return { whtRate: wht, withholding, payable: r(total - withholding) };
+  };
   if (vatMode === 'inclusive') {
     const beforeVat = r((afterDiscount * 100) / (100 + rate));
-    return { subtotal, discount, afterDiscount, beforeVat, vat: r(afterDiscount - beforeVat), total: afterDiscount, rate };
+    return { subtotal, discount, afterDiscount, beforeVat, vat: r(afterDiscount - beforeVat), total: afterDiscount, rate, ...withheld(beforeVat, afterDiscount) };
   }
   const vat = r(afterDiscount * (rate / 100));
-  return { subtotal, discount, afterDiscount, beforeVat: afterDiscount, vat, total: r(afterDiscount + vat), rate };
+  const total = r(afterDiscount + vat);
+  return { subtotal, discount, afterDiscount, beforeVat: afterDiscount, vat, total, rate, ...withheld(afterDiscount, total) };
 }
 
 /**
