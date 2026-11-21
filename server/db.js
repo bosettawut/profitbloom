@@ -352,6 +352,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE quotes ADD COLUMN rounding TEXT NOT NULL DEFAULT 'baht';
   `,
+
+  // 9 — each line of a quote says whether its amount rounds up to a whole baht
+  `
+  ALTER TABLE quote_items ADD COLUMN round_up INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 async function schemaVersion(q) {

@@ -14,6 +14,8 @@ interface QuoteItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  /** round this line's amount up to a whole baht as soon as it has a fraction */
+  roundUp?: boolean;
 }
 
 interface NewQuoteProps {
@@ -53,17 +55,19 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     const price = fromProject ? fromProject.agreedPrice ?? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
     return price > 0 ? price : null;
   });
-  // amounts are whole baht unless the quote says to keep the satang; a job price that has satang can only be met that way
-  const [rounding, setRounding] = useState<Rounding>(() => (lockedPrice !== null && !Number.isInteger(lockedPrice) ? 'satang' : 'baht'));
-  const money = (n: number) => baht(n, rounding === 'satang' ? 2 : 0);
+  // each line chooses whether its amount rounds up to a whole baht ('line'); a quote made before that
+  // choice existed opens on the old rule ('baht') until the user switches it
+  const [rounding, setRounding] = useState<Rounding>('line');
+  // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
+  const startRoundUp = lockedPrice === null || Number.isInteger(lockedPrice);
 
   // it lists each cost item at its selling price (cost + its heading's margin) in whole baht; rounding each
   // line can leave the sum a few baht off the job's price, so one line takes up the difference
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
-    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }];
+    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: true }];
     const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
       const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin) / 100));
-      return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0 };
+      return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0, roundUp: startRoundUp };
     });
     const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
     return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
@@ -98,11 +102,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           validUntil: q.validUntil,
           notes: q.notes
         });
-        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }]);
+        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
         setVatMode(q.vatMode);
-        setRounding(q.rounding);
+        setRounding(q.rounding === 'baht' ? 'baht' : 'line');
         setLockedPrice(q.lockedPrice);
         if (startInPreview) setShowPreview(true);
       })
@@ -111,6 +115,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   }, [quoteId, startInPreview]);
 
   const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding });
+  // show the satang only when some amount on this quote has any, so a whole-baht quote stays clean
+  const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
+  const money = (n: number) => baht(n, showSatang ? 2 : 0);
   /** how far the lines are from the locked job price (0 = they match) */
   const lockGap = lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
 
@@ -122,10 +129,13 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     showNotification('ปรับยอดรายการให้ตรงกับราคาที่ล็อกแล้ว');
   };
 
-  const changeRounding = (next: Rounding) => {
-    setRounding(next);
-    setQuoteItems((items) => items.map((i) => ({ ...i, total: lineAmount(i, next) })));
+  /** moves a quote from the old whole-baht rule to choosing line by line, starting with every line rounding up */
+  const chooseByLine = () => {
+    setRounding('line');
+    setQuoteItems((items) => items.map((i) => ({ ...i, roundUp: true })).map((i) => ({ ...i, total: lineAmount(i, 'line') })));
   };
+  const setRoundUp = (id: number, roundUp: boolean) =>
+    setQuoteItems((items) => items.map((i) => (i.id === id ? { ...i, roundUp, total: lineAmount({ ...i, roundUp }, rounding) } : i)));
 
   const updateQuoteItem = (id: number, field: string, value: string | number) => {
     setQuoteItems(items => items.map(item => {
@@ -147,7 +157,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       description: '',
       quantity: 1,
       unitPrice: 0,
-      total: 0
+      total: 0,
+      roundUp: rounding === 'line',
     }]);
   };
 
@@ -188,7 +199,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         status: nextStatus === 'expired' ? undefined : nextStatus,
         items: quoteItems
           .filter(item => item.description.trim() || item.total > 0)
-          .map(({ description, quantity, unitPrice }) => ({ description, quantity, unitPrice })),
+          .map(({ description, quantity, unitPrice, roundUp }) => ({ description, quantity, unitPrice, roundUp: !!roundUp })),
       };
       const saved = savedId ? await api.updateQuote(savedId, body) : await api.createQuote(body);
       setSavedId(saved.id);
@@ -427,6 +438,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                         />
                       </div>
                     </div>
+                    {rounding === 'line' && (
+                      <label className="flex items-center gap-2 text-sm text-ink">
+                        <input
+                          type="checkbox"
+                          checked={!!item.roundUp}
+                          onChange={(e) => setRoundUp(item.id, e.target.checked)}
+                          className="w-4 h-4 accent-[#673AB7]"
+                        />
+                        ปัดขึ้นเป็นบาทเต็ม
+                      </label>
+                    )}
                     <div className="flex justify-between items-center">
                       <div>
                         <span className="text-xs text-ink-muted">รวม: </span>
@@ -451,16 +473,18 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               <table className="w-full min-w-[34rem] table-fixed">
                 <colgroup>
                   <col />
-                  <col className="w-[5.5rem]" />
+                  <col className="w-20" />
+                  <col className="w-28" />
+                  {rounding === 'line' && <col className="w-14" />}
                   <col className="w-32" />
-                  <col className="w-[8.5rem]" />
-                  <col className="w-14" />
+                  <col className="w-12" />
                 </colgroup>
                 <thead>
                   <tr className="bg-canvas/60 border-b border-line">
                     <th className="text-left px-3 py-4 text-ink font-medium">รายละเอียด</th>
                     <th className="text-right px-3 py-4 text-ink font-medium">จำนวน</th>
                     <th className="text-right px-3 py-4 text-ink font-medium whitespace-nowrap">ราคา/หน่วย</th>
+                    {rounding === 'line' && <th className="text-center px-1 py-4 text-ink font-medium" title="ปัดยอดของรายการขึ้นเป็นบาทเต็มเมื่อมีเศษ">ปัด</th>}
                     <th className="text-right px-3 py-4 text-ink font-medium">รวม</th>
                     <th className="px-3 py-4"><span className="sr-only">ลบรายการ</span></th>
                   </tr>
@@ -494,6 +518,18 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                           className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
+                      {rounding === 'line' && (
+                        <td className="px-1 py-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={!!item.roundUp}
+                            onChange={(e) => setRoundUp(item.id, e.target.checked)}
+                            aria-label="ปัดขึ้นเป็นบาทเต็ม"
+                            title="ปัดยอดของรายการนี้ขึ้นเป็นบาทเต็มเมื่อมีเศษ"
+                            className="w-4 h-4 align-middle accent-[#673AB7] cursor-pointer"
+                          />
+                        </td>
+                      )}
                       <td className="px-3 py-4 text-right whitespace-nowrap">
                         <span className="text-ink font-medium">
                           {money(item.total)}
@@ -514,26 +550,19 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 </tbody>
               </table>
             </div>
+            {rounding === 'line' ? (
+              <p className="text-xs text-ink-muted mt-3 md:mt-4">รายการที่ติ๊ก "ปัด" จะปัดยอดขึ้นเป็นบาทเต็มทันทีที่มีเศษ เช่น 99.01 เป็น 100 รายการที่ไม่ติ๊กคิดถึงสตางค์</p>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#F7F6FA] px-3 py-3 mt-3 md:mt-4">
+                <p className="text-xs text-ink-muted">ใบนี้ใช้การปัดแบบเดิม: ทุกยอดปัดเป็นบาทเต็ม (ตั้งแต่ 50 สตางค์ปัดขึ้น)</p>
+                <button type="button" onClick={chooseByLine} className="pb-btn-secondary !py-2 text-sm">เลือกปัดทีละรายการ</button>
+              </div>
+            )}
           </div>
 
           {/* Tax and Discount Settings */}
           <div className="pb-card p-4 md:p-6">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 md:mb-6">
-              <h3 className="text-base md:text-lg text-ink font-semibold">การคำนวณเพิ่มเติม</h3>
-              <div role="group" aria-label="การปัดเศษ" className="flex bg-canvas rounded-full p-1">
-                {(['baht', 'satang'] as const).map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    aria-pressed={rounding === r}
-                    onClick={() => changeRounding(r)}
-                    className={`px-3 py-1.5 text-xs rounded-full transition-colors ${rounding === r ? 'bg-white text-ink shadow-card font-medium' : 'text-ink-muted hover:text-ink'}`}
-                  >
-                    {r === 'baht' ? 'ปัดเป็นบาทเต็ม' : 'ไม่ปัดเศษ'}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">การคำนวณเพิ่มเติม</h3>
             
             <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
               <div>
@@ -573,11 +602,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 </div>
               )}
             </div>
-            <p className="text-xs text-ink-muted mt-3 md:mt-4">
-              {rounding === 'baht'
-                ? 'ทุกยอดในใบเสนอราคาปัดเป็นบาทเต็ม (ตั้งแต่ 50 สตางค์ปัดขึ้น)'
-                : 'ทุกยอดในใบเสนอราคาคิดถึงสตางค์ (ทศนิยม 2 ตำแหน่ง)'}
-            </p>
+            {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-3 md:mt-4">ส่วนลดและ VAT คิดถึงสตางค์ ไม่ปัดเศษ</p>}
           </div>
         </div>
 

@@ -265,7 +265,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                     <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
                     <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
                     <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
-                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, quote.rounding === 'satang' ? 2 : 0)}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}</td>
                     <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <select
                         value={quote.status}
@@ -342,7 +342,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                 <div>
                   <div className="text-xs text-ink-muted mb-1">จำนวนเงิน</div>
                   <div className="font-medium text-ink text-sm md:text-base">
-                    {baht(quote.totalAmount, quote.rounding === 'satang' ? 2 : 0)}
+                    {baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}
                   </div>
                 </div>
                 <div>

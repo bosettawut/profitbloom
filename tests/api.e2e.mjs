@@ -160,8 +160,8 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await make({ taxRate: 7, discountRate: 10, items: [{ description: 'a', quantity: 2, unitPrice: 1000 }] });
   ok('บวก VAT: 2,000 -10% +7% = 1,926', r.data.totalAmount === 1926, r.data.totalAmount);
   const plain = r.data;
-  r = await make({ taxRate: 7, items: [{ description: 'a', quantity: 3, unitPrice: 33.33 }, { description: 'b', quantity: 1, unitPrice: 10.5 }] });
-  ok('ปัดเป็นบาทเต็มทุกบรรทัด: 99.99→100, 10.50→11, VAT 7% ของ 111 = 8, รวม 119', r.data.items[0].total === 100 && r.data.items[1].total === 11 && r.data.totalAmount === 119, JSON.stringify([r.data.items.map((i) => i.total), r.data.totalAmount]));
+  r = await make({ taxRate: 7, rounding: 'baht', items: [{ description: 'a', quantity: 3, unitPrice: 33.33 }, { description: 'b', quantity: 1, unitPrice: 10.5 }] });
+  ok('กติกาเดิม (ใบเก่า) ปัดบาทเต็มทุกยอด: 99.99→100, 10.50→11, VAT 7% ของ 111 = 8, รวม 119', r.data.items[0].total === 100 && r.data.items[1].total === 11 && r.data.totalAmount === 119, JSON.stringify([r.data.items.map((i) => i.total), r.data.totalAmount]));
   r = await make({ taxRate: 7, vatMode: 'inclusive', items: [{ description: 'a', quantity: 1, unitPrice: 10700 }] });
   ok('ถอด VAT จากยอดรวม: ลูกค้าจ่าย 10,700 เท่าเดิม', r.data.totalAmount === 10700 && r.data.vatMode === 'inclusive', r.data.totalAmount);
   r = await make({ taxRate: 7, vatMode: 'none', items: [{ description: 'a', quantity: 1, unitPrice: 10700 }] });
@@ -208,10 +208,22 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   const empty = r.data;
   r = await make({ projectId: empty.id, items: line(900) });
   ok('โปรเจ็กต์ที่ยังไม่มีต้นทุน ไม่ล็อกราคา', r.status === 201 && r.data.lockedPrice === null);
-  // rounding: whole baht unless the quote says to keep the satang
+  // rounding: each line chooses to round up; discount and VAT keep the satang
   const cents = [{ description: 'a', quantity: 3, unitPrice: 33.33 }];
-  r = await make({ taxRate: 7, discountRate: 5, items: cents });
-  ok('ใบเสนอราคาใหม่ปัดเป็นบาทเต็ม: 100 -5 +VAT 7 = 102', r.data.rounding === 'baht' && r.data.totalAmount === 102, JSON.stringify([r.data.rounding, r.data.totalAmount]));
+  const mixed = [{ description: 'ปัด', quantity: 3, unitPrice: 33.33, roundUp: true }, { description: 'ไม่ปัด', quantity: 1, unitPrice: 10.25 }];
+  r = await make({ taxRate: 7, discountRate: 5, items: mixed });
+  ok('ใบใหม่เลือกปัดทีละรายการ: 99.99→100 (ปัด), 10.25 คงเดิม', r.data.rounding === 'line' && r.data.items[0].total === 100 && r.data.items[0].roundUp === true && r.data.items[1].total === 10.25 && r.data.items[1].roundUp === false, JSON.stringify(r.data.items?.map((i) => [i.total, i.roundUp])));
+  ok('ส่วนลดและ VAT คิดถึงสตางค์: 110.25 -5.51 = 104.74 +7.33 = 112.07', r.data.totalAmount === 112.07, r.data.totalAmount);
+  const lineQ = r.data;
+  r = await make({ taxRate: 7, items: [{ description: 'a', quantity: 1, unitPrice: 99.01, roundUp: true }, { description: 'b', quantity: 1, unitPrice: 10.5, roundUp: true }, { description: 'c', quantity: 2, unitPrice: 50, roundUp: true }] });
+  ok('ปัดขึ้นทันทีที่มีเศษ: 99.01→100, 10.50→11, ยอดเต็ม 100 ไม่เปลี่ยน', JSON.stringify(r.data.items.map((i) => i.total)) === '[100,11,100]', JSON.stringify(r.data.items?.map((i) => i.total)));
+  ok('ทุกรายการปัดแล้ว VAT ยังคิดถึงสตางค์: 211 + 14.77 = 225.77', r.data.totalAmount === 225.77, r.data.totalAmount);
+  r = await A.call('PUT', `/quotes/${lineQ.id}`, { items: mixed.map((i) => ({ ...i, roundUp: !i.roundUp })) });
+  ok('สลับการปัดของแต่ละรายการ: 99.99 คงเดิม, 10.25→11', r.status === 200 && r.data.items[0].total === 99.99 && r.data.items[1].total === 11, JSON.stringify(r.data.items?.map((i) => i.total)));
+  r = await A.call('PUT', `/quotes/${lineQ.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่น การปัดของแต่ละรายการคงเดิม', r.data.items[0].roundUp === false && r.data.items[1].roundUp === true && r.data.rounding === 'line');
+  r = await make({ taxRate: 7, discountRate: 5, rounding: 'baht', items: cents });
+  ok('กติกาเดิมยังใช้ได้เมื่อระบุ: 100 -5 +VAT 7 = 102', r.data.rounding === 'baht' && r.data.totalAmount === 102, JSON.stringify([r.data.rounding, r.data.totalAmount]));
   const rq = r.data;
   r = await make({ taxRate: 7, discountRate: 5, rounding: 'satang', items: cents });
   ok('ไม่ปัดเศษ: 99.99 -5.00 = 94.99 +VAT 6.65 = 101.64', r.data.rounding === 'satang' && r.data.items[0].total === 99.99 && r.data.totalAmount === 101.64, JSON.stringify([r.data.items?.[0]?.total, r.data.totalAmount]));
@@ -224,13 +236,17 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await A.call('PUT', `/quotes/${rq.id}`, { rounding: 'baht' });
   ok('สลับกลับเป็นบาทเต็ม', r.data.rounding === 'baht' && r.data.totalAmount === 102, r.data.totalAmount);
   r = await make({ rounding: 'bogus', items: cents });
-  ok('ค่าการปัดเศษที่ไม่รู้จัก → บาทเต็ม', r.status === 201 && r.data.rounding === 'baht', r.data.rounding);
+  ok('ค่าการปัดเศษที่ไม่รู้จัก → เลือกทีละรายการ (ค่าเริ่มต้น)', r.status === 201 && r.data.rounding === 'line', r.data.rounding);
   r = await make({ taxRate: 7, vatMode: 'inclusive', rounding: 'satang', items: [{ description: 'a', quantity: 1, unitPrice: 1000 }] });
   ok('ไม่ปัดเศษ + ถอด VAT: ลูกค้าจ่าย 1,000 เท่าเดิม', r.data.totalAmount === 1000, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }] });
   ok('ไม่ปัดเศษกับราคาที่ล็อก: 1,499.97 ไม่เท่า 1,500 ถูกปฏิเสธ', r.status === 400, r.status);
   r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }, { description: 'ปรับยอด', quantity: 1, unitPrice: 0.03 }] });
   ok('ไม่ปัดเศษกับราคาที่ล็อก: รายการรวม 1,500.00 พอดี บันทึกได้', r.status === 200 && r.data.totalAmount === 1605, JSON.stringify([r.status, r.data.totalAmount]));
+  r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'line', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99, roundUp: true }] });
+  ok('เลือกปัดรายบรรทัดกับราคาที่ล็อก: 1,499.97 ปัดเป็น 1,500 ตรงราคาที่ล็อก บันทึกได้', r.status === 200 && r.data.items[0].total === 1500 && r.data.totalAmount === 1605, JSON.stringify([r.status, r.data.totalAmount]));
+  r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99, roundUp: false }] });
+  ok('เอาติ๊กปัดออกจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400, r.status);
   r = await make({ taxRate: 7, discountRate: 5, rounding: 'satang', status: 'approved', items: cents });
   r = await A.call('POST', `/quotes/${r.data.id}/project`);
   ok('ใบเสนอราคาแบบไม่ปัดเศษ → โปรเจ็กต์ได้ราคาที่ตกลงพร้อมสตางค์ (94.99)', r.status === 201 && r.data.agreedPrice === 94.99, JSON.stringify([r.status, r.data.agreedPrice]));
