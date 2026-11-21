@@ -17,7 +17,7 @@ export interface QuoteDocData {
   discountRate: number;
   vatMode: VatMode;
   rounding?: Rounding;
-  items: Array<{ description: string; quantity: number; unitPrice: number }>;
+  items: Array<{ description: string; quantity: number; unitPrice: number; roundUp?: boolean }>;
 }
 
 interface QuoteDocumentProps {
@@ -37,8 +37,9 @@ const thaiDate = (iso: string) =>
 export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote }, ref) {
   const items = quote.items.filter((i) => i.description.trim() || i.quantity * i.unitPrice > 0);
   const { subtotal, discount, beforeVat, vat, total, rate } = quoteTotals({ ...quote, items });
-  // amounts are whole baht, or show their satang when the quote keeps them
-  const digits = quote.rounding === 'satang' ? 2 : 0;
+  // amounts show their satang only when some amount on this quote has any
+  const amounts = [subtotal, discount, vat, total, ...items.map((i) => lineAmount(i, quote.rounding))];
+  const digits = amounts.some((n) => !Number.isInteger(n)) ? 2 : 0;
   const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
   return (

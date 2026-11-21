@@ -772,7 +772,7 @@ const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', appro
 
 async function serializeQuote(q) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
-  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price }));
+  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up }));
   const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
   const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding });
   const today = new Date().toISOString().slice(0, 10);
@@ -793,7 +793,7 @@ async function serializeQuote(q) {
     taxRate: q.tax_rate,
     discountRate: q.discount_rate,
     vatMode: q.vat_mode,
-    /** 'baht': every amount is whole baht; 'satang': amounts keep two decimals */
+    /** 'line': each line chooses to round up to a whole baht, sums keep the satang; 'baht': an older quote, whole baht throughout */
     rounding,
     /** the job's price when the quote was made; the lines must come to this after the discount */
     lockedPrice: q.locked_price,
@@ -831,7 +831,7 @@ async function readQuoteBody(userId, body, existing) {
     rounding: ROUNDINGS.includes(body.rounding) ? body.rounding : undefined,
     status: body.status && QUOTE_STATUS[body.status] && body.status !== 'expired' ? body.status : undefined,
     items: Array.isArray(body.items)
-      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit_price: num(i.unitPrice, { min: 0 }) }))
+      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit_price: num(i.unitPrice, { min: 0 }), round_up: i.roundUp === true ? 1 : 0 }))
       : null,
   };
 }
@@ -839,7 +839,7 @@ async function readQuoteBody(userId, body, existing) {
 /** a quote made from a job must come to the job's price, so the profit worked out for the job holds */
 function checkLockedPrice(lockedPrice, d, items) {
   if (lockedPrice === null || lockedPrice === undefined) return;
-  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: d.discount_rate, rounding: d.rounding });
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: d.discount_rate, rounding: d.rounding });
   if (afterDiscount !== toSatang(lockedPrice)) {
     const baht = (n) => `฿${n.toLocaleString('th-TH')}`;
     throw new HttpError(400, `ยอดรวมรายการ ${baht(afterDiscount)} ไม่เท่ากับราคาโปรเจ็กต์ที่ล็อกไว้ ${baht(lockedPrice)} กด "ปรับส่วนต่างอัตโนมัติ" หรือแก้รายการให้ยอดตรงกัน`);
@@ -859,8 +859,8 @@ async function lockedPriceOf(projectId) {
 
 async function replaceQuoteItems(quoteId, items) {
   await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
-  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit_price, sort) VALUES (?, ?, ?, ?, ?)');
-  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit_price, idx);
+  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?)');
+  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit_price, i.round_up ? 1 : 0, idx);
 }
 
 async function syncProjectStatus(userId, projectId, quoteStatus) {
@@ -885,7 +885,7 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
   const quote = await getQuote(req.user.id, req.params.id);
   if (quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้มีโปรเจ็กต์อยู่แล้ว');
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
-  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding: quote.rounding });
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding: quote.rounding });
   if (!(afterDiscount > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนสร้างโปรเจ็กต์');
   const rules = parseRules(req.user.rules);
   const title = quote.project_title || `งานของ ${quote.client_name}`;
@@ -913,6 +913,8 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
 
 app.post('/api/quotes', route(async (req, res) => {
   const d = await readQuoteBody(req.user.id, req.body);
+  // a new quote lets each line choose; only quotes that already exist stay on the old whole-baht rule
+  d.rounding ||= 'line';
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const quote = await transaction(async () => {
     const code = await nextCode('quotes', req.user.id, 'QT');
@@ -925,7 +927,7 @@ app.post('/api/quotes', route(async (req, res) => {
       .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, vat_mode, rounding, locked_price, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate,
-        d.vat_mode || req.user.vat_mode, d.rounding || 'baht', lockedPrice, status);
+        d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');

@@ -403,7 +403,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
                       {q.code} · {q.createdDate}
                     </p>
                   </div>
-                  <span className="hidden sm:block text-sm font-medium text-ink">{baht(q.totalAmount, q.rounding === 'satang' ? 2 : 0)}</span>
+                  <span className="hidden sm:block text-sm font-medium text-ink">{baht(q.totalAmount, Number.isInteger(q.totalAmount) ? 0 : 2)}</span>
                   <span className={`px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${statusPill(q.status)}`}>{q.statusText}</span>
                   <ChevronRight className="w-4 h-4 text-ink-muted group-hover:text-ink" />
                 </button>

@@ -140,6 +140,8 @@ export interface QuoteItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  /** on a 'line' quote: this line's amount rounds up to a whole baht as soon as it has a fraction */
+  roundUp: boolean;
 }
 
 export interface Quote {
@@ -158,7 +160,7 @@ export interface Quote {
   taxRate: number;
   discountRate: number;
   vatMode: VatMode;
-  /** 'baht': every amount is whole baht; 'satang': amounts keep two decimals */
+  /** 'line': each line chooses to round up to a whole baht and sums keep the satang; 'baht': an older quote, whole baht throughout */
   rounding: Rounding;
   /** the job's price when the quote was made; the lines must come to this after the discount */
   lockedPrice: number | null;
@@ -237,7 +239,7 @@ export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate 
   costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
-  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'>>;
+  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { roundUp?: boolean }>;
 };
 
 export class ApiError extends Error {
