@@ -9,6 +9,7 @@ import {
   fmt,
   marginToMarkup,
   markupToMargin,
+  remargined,
   repriced,
   type CostCategory,
   type health,
@@ -55,7 +56,8 @@ function CommitNumber({ value, onCommit, disabled, ...rest }: { value: number; o
   }, [value, editing]);
   const commit = () => {
     setEditing(false);
-    if (text.trim() !== '' && Number.isFinite(Number(text))) onCommit(Number(text));
+    // the box shows a rounded figure: left as it was, it must not push that rounding back into the job
+    if (text.trim() !== '' && Number.isFinite(Number(text)) && Number(text) !== value) onCommit(Number(text));
     // back to the current value; when the commit goes through, the new value arrives right after and replaces it
     setText(String(value));
   };
@@ -132,12 +134,8 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
   // the job's own margin and price are the sum of its headings; changing either here moves every heading
   const margin = h.margin;
   const setMargin = (m: number) => {
-    const target = Math.min(95, Math.max(0, m));
-    const markup = marginToMarkup(target);
-    // headings given their own margins would all be overwritten: say so first
-    const own = groups.map((g) => Number(markupToMargin(g.markup).toFixed(1)));
-    if (new Set(own).size > 1 && !window.confirm(`หัวข้อมี Margin ไม่เท่ากัน (${own.map((x) => `${x}%`).join(', ')})\nตั้งทุกหัวข้อเป็น ${Number(target.toFixed(1))}% ใช่หรือไม่?`)) return;
-    patch({ profitMargin: markup, costGroups: groups.map((g) => ({ ...g, markup })) });
+    const r = remargined(job, m);
+    patch({ profitMargin: r.profitMargin, costGroups: r.groups });
   };
   const setPrice = (price: number) => {
     if (h.cost <= 0) return;
@@ -310,7 +308,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
           {agreed !== null ? (
             <p className="mt-2 text-xs text-ink-muted">ราคาขายยึดตามใบเสนอราคาที่ลูกค้าตกลงแล้ว ฿{fmt(agreed)} จึงแก้ที่นี่ไม่ได้ · Margin คำนวณจากต้นทุนที่กรอก</p>
           ) : (
-            <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin ที่นี่จะตั้งทุกหัวข้อให้เท่ากัน แก้ราคาขายจะปรับทุกหัวข้อตามสัดส่วน</p>
+            <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin หรือราคาขายที่นี่ ระบบจะปรับทุกหัวข้อตามสัดส่วนเดิม ให้ทั้งงานได้ตามที่กรอก</p>
           )}
           <div className={`mt-4 flex flex-wrap gap-2 ${agreed !== null ? 'hidden' : ''}`}>
             {[

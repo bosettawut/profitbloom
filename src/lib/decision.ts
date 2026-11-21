@@ -142,14 +142,43 @@ export const hasTeardown = (job: Job) => job.teardown === true || categoryCost(j
 
 /**
  * Each heading's markup after moving the whole job to `price`: every heading keeps its share of the
- * price. A job is never priced below its cost.
+ * price. A job is never priced below its cost, and neither is a heading: one that would be is held at
+ * its cost and the other headings make up the difference.
  */
 export function repriced(job: Job, price: number): { groups: JobGroup[]; profitMargin: number } {
   const n = numbers(job);
+  const groups = job.groups ?? [];
   const target = Math.max(price, n.cost);
   const profitMargin = n.cost > 0 ? (target / n.cost - 1) * 100 : job.profitMargin;
-  const k = n.price > 0 ? target / n.price : 1;
-  return { groups: (job.groups ?? []).map((g) => ({ ...g, markup: n.cost > 0 ? (1 + g.markup / 100) * k * 100 - 100 : g.markup })), profitMargin };
+  if (!(n.cost > 0) || !(n.price > 0)) return { groups, profitMargin };
+  // what the headings have to add up to: all of the price, unless some items sit outside every heading
+  const headTarget = target * (n.headings.reduce((s, h) => s + h.price, 0) / n.price);
+  const held = new Set<number>();
+  let k = 1;
+  for (;;) {
+    const free = n.headings.filter((h) => !held.has(h.id));
+    const freePrice = free.reduce((s, h) => s + h.price, 0);
+    const heldCost = n.headings.reduce((s, h) => s + (held.has(h.id) ? h.cost : 0), 0);
+    k = freePrice > 0 ? (headTarget - heldCost) / freePrice : 1;
+    const under = free.filter((h) => h.cost > 0 && h.price * k < h.cost * (1 - 1e-9));
+    if (under.length === 0) break;
+    for (const h of under) held.add(h.id);
+  }
+  return { groups: groups.map((g) => ({ ...g, markup: held.has(g.id) ? 0 : Math.max(0, (1 + g.markup / 100) * k * 100 - 100) })), profitMargin };
+}
+
+/**
+ * Each heading's markup after moving the whole job to `margin`%: the same as moving it to the price
+ * that gives that margin, so headings with different margins stay different and the job as a whole
+ * lands on the margin asked for. With nothing costed yet there is no price to share out, and every
+ * heading takes the margin itself.
+ */
+export function remargined(job: Job, margin: number): { groups: JobGroup[]; profitMargin: number } {
+  const target = Math.min(95, Math.max(0, margin));
+  const n = numbers(job);
+  if (n.cost > 0 && n.price > 0) return repriced(job, priceForMargin(n.cost, target));
+  const markup = marginToMarkup(target);
+  return { groups: (job.groups ?? []).map((g) => ({ ...g, markup })), profitMargin: markup };
 }
 
 /** Every rule that can flag a job before the quote goes out (Quote Health Check). */
