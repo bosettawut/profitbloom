@@ -1,4 +1,7 @@
 import type { CostCategory, Rules } from './decision';
+import type { Rounding, VatMode } from '../../shared/quote-math.js';
+
+export type { Rounding, VatMode };
 
 export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'completed' | 'cancelled';
 export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'expired';
@@ -20,6 +23,16 @@ export interface User {
   role: 'shop' | 'admin';
   /** the shop's own business rules; missing keys use the defaults */
   rules: Partial<Rules>;
+  /** how new quotes treat VAT unless changed on the quote */
+  vatMode: VatMode;
+  /** cost categories the shop added to the built-in ones */
+  costCategories: ShopCategory[];
+}
+
+/** A cost category the shop added; cost items refer to it by id ('c12'). */
+export interface ShopCategory {
+  id: string;
+  name: string;
 }
 
 export interface AdminShop {
@@ -39,23 +52,59 @@ export interface AdminShop {
   lastActiveAt: string | null;
 }
 
+/** a heading of cost items with its own markup on cost in % (margin = markup ÷ (100 + markup)) */
+export interface CostGroup {
+  id: number;
+  name: string;
+  markup: number;
+}
+
 export interface CostItem {
   id: number;
+  /** the heading it sits under; unplanned extras have none */
+  groupId: number | null;
   name: string;
   category: CostCategory;
   quantity: number;
   price: number;
   total: number;
-  /** has to be paid before the client pays the balance (counts toward cash required) */
-  paidBefore: boolean;
   /** what it really cost, filled in during/after the event */
   actual: number | null;
   /** unplanned cost that appeared during the event (estimate 0) */
   isExtra: boolean;
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  email: string;
+  lineId: string;
+  address: string;
+  notes: string;
+  createdDate: string;
+}
+
+/** a customer with what they have bought; sales count jobs that are approved or completed */
+export interface CustomerSummary extends Customer {
+  projectCount: number;
+  quoteCount: number;
+  soldCount: number;
+  totalSales: number;
+  lastEventDate: string;
+}
+
+export interface CustomerDetail extends CustomerSummary {
+  projects: Project[];
+  quotes: Quote[];
+}
+
+export type CustomerInput = Partial<Omit<Customer, 'id' | 'createdDate'>>;
+
 export interface Project {
   id: string;
+  /** the customer in the shop's customer list this job belongs to */
+  customerId: string | null;
   title: string;
   code: string;
   eventDate: string;
@@ -68,9 +117,12 @@ export interface Project {
   notes: string;
   createdDate: string;
   projectType: string;
+  costGroups: CostGroup[];
   costItems: CostItem[];
-  /** markup on cost in % (margin = markup ÷ (100 + markup)) */
+  /** the whole job's markup on cost in %, worked out from its headings when saved */
   profitMargin: number;
+  /** set when the job was made from an accepted quote: its price is fixed at this amount */
+  agreedPrice: number | null;
   depositPct: number;
   setupDays: number;
   eventDays: number;
@@ -88,12 +140,15 @@ export interface QuoteItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  /** on a 'line' quote: this line's amount rounds up to a whole baht as soon as it has a fraction */
+  roundUp: boolean;
 }
 
 export interface Quote {
   id: string;
   code: string;
   projectId: string | null;
+  customerId: string | null;
   clientName: string;
   clientPhone: string;
   clientEmail: string;
@@ -104,11 +159,23 @@ export interface Quote {
   notes: string;
   taxRate: number;
   discountRate: number;
+  vatMode: VatMode;
+  /** 'line': each line chooses to round up to a whole baht and sums keep the satang; 'baht': an older quote, whole baht throughout */
+  rounding: Rounding;
+  /** the job's price when the quote was made; the lines must come to this after the discount */
+  lockedPrice: number | null;
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
+  /** UTC timestamp `YYYY-MM-DD HH:MM:SS` */
+  createdAt: string;
   itemCount: number;
   totalAmount: number;
+  /** withholding tax: the % the customer holds back from the price without VAT (0 = none) */
+  whtRate: number;
+  withholding: number;
+  /** what the customer actually transfers: totalAmount less withholding */
+  payableAmount: number;
   items: QuoteItem[];
 }
 
@@ -147,13 +214,37 @@ export interface Reports {
   chart: ChartPoint[];
   byType: Array<{ type: string; projects: number; sold: number; sales: number; profit: number }>;
   byStatus: Array<{ status: ProjectStatus; statusText: string; count: number }>;
+  sales: SalesReport;
+  /** accepted jobs left out of the figures because their costs are not in yet */
+  uncosted: { count: number; sales: number };
 }
 
-export type ProjectInput = Partial<Omit<Project, 'costItems'>> & {
-  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'paidBefore' | 'actual' | 'isExtra'>>>;
+export interface SalesSum {
+  jobs: number;
+  sales: number;
+  cost: number;
+  profit: number;
+}
+
+/** sold jobs (approved or completed) inside a date range, counted on the event date */
+export interface SalesReport {
+  from: string | null;
+  to: string | null;
+  totals: SalesSum;
+  byMonth: Array<SalesSum & { key: string; month: string }>;
+  byCustomer: Array<SalesSum & { customerId: string | null; name: string }>;
+  jobs: Array<{ id: string; code: string; title: string; date: string; customerId: string | null; customer: string; statusText: string; sales: number; cost: number; profit: number }>;
+}
+
+/** set on a save to also store the typed phone number and email on the customer's own record */
+interface CustomerUpdate {
+  updateCustomer?: boolean;
+}
+export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate & {
+  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
-export type QuoteInput = Partial<Omit<Quote, 'items'>> & {
-  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'>>;
+export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
+  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { roundUp?: boolean }>;
 };
 
 export class ApiError extends Error {
@@ -185,11 +276,16 @@ export const api = {
   login: (email: string, password: string) => request<{ user: User }>('POST', '/auth/login', { email, password }),
   register: (name: string, email: string, password: string) => request<{ user: User }>('POST', '/auth/register', { name, email, password }),
   logout: () => request<{ ok: true }>('POST', '/auth/logout'),
+  /** signs out every device, this one included */
+  logoutAll: () => request<{ ok: true }>('POST', '/auth/logout-all'),
+  forgotPassword: (email: string) => request<{ ok: true }>('POST', '/auth/forgot', { email }),
+  resetCheck: (token: string) => request<{ valid: boolean }>('POST', '/auth/reset/check', { token }),
+  resetPassword: (token: string, password: string) => request<{ user: User }>('POST', '/auth/reset', { token, password }),
   updateAccount: (body: Partial<Omit<User, 'id' | 'email' | 'plan' | 'role' | 'trialEndsAt'>> & { name: string; currentPassword?: string; newPassword?: string }) => request<{ user: User }>('PUT', '/account', body),
 
   dashboard: (range: '6' | '12' | 'year') => request<Dashboard>('GET', `/dashboard?range=${range}`),
   activities: (limit = 50) => request<Activity[]>('GET', `/activities?limit=${limit}`),
-  reports: () => request<Reports>('GET', '/reports'),
+  reports: (from = '', to = '') => request<Reports>('GET', `/reports?from=${from}&to=${to}`),
 
   projects: () => request<Project[]>('GET', '/projects'),
   project: (id: string) => request<Project>('GET', `/projects/${id}`),
@@ -197,11 +293,24 @@ export const api = {
   updateProject: (id: string, body: ProjectInput) => request<Project>('PUT', `/projects/${id}`, body),
   deleteProject: (id: string) => request<{ ok: true }>('DELETE', `/projects/${id}`),
 
+  customers: () => request<CustomerSummary[]>('GET', '/customers'),
+  customer: (id: string) => request<CustomerDetail>('GET', `/customers/${id}`),
+  createCustomer: (body: CustomerInput) => request<Customer>('POST', '/customers', body),
+  updateCustomer: (id: string, body: CustomerInput) => request<Customer>('PUT', `/customers/${id}`, body),
+  deleteCustomer: (id: string) => request<{ ok: true }>('DELETE', `/customers/${id}`),
+
+  createCostCategory: (name: string) => request<ShopCategory>('POST', '/cost-categories', { name }),
+  renameCostCategory: (id: string, name: string) => request<ShopCategory>('PUT', `/cost-categories/${id}`, { name }),
+  /** moved: how many cost items were refiled under "อื่น ๆ" */
+  deleteCostCategory: (id: string) => request<{ ok: true; moved: number }>('DELETE', `/cost-categories/${id}`),
+
   adminShops: () => request<AdminShop[]>('GET', '/admin/shops'),
   adminUpdateShop: (id: number, body: { plan?: User['plan']; disabled?: boolean }) => request<AdminShop>('PUT', `/admin/shops/${id}`, body),
 
   quotes: () => request<Quote[]>('GET', '/quotes'),
   quote: (id: string) => request<Quote>('GET', `/quotes/${id}`),
+  /** makes a job out of a quote written on its own; the job's price is the quote's */
+  createProjectFromQuote: (quoteId: string) => request<Project>('POST', `/quotes/${quoteId}/project`),
   createQuote: (body: QuoteInput) => request<Quote>('POST', '/quotes', body),
   updateQuote: (id: string, body: QuoteInput) => request<Quote>('PUT', `/quotes/${id}`, body),
   deleteQuote: (id: string) => request<{ ok: true }>('DELETE', `/quotes/${id}`),

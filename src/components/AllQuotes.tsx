@@ -5,20 +5,32 @@ import { flushSync } from 'react-dom';
 import type { User } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { QuoteDocument } from './QuoteDocument';
-import { api, Quote, QuoteStatus } from '../lib/api';
+import { api, baht, Quote, QuoteStatus , type Project } from '../lib/api';
+import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
+
+/** the local calendar day a UTC timestamp falls on, as YYYY-MM-DD */
+const localDay = (utc: string) => {
+  const d = new Date(utc.replace(' ', 'T') + 'Z');
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const STATUS_ORDER: QuoteStatus[] = ['draft', 'sent', 'approved', 'rejected', 'expired'];
 
 interface AllQuotesProps {
   onNavigate?: (page: string) => void;
   onOpenQuote: (quoteId: string | null, preview?: boolean) => void;
+  /** opens a job on its cost step */
+  onOpenProjectCosts: (project: Project) => void;
   user: User;
 }
 
-export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
+export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }: AllQuotesProps) {
   const [pdfQuote, setPdfQuote] = useState<Quote | null>(null);
   const pdfRef = useRef<HTMLDivElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('date');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sort, setSort] = useState<Sort>({ key: 'date', dir: 'desc' });
   const [notification, setNotification] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
@@ -37,7 +49,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
                          quote.projectTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          quote.code.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || quote.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    return matchesSearch && matchesStatus && inDateRange(localDay(quote.createdAt), dateFrom, dateTo);
   });
 
   const getStatusStyles = (status: string) => statusPill(status);
@@ -51,18 +63,32 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
     setTimeout(() => setNotification(''), 3000);
   };
 
-  const sortedQuotes = [...filteredQuotes].sort((a, b) => {
-    switch (sortBy) {
-      case 'amount': return b.totalAmount - a.totalAmount;
-      case 'client': return a.clientName.localeCompare(b.clientName, 'th');
-      default: return Number(b.id) - Number(a.id);
-    }
-  });
+  /** what each sortable column orders by */
+  const sortValue: Record<string, (q: Quote) => string | number> = {
+    code: (q) => q.code,
+    title: (q) => q.projectTitle,
+    client: (q) => q.clientName,
+    date: (q) => Number(q.id),
+    validUntil: (q) => q.validUntil,
+    amount: (q) => q.totalAmount,
+    status: (q) => STATUS_ORDER.indexOf(q.status),
+  };
+  /** numbers and dates start biggest/newest first, text starts A→Z */
+  const firstDir = (key: string): Sort['dir'] => (['date', 'validUntil', 'amount'].includes(key) ? 'desc' : 'asc');
+  const sortBy = (key: string, dir = firstDir(key)) => setSort((cur) => nextSort(cur, key, dir));
+  const sortedQuotes = sortRows(filteredQuotes, sortValue[sort.key] ?? sortValue.date, sort.dir);
+  const paged = usePaged(sortedQuotes, [searchTerm, statusFilter, dateFrom, dateTo, sort.key, sort.dir].join('|'));
 
   const changeStatus = async (quote: Quote, status: QuoteStatus) => {
     try {
       const saved = await api.updateQuote(quote.id, { status });
       setQuotes(list => list.map(q => (q.id === saved.id ? saved : q)));
+      // the client said yes to a quote written on its own: offer to turn it into a job and go fill in its costs
+      if (saved.status === 'approved' && quote.status !== 'approved' && !saved.projectId && saved.totalAmount > 0
+        && window.confirm(`${saved.code} อนุมัติแล้ว\nสร้างโปรเจ็กต์จากใบเสนอราคานี้ แล้วไปใส่ต้นทุนเลยไหม?\n(ข้อมูลงานและรายการจะถูกดึงมาให้ ไม่ต้องกรอกใหม่)`)) {
+        onOpenProjectCosts(await api.createProjectFromQuote(saved.id));
+        return;
+      }
       showNotification(
         saved.status === 'expired' && status !== 'expired'
           ? `${saved.code} เลยวันที่ใช้ได้แล้ว กด "แก้ไข" เพื่อเลื่อนวันที่ใช้ได้ถึงก่อน`
@@ -102,7 +128,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div>
           <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">ใบเสนอราคา</h1>
-          <p className="text-sm md:text-base text-ink-muted mt-1">จัดการใบเสนอราคาของคุณ</p>
+          <p className="text-sm text-ink-muted mt-1">จัดการใบเสนอราคาของคุณ</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button 
@@ -155,9 +181,13 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
               {showFilters ? "ซ่อนตัวเลือก" : "ช่วงเวลาและการเรียง"}
             </button>
             
-            {statusFilter !== 'all' && (
+            {(statusFilter !== 'all' || dateFrom || dateTo) && (
               <button
-                onClick={() => setStatusFilter('all')}
+                onClick={() => {
+                  setStatusFilter('all');
+                  setDateFrom('');
+                  setDateTo('');
+                }}
                 className="text-xs md:text-sm text-ink-muted hover:text-ink"
               >
                 ล้างตัวกรอง
@@ -166,7 +196,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-line">
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-4 pt-4 border-t border-line">
               <select 
                 className="pb-input text-ink-muted"
                 value={statusFilter}
@@ -179,15 +209,19 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
                 <option value="rejected">ปฏิเสธ</option>
                 <option value="expired">หมดอายุ</option>
               </select>
+              <DateRange label="วันที่สร้าง" from={dateFrom} to={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
               <select 
                 className="pb-input text-ink-muted"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
+                value={sort.key}
+                onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })}
               >
                 <option value="date">เรียงตามวันที่</option>
                 <option value="amount">เรียงตามจำนวนเงิน</option>
                 <option value="status">เรียงตามสถานะ</option>
                 <option value="client">เรียงตามลูกค้า</option>
+                <option value="title">เรียงตามชื่องาน</option>
+                <option value="validUntil">เรียงตามวันที่ใช้ได้ถึง</option>
+                <option value="code">เรียงตามรหัส</option>
               </select>
             </div>
           )}
@@ -206,9 +240,73 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
         </div>
       )}
 
-      {/* Quotes Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-        {sortedQuotes.map((quote) => (
+      {/* Table (desktop) */}
+      {paged.rows.length > 0 && (
+        <div className="hidden md:block pb-card overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-canvas/60 border-b border-line">
+                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} />
+                  <SortHeader label="งาน" sortKey="title" sort={sort} onSort={sortBy} />
+                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
+                  <SortHeader label="วันที่สร้าง" sortKey="date" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="ใช้ได้ถึง" sortKey="validUntil" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="จำนวนเงิน" sortKey="amount" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="สถานะ" sortKey="status" sort={sort} onSort={sortBy} />
+                  <th className="px-2 py-3 text-center text-ink font-medium">การจัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paged.rows.map((quote) => (
+                  <tr key={quote.id} onClick={() => onOpenQuote(quote.id, true)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
+                    <td className="px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
+                    <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{quote.projectTitle || '-'}</span></td>
+                    <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
+                    <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
+                    <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
+                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}</td>
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        value={quote.status}
+                        onChange={(e) => changeStatus(quote, e.target.value as QuoteStatus)}
+                        title="เปลี่ยนสถานะ"
+                        className={`px-3 py-1 rounded-full text-xs font-medium border cursor-pointer outline-none whitespace-nowrap ${getStatusStyles(quote.status)}`}
+                      >
+                        <option value="draft">ร่าง</option>
+                        <option value="sent">ส่งแล้ว</option>
+                        <option value="approved">อนุมัติแล้ว</option>
+                        <option value="rejected">ปฏิเสธ</option>
+                        {quote.status === 'expired' && <option value="expired" disabled>หมดอายุ</option>}
+                      </select>
+                    </td>
+                    <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-1">
+                        <button onClick={() => onOpenQuote(quote.id, true)} aria-label="ดูใบเสนอราคา" title="ดู" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => onOpenQuote(quote.id)} aria-label="แก้ไขใบเสนอราคา" title="แก้ไข" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => exportPdf(quote)} disabled={!!pdfQuote} aria-label="ดาวน์โหลด PDF" title="ดาวน์โหลด PDF" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors disabled:opacity-60">
+                          {pdfQuote?.id === quote.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        </button>
+                        <button onClick={() => deleteQuote(quote)} aria-label="ลบใบเสนอราคา" title="ลบ" className="flex items-center justify-center w-8 h-8 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cards (phones) */}
+      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+        {paged.rows.map((quote) => (
           <div
             key={quote.id}
             className="pb-card cursor-pointer transition-all duration-300 overflow-hidden"
@@ -244,7 +342,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
                 <div>
                   <div className="text-xs text-ink-muted mb-1">จำนวนเงิน</div>
                   <div className="font-medium text-ink text-sm md:text-base">
-                    ฿{quote.totalAmount.toLocaleString('th-TH', { maximumFractionDigits: 2 })}
+                    {baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}
                   </div>
                 </div>
                 <div>
@@ -289,6 +387,8 @@ export function AllQuotes({ onNavigate, onOpenQuote, user }: AllQuotesProps) {
           </div>
         ))}
       </div>
+
+      <Pagination paged={paged} unit="ใบเสนอราคา" />
 
       {/* Notification */}
       {notification && (

@@ -1,6 +1,7 @@
 import React, { forwardRef, useEffect, useRef, useState } from 'react';
 import type { User } from '../lib/api';
 import { brandLogo, brandName } from '../lib/brand';
+import { lineAmount, quoteTotals, type Rounding, type VatMode } from '../../shared/quote-math.js';
 
 export interface QuoteDocData {
   code: string;
@@ -14,7 +15,11 @@ export interface QuoteDocData {
   notes: string;
   taxRate: number;
   discountRate: number;
-  items: Array<{ description: string; quantity: number; unitPrice: number }>;
+  /** withholding tax %, 0 or missing when the customer holds nothing back */
+  whtRate?: number;
+  vatMode: VatMode;
+  rounding?: Rounding;
+  items: Array<{ description: string; quantity: number; unitPrice: number; roundUp?: boolean }>;
 }
 
 interface QuoteDocumentProps {
@@ -22,7 +27,8 @@ interface QuoteDocumentProps {
   quote: QuoteDocData;
 }
 
-const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** a unit price keeps its satang only when it has any */
+const unitMoney = (n: number) => n.toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const thaiDate = (iso: string) =>
   iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' }) : '-';
 
@@ -32,11 +38,11 @@ const thaiDate = (iso: string) =>
  */
 export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote }, ref) {
   const items = quote.items.filter((i) => i.description.trim() || i.quantity * i.unitPrice > 0);
-  const subtotal = items.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
-  const discount = subtotal * (quote.discountRate / 100);
-  const afterDiscount = subtotal - discount;
-  const tax = afterDiscount * (quote.taxRate / 100);
-  const total = afterDiscount + tax;
+  const { subtotal, discount, beforeVat, vat, total, rate, whtRate, withholding, payable } = quoteTotals({ ...quote, items });
+  // amounts show their satang only when some amount on this quote has any
+  const amounts = [subtotal, discount, vat, total, withholding, ...items.map((i) => lineAmount(i, quote.rounding))];
+  const digits = amounts.some((n) => !Number.isInteger(n)) ? 2 : 0;
+  const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
   return (
     <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13 }}>
@@ -99,8 +105,8 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
               <td className="text-center py-2.5 px-2 text-[#5B566D]">{i + 1}</td>
               <td className="py-2.5 px-2">{item.description || '-'}</td>
               <td className="text-right py-2.5 px-2">{item.quantity.toLocaleString('th-TH')}</td>
-              <td className="text-right py-2.5 px-2">{money(item.unitPrice)}</td>
-              <td className="text-right py-2.5 px-2" style={{ fontWeight: 600 }}>{money(item.quantity * item.unitPrice)}</td>
+              <td className="text-right py-2.5 px-2">{unitMoney(item.unitPrice)}</td>
+              <td className="text-right py-2.5 px-2" style={{ fontWeight: 600 }}>{money(lineAmount(item, quote.rounding))}</td>
             </tr>
           ))}
         </tbody>
@@ -122,13 +128,28 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
             {quote.discountRate > 0 && (
               <tr><td className="py-1 text-[#5B566D]">ส่วนลด {quote.discountRate}%</td><td className="py-1 text-right">-{money(discount)}</td></tr>
             )}
-            {quote.taxRate > 0 && (
-              <tr><td className="py-1 text-[#5B566D]">ภาษีมูลค่าเพิ่ม {quote.taxRate}%</td><td className="py-1 text-right">{money(tax)}</td></tr>
+            {rate > 0 && quote.vatMode === 'inclusive' && (
+              <tr><td className="py-1 text-[#5B566D]">มูลค่าก่อนภาษี</td><td className="py-1 text-right">{money(beforeVat)}</td></tr>
+            )}
+            {rate > 0 && (
+              <tr>
+                <td className="py-1 text-[#5B566D]">ภาษีมูลค่าเพิ่ม {rate}%{quote.vatMode === 'inclusive' ? ' (รวมในราคาแล้ว)' : ''}</td>
+                <td className="py-1 text-right">{money(vat)}</td>
+              </tr>
             )}
             <tr style={{ borderTop: '2px solid #673AB7' }}>
               <td className="pt-2.5" style={{ fontSize: 15, fontWeight: 700 }}>ยอดรวมสุทธิ</td>
               <td className="pt-2.5 text-right" style={{ fontSize: 17, fontWeight: 700, color: '#673AB7' }}>฿{money(total)}</td>
             </tr>
+            {withholding > 0 && (
+              <>
+                <tr><td className="pt-2 pb-1 text-[#5B566D]">หัก ณ ที่จ่าย {whtRate}%</td><td className="pt-2 pb-1 text-right">-{money(withholding)}</td></tr>
+                <tr style={{ borderTop: '1px solid #ECEAF2' }}>
+                  <td className="pt-2" style={{ fontWeight: 700 }}>ยอดชำระ</td>
+                  <td className="pt-2 text-right" style={{ fontWeight: 700 }}>฿{money(payable)}</td>
+                </tr>
+              </>
+            )}
           </tbody>
         </table>
       </div>

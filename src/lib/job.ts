@@ -1,5 +1,5 @@
 import type { Project, User } from './api';
-import { health, withDefaults, type Job, type Rules } from './decision';
+import { health, numbers, withDefaults, type Job, type Rules } from './decision';
 
 /** The decision engine's view of a saved project. */
 export function toJob(p: Project): Job {
@@ -9,10 +9,11 @@ export function toJob(p: Project): Job {
       category: i.category,
       quantity: i.quantity,
       price: i.price,
-      paidBefore: i.paidBefore,
+      groupId: i.groupId,
       actual: i.actual,
       isExtra: i.isExtra,
     })),
+    groups: p.costGroups,
     profitMargin: p.profitMargin,
     budget: p.budget,
     depositPct: p.depositPct,
@@ -22,8 +23,12 @@ export function toJob(p: Project): Job {
     teamSize: p.teamSize,
     ownerLabor: p.ownerLabor,
     teardown: p.teardown,
+    agreedPrice: p.agreedPrice,
   };
 }
+
+/** what the job sells for: the sum of its headings */
+export const salePrice = (p: Project) => numbers(toJob(p)).price;
 
 export const rulesOf = (user: User): Rules => withDefaults(user.rules);
 

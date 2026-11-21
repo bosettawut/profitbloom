@@ -9,6 +9,8 @@ import { CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
+import { CustomerPicker } from '../CustomerPicker';
+import { useCustomerContactPrompt } from '../CustomerContactPrompt';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -35,7 +37,7 @@ interface Props {
   project: Project;
   user: User;
   onBack: () => void;
-  onUpdate: (p: Project) => Promise<Project>;
+  onUpdate: (p: Project & { updateCustomer?: boolean }) => Promise<Project>;
   onDelete: (id: string) => Promise<void>;
   onCreateQuote: (p: Project) => void;
   startStage?: Stage;
@@ -66,11 +68,16 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
     setTimeout(() => setToast(''), 3000);
   };
 
+  const contactPrompt = useCustomerContactPrompt();
+
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
+    const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
+    const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
+    if (updateCustomer === null) return false;
     setSaving(true);
     try {
-      await onUpdate({ ...draft, ...override });
+      await onUpdate({ ...draft, ...override, updateCustomer });
       flash('บันทึกแล้ว');
       return true;
     } catch (err) {
@@ -107,7 +114,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const infoField = (label: string, key: keyof Project, type = 'text') => (
     <div>
       <label className="pb-label">{label}</label>
-      <input className="pb-input !py-2" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      <input className="pb-input pb-input-sm" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
     </div>
   );
 
@@ -127,7 +134,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             value={draft.status}
             onChange={(e) => patch({ status: e.target.value as ProjectStatus })}
             aria-label="สถานะงาน"
-            className={`rounded-full px-3 py-2 text-sm font-medium outline-none ${statusPill(draft.status)}`}
+            className={`self-stretch rounded-full px-3 py-1.5 text-sm font-medium outline-none ${statusPill(draft.status)}`}
           >
             {STATUSES.map(([id, t]) => <option key={id} value={id}>{t}</option>)}
           </select>
@@ -167,14 +174,22 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="pb-label">ประเภทงาน</label>
-                <select className="pb-input !py-2" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
+                <select className="pb-input pb-input-sm" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
                   {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
                 </select>
               </div>
               {infoField('วันที่จัดงาน', 'eventDate', 'date')}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {infoField('ลูกค้า', 'client')}
+              <div>
+                <label className="pb-label">ลูกค้า</label>
+                <CustomerPicker
+                  className="pb-input pb-input-sm"
+                  value={draft.client}
+                  onChange={(client) => patch({ client, customerId: null })}
+                  onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}
+                />
+              </div>
               {infoField('เบอร์โทร', 'phone', 'tel')}
             </div>
             {infoField('อีเมลลูกค้า', 'email', 'email')}
@@ -253,6 +268,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
         </div>
       )}
 
+      {contactPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );

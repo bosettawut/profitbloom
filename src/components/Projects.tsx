@@ -1,9 +1,10 @@
 import { statusPill } from './ProjectItem';
-import React, { useEffect, useState } from 'react';
-import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X, Check, PencilLine, FileText, Clock, CircleCheck, Flag, Ban, type LucideIcon } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
 import { api, Project, ProjectStatus, type User } from '../lib/api';
 import { LEVEL_STYLE, projectHealth } from '../lib/job';
+import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
 
 interface ProjectsProps {
   onProjectSelect: (project: Project, edit?: boolean) => void;
@@ -15,15 +16,16 @@ interface StatusOption {
   id: string;
   name: string;
   description: string;
-  icon: string;
+  icon: LucideIcon;
   className: string;
 }
 
 export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [timeFilter, setTimeFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('date');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sort, setSort] = useState<Sort>({ key: 'eventDate', dir: 'desc' });
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [notification, setNotification] = useState('');
@@ -43,83 +45,78 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     {
       id: 'draft',
       name: 'ร่าง',
-      description: 'โปรเจ็กต์ยังอยู่ในขั้นตอนการเตรียม',
-      icon: '📝',
+      description: 'ยังเตรียมงานอยู่ ยังไม่ได้ส่งราคา',
+      icon: PencilLine,
       className: 'status-draft'
     },
     {
       id: 'quote_created',
       name: 'สร้างใบเสนอราคาแล้ว',
-      description: 'สร้างใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
-      icon: '📄',
+      description: 'มีใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
+      icon: FileText,
       className: 'status-quote-created'
     },
     {
       id: 'pending',
       name: 'รอการอนุมัติ',
       description: 'ส่งใบเสนอราคาแล้ว รอลูกค้าตอบกลับ',
-      icon: '⏳',
+      icon: Clock,
       className: 'status-pending'
     },
     {
       id: 'approved',
       name: 'อนุมัติแล้ว',
-      description: 'ลูกค้าอนุมัติแล้ว เริ่มดำเนินการ',
-      icon: '✅',
+      description: 'ลูกค้าตกลงแล้ว เริ่มทำงานได้',
+      icon: CircleCheck,
       className: 'status-approved'
     },
     {
       id: 'completed',
       name: 'เสร็จสิ้น',
-      description: 'ดำเนินการเสร็จสิ้นแล้ว สร้างใบเสร็จแล้ว',
-      icon: '🎉',
+      description: 'จัดงานเสร็จและปิดงานแล้ว',
+      icon: Flag,
       className: 'status-completed'
     },
     {
       id: 'cancelled',
       name: 'ยกเลิก',
-      description: 'ยกเลิกโปรเจ็กต์',
-      icon: '❌',
+      description: 'ลูกค้าไม่ทำต่อ หรือยกเลิกงานนี้',
+      icon: Ban,
       className: 'status-cancelled'
     }
   ];
 
   const statusOrder: ProjectStatus[] = ['draft', 'quote_created', 'pending', 'approved', 'completed', 'cancelled'];
 
-  const inTimeRange = (project: Project) => {
-    if (timeFilter === 'all') return true;
-    if (!project.eventDate) return false;
-    const d = new Date(project.eventDate);
-    const now = new Date();
-    if (timeFilter === 'week') {
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      start.setDate(now.getDate() - now.getDay());
-      const end = new Date(start);
-      end.setDate(start.getDate() + 7);
-      return d >= start && d < end;
-    }
-    if (timeFilter === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    return d.getFullYear() === now.getFullYear() && Math.floor(d.getMonth() / 3) === Math.floor(now.getMonth() / 3);
-  };
+  const healthOf = useMemo(() => new Map(projects.map((p) => [p.id, projectHealth(p, user)])), [projects, user]);
 
-  const filteredProjects = projects
-    .filter(project => {
-      const term = searchTerm.toLowerCase();
-      const matchesSearch = project.title.toLowerCase().includes(term) ||
-                           project.code.toLowerCase().includes(term) ||
-                           project.client.toLowerCase().includes(term);
+  /** what each sortable column orders by */
+  const sortValue: Record<string, (p: Project) => string | number> = {
+    code: (p) => p.code,
+    title: (p) => p.title,
+    client: (p) => p.client,
+    eventDate: (p) => p.eventDate,
+    budget: (p) => p.budget,
+    price: (p) => healthOf.get(p.id)?.price ?? 0,
+    margin: (p) => healthOf.get(p.id)?.margin ?? 0,
+    score: (p) => healthOf.get(p.id)?.score ?? 0,
+    status: (p) => statusOrder.indexOf(p.status),
+  };
+  /** numbers and dates start biggest/newest first, text starts A→Z */
+  const firstDir = (key: string): Sort['dir'] => (['eventDate', 'budget', 'price', 'margin', 'score'].includes(key) ? 'desc' : 'asc');
+  const sortBy = (key: string, dir = firstDir(key)) => setSort((cur) => nextSort(cur, key, dir));
+
+  const term = searchTerm.trim().toLowerCase();
+  const filteredProjects = sortRows(
+    projects.filter((project) => {
+      const matchesSearch = [project.title, project.code, project.client].some((v) => v.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'all' || project.status === statusFilter;
-      return matchesSearch && matchesStatus && inTimeRange(project);
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'name': return a.title.localeCompare(b.title, 'th');
-        case 'budget': return b.budget - a.budget;
-        case 'status': return statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status);
-        default: return (b.eventDate || '').localeCompare(a.eventDate || '');
-      }
-    });
+      return matchesSearch && matchesStatus && inDateRange(project.eventDate, dateFrom, dateTo);
+    }),
+    sortValue[sort.key] ?? sortValue.eventDate,
+    sort.dir,
+  );
+  const paged = usePaged(filteredProjects, [term, statusFilter, dateFrom, dateTo, sort.key, sort.dir].join('|'));
 
   const getStatusStyles = (status: string) => statusPill(status);
 
@@ -199,7 +196,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
-        <div><h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะการ์ดเพื่อดูรายละเอียด</p></div>
+        <div><h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะรายการเพื่อดูรายละเอียด</p></div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button onClick={exportCsv} aria-label="ส่งออก CSV" className="pb-btn-secondary shrink-0">
             <Download className="w-4 h-4" />
@@ -252,11 +249,12 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
               {showFilters ? "ซ่อนตัวเลือก" : "ช่วงเวลาและการเรียง"}
             </button>
             
-            {(statusFilter !== 'all' || timeFilter !== 'all') && (
+            {(statusFilter !== 'all' || dateFrom || dateTo) && (
               <button
                 onClick={() => {
                   setStatusFilter('all');
-                  setTimeFilter('all');
+                  setDateFrom('');
+                  setDateTo('');
                 }}
                 className="text-xs md:text-sm text-ink-muted hover:text-ink"
               >
@@ -266,7 +264,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-line">
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-4 pt-4 border-t border-line">
               <select 
                 className="pb-input text-ink-muted"
                 value={statusFilter}
@@ -280,25 +278,21 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                 <option value="completed">เสร็จสิ้น</option>
                 <option value="cancelled">ยกเลิก</option>
               </select>
+              <DateRange label="วันที่จัดงาน" from={dateFrom} to={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
               <select 
                 className="pb-input text-ink-muted"
-                value={timeFilter}
-                onChange={(e) => setTimeFilter(e.target.value)}
+                value={sort.key}
+                onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })}
               >
-                <option value="all">ช่วงเวลาทั้งหมด</option>
-                <option value="week">สัปดาห์นี้</option>
-                <option value="month">เดือนนี้</option>
-                <option value="quarter">ไตรมาสนี้</option>
-              </select>
-              <select 
-                className="pb-input text-ink-muted"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-              >
-                <option value="date">เรียงตามวันที่</option>
-                <option value="name">เรียงตามชื่อ</option>
+                <option value="eventDate">เรียงตามวันที่</option>
+                <option value="title">เรียงตามชื่อ</option>
                 <option value="budget">เรียงตามงบประมาณ</option>
                 <option value="status">เรียงตามสถานะ</option>
+                <option value="price">เรียงตามราคา</option>
+                <option value="margin">เรียงตาม Margin</option>
+                <option value="score">เรียงตามคะแนนสุขภาพ</option>
+                <option value="code">เรียงตามรหัส</option>
+                <option value="client">เรียงตามลูกค้า</option>
               </select>
             </div>
           )}
@@ -317,9 +311,78 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
         </div>
       )}
 
-      {/* Projects Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-        {filteredProjects.map((project) => {
+      {/* Table (desktop) */}
+      {paged.rows.length > 0 && (
+        <div className="hidden md:block pb-card overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-canvas/60 border-b border-line">
+                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} />
+                  <SortHeader label="โปรเจ็กต์" sortKey="title" sort={sort} onSort={sortBy} />
+                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
+                  <SortHeader label="วันที่จัดงาน" sortKey="eventDate" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="ราคา" sortKey="price" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="Margin" sortKey="margin" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="สุขภาพ" sortKey="score" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="สถานะ" sortKey="status" sort={sort} onSort={sortBy} />
+                  <th className="px-2 py-3 text-center text-ink font-medium">การจัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paged.rows.map((project) => {
+                  const h = healthOf.get(project.id)!;
+                  return (
+                    <tr key={project.id} onClick={() => handleProjectClick(project)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
+                      <td className="px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
+                      <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{project.title}</span></td>
+                      <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{project.client || '-'}</td>
+                      <td className="px-3 py-3 text-ink whitespace-nowrap">{formatEventDate(project.eventDate)}</td>
+                      <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{Math.round(h.price).toLocaleString('th-TH')}</td>
+                      <td className="px-3 py-3 text-right text-ink whitespace-nowrap">{h.margin.toFixed(0)}%</td>
+                      <td className="px-3 py-3">
+                        <span title="คะแนนสุขภาพกำไร" className={`inline-flex w-9 h-9 rounded-xl items-center justify-center text-xs font-bold ${LEVEL_STYLE[h.level].chip}`}>{h.score}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={(e) => openStatusModal(project, e)}
+                          title="เปลี่ยนสถานะ"
+                          className={`px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap ${getStatusStyles(project.status)}`}
+                        >
+                          {project.statusText}
+                        </button>
+                      </td>
+                      <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => handleProjectClick(project)} aria-label="ดูโปรเจ็กต์" title="ดู" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => onProjectSelect(project, true)} aria-label="แก้ไขโปรเจ็กต์" title="แก้ไข" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {project.status === 'completed' ? (
+                            <button onClick={() => handleProjectClick(project)} aria-label="ดูรายงาน" title="รายงาน" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                              <FileBarChart className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button onClick={() => deleteProject(project)} aria-label="ลบโปรเจ็กต์" title="ลบ" className="flex items-center justify-center w-8 h-8 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cards (phones) */}
+      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+        {paged.rows.map((project) => {
           const progress = getProgressFromStatus(project.status);
           
           return (
@@ -414,59 +477,41 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
         })}
       </div>
 
+      <Pagination paged={paged} unit="โปรเจ็กต์" />
+
       {/* Status Update Modal */}
       {isStatusModalOpen && selectedProject && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-4 md:p-6 border-b border-line">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-base md:text-lg text-ink mb-2 font-semibold">อัปเดตสถานะโปรเจ็กต์</h3>
-                  <p className="text-sm text-ink-muted line-clamp-2">{selectedProject.title}</p>
-                </div>
-                <button
-                  onClick={closeStatusModal}
-                  className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                >
-                  <X className="w-5 h-5 md:w-6 md:h-6" />
-                </button>
-              </div>
+        <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={closeStatusModal}>
+          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-1">
+              <h3 className="text-lg font-semibold text-ink">เปลี่ยนสถานะโปรเจ็กต์</h3>
+              <button type="button" onClick={closeStatusModal} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
             </div>
+            <p className="text-sm text-ink-muted mb-4 line-clamp-2">{selectedProject.title}</p>
 
-            <div className="p-4 md:p-6">
-              <div className="space-y-3 mb-6">
-                {statusOptions.map((option) => (
-                  <div
+            <div className="flex flex-col gap-1">
+              {statusOptions.map((option) => {
+                const current = selectedProject.status === option.id;
+                const Icon = option.icon;
+                return (
+                  <button
                     key={option.id}
+                    type="button"
                     onClick={() => updateProjectStatus(option.id)}
-                    className={`p-3 md:p-4 border-2 rounded-xl cursor-pointer transition-all hover:border-[#673AB7] hover:bg-canvas/60 ${
-                      selectedProject.status === option.id 
-                        ? 'border-[#673AB7] bg-canvas/60' 
-                        : 'border-line'
-                    }`}
+                    aria-current={current || undefined}
+                    className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-2xl transition-colors ${current ? 'bg-[#F1F0F5]' : 'hover:bg-[#F1F0F5]/60'}`}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="text-xl md:text-2xl">{option.icon}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-ink mb-1 text-sm md:text-base">{option.name}</div>
-                        <div className="text-xs md:text-sm text-ink-muted line-clamp-2">{option.description}</div>
-                        <div className="text-xs text-ink mt-1 font-medium">
-                          ความคืบหน้า: {getProgressFromStatus(option.id)}%
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-3 justify-end">
-                <button
-                  onClick={closeStatusModal}
-                  className="px-4 md:px-6 py-3 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm md:text-base"
-                >
-                  ยกเลิก
-                </button>
-              </div>
+                    <span className={`flex items-center justify-center w-9 h-9 shrink-0 rounded-full border ${statusPill(option.id)}`}>
+                      <Icon className="w-4 h-4" />
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium text-ink">{option.name}</span>
+                      <span className="block text-xs text-ink-muted">{option.description}</span>
+                    </span>
+                    {current && <Check className="w-4 h-4 shrink-0 text-[#673AB7]" aria-label="สถานะปัจจุบัน" />}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>

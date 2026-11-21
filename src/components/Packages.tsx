@@ -27,7 +27,7 @@ export function Packages({ user }: PackagesProps) {
       </div>
 
       {/* Current plan */}
-      <div className="pb-card p-6 md:p-7 mb-8 max-w-5xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="pb-card p-6 md:p-7 mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <p className="text-sm text-ink-muted mb-1">แพ็กเกจปัจจุบันของ {shop}</p>
           <p className="text-2xl font-semibold text-ink tracking-tight">{current.name}</p>
@@ -45,7 +45,7 @@ export function Packages({ user }: PackagesProps) {
       </div>
 
       <h2 className="text-base md:text-lg font-semibold text-ink mb-4">แพ็กเกจทั้งหมด</h2>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5 max-w-5xl items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-5 items-stretch">
         {PLANS.map((plan) => {
           const isCurrent = plan.id === current.id;
           return (
@@ -86,7 +86,7 @@ export function Packages({ user }: PackagesProps) {
           );
         })}
       </div>
-      <p className="mt-6 text-sm text-ink-muted max-w-5xl">
+      <p className="mt-6 text-sm text-ink-muted">
         กดเลือกแพ็กเกจแล้วระบบจะเปิดอีเมลถึงทีม ProfitBloom พร้อมข้อมูลร้านของคุณ ทีมงานจะติดต่อกลับเพื่อเปิดใช้แพ็กเกจให้
       </p>
     </div>

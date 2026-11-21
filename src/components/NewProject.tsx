@@ -3,8 +3,11 @@ import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
-import { blankItem, CostsStage } from './job/CostsStage';
+import { emailError, phoneError } from '../../shared/contact.js';
+import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
+import { CustomerPicker } from './CustomerPicker';
+import { useCustomerContactPrompt } from './CustomerContactPrompt';
 
 interface NewProjectProps {
   user: User;
@@ -26,8 +29,11 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [history, setHistory] = useState<Project[]>([]);
-  const [draft, setDraft] = useState<Project>(() => ({
+  const [draft, setDraft] = useState<Project>(() => {
+    const heading = blankGroup(marginToMarkup(rules.goodMargin), 'รายการต้นทุน');
+    return {
     id: 'new',
+    customerId: null,
     code: '',
     title: '',
     projectType: 'งานแต่งงาน',
@@ -41,6 +47,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     statusText: 'ร่าง',
     createdDate: '',
     profitMargin: marginToMarkup(rules.goodMargin),
+    agreedPrice: null,
     depositPct: rules.depositPct,
     setupDays: 1,
     eventDays: 1,
@@ -50,12 +57,14 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     teardown: null,
     reviewApplied: false,
     reviewedAt: null,
+    costGroups: [heading],
     costItems: [
-      { ...blankItem('material'), name: 'ดอกไม้และวัสดุ' },
-      { ...blankItem('labor'), name: 'ค่าแรงทีมงาน' },
-      { ...blankItem('transport'), name: 'ขนส่ง' },
+      { ...blankItem('material', heading.id), name: 'ดอกไม้และวัสดุ' },
+      { ...blankItem('labor', heading.id), name: 'ค่าแรงทีมงาน' },
+      { ...blankItem('transport', heading.id), name: 'ขนส่ง' },
     ],
-  }));
+    };
+  });
 
   useEffect(() => {
     api.projects().then(setHistory).catch(() => {});
@@ -70,10 +79,12 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     setTimeout(() => setToast(''), 3000);
   };
 
+  const contactPrompt = useCustomerContactPrompt();
+
   const missing = () => {
     if (!draft.title.trim()) return 'กรุณากรอกชื่องาน';
     if (!draft.eventDate) return 'กรุณาเลือกวันที่จัดงาน';
-    return '';
+    return phoneError(draft.phone) || emailError(draft.email);
   };
   const next = () => {
     const m = step === 1 ? missing() : '';
@@ -88,11 +99,14 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
       setStep(1);
       return flash(m);
     }
+    const updateCustomer = await contactPrompt.ask({ customerId: draft.customerId, name: draft.client, phone: draft.phone, email: draft.email });
+    if (updateCustomer === null) return;
     setSaving(true);
     try {
       const { id, code, statusText, createdDate, ...body } = draft;
       const created = await api.createProject({
         ...body,
+        updateCustomer,
         costItems: draft.costItems.filter((i) => i.name.trim() || i.quantity * i.price > 0),
       });
       onCreated(created);
@@ -114,7 +128,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-6 md:mb-8">
         <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
-        <p className="text-sm md:text-base text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
+        <p className="text-sm text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
       </div>
 
       <div className="mb-6 md:mb-8 px-1 flex items-center">
@@ -136,7 +150,15 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
               {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
             </select>
           </div>
-          {field('ชื่อลูกค้า', 'client', 'text', 'เช่น คุณสมชาย')}
+          <div>
+            <label className="pb-label">ชื่อลูกค้า</label>
+            <CustomerPicker
+              value={draft.client}
+              placeholder="เช่น คุณสมชาย"
+              onChange={(client) => patch({ client, customerId: null })}
+              onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}
+            />
+          </div>
           {field('เบอร์โทรศัพท์', 'phone', 'tel', 'เช่น 081-234-5678')}
           {field('อีเมล', 'email', 'email', 'เช่น customer@email.com')}
           {field('วันที่จัดงาน *', 'eventDate', 'date')}
@@ -149,23 +171,24 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
       {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} />}
       {step === 3 && <HealthPanel h={h} budget={draft.budget} />}
 
-      <div className="mt-6 flex flex-col-reverse md:flex-row gap-3">
+      <div className="mt-6 flex flex-col-reverse md:flex-row md:justify-end gap-3">
         {step > 1 && (
           <button onClick={() => setStep(step - 1)} className="pb-btn-secondary">
             <ArrowLeft className="w-4 h-4" /> ย้อนกลับ
           </button>
         )}
         {step < 3 ? (
-          <button onClick={next} className="pb-btn-primary flex-1">
+          <button onClick={next} className="pb-btn-primary md:min-w-[14rem]">
             ถัดไป <ArrowRight className="w-4 h-4" />
           </button>
         ) : (
-          <button onClick={save} disabled={saving} className="pb-btn-primary flex-1 disabled:opacity-60">
+          <button onClick={save} disabled={saving} className="pb-btn-primary md:min-w-[14rem] disabled:opacity-60">
             <Save className="w-4 h-4" /> {saving ? 'กำลังบันทึก...' : 'บันทึกโปรเจ็กต์'}
           </button>
         )}
       </div>
 
+      {contactPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );

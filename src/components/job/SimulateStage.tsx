@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { ArrowRight, Minus, Plus, RotateCcw } from 'lucide-react';
 import type { Project } from '../../lib/api';
-import { fmt, NO_SCENARIO, simulate, type Job, type Rules, type Scenario } from '../../lib/decision';
-import { blankItem } from './CostsStage';
+import { fmt, marginToMarkup, NO_SCENARIO, repriced, simulate, type Job, type Rules, type Scenario } from '../../lib/decision';
+import { toJob } from '../../lib/job';
+import { blankGroup, blankItem } from './CostsStage';
 
 interface Props {
   draft: Project;
@@ -30,6 +31,9 @@ export function SimulateStage({ draft, job, rules, patch }: Props) {
 
   const apply = () => {
     const days = draft.setupDays + draft.eventDays;
+    // the added costs go under the job's last heading, then every heading is re-priced to the simulated price
+    const costGroups = draft.costGroups.length > 0 ? draft.costGroups : [blankGroup(marginToMarkup(rules.goodMargin), 'รายการต้นทุน')];
+    const groupId = costGroups[costGroups.length - 1].id;
     const extra = [
       r.added.material > 0 && { ...blankItem('material'), name: `ดอกไม้/วัสดุราคาขึ้น ${s.materialUpPct}%`, price: Math.round(r.added.material) },
       r.added.team > 0 && { ...blankItem('labor'), name: `ทีมเพิ่ม ${s.extraTeam} คน × ${days} วัน`, quantity: s.extraTeam * days, price: rules.dailyWage },
@@ -37,10 +41,13 @@ export function SimulateStage({ draft, job, rules, patch }: Props) {
       r.added.vehicles > 0 && { ...blankItem('transport'), name: `รถเพิ่ม ${s.extraVehicles} คัน`, quantity: s.extraVehicles, price: rules.vehicleCost },
     ]
       .filter(Boolean)
-      .map((i: any) => ({ ...i, total: i.quantity * i.price }));
+      .map((i: any) => ({ ...i, groupId, total: i.quantity * i.price }));
+    const costItems = [...draft.costItems, ...extra];
+    const priced = repriced(toJob({ ...draft, costGroups, costItems }), r.after.price);
     patch({
-      costItems: [...draft.costItems, ...extra],
-      profitMargin: r.after.cost > 0 ? Math.max(0, (r.after.price / r.after.cost - 1) * 100) : draft.profitMargin,
+      costItems,
+      costGroups: priced.groups,
+      profitMargin: priced.profitMargin,
       teamSize: s.extraTeam ? (draft.teamSize ?? 0) + s.extraTeam : draft.teamSize,
       setupDays: draft.setupDays + s.extraSetupDays,
     });

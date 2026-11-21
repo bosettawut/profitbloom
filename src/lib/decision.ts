@@ -6,20 +6,33 @@
  *
  * Terms (as used in the product vision deck):
  *   cost      total estimated cost of the job
- *   price     selling price = cost × (1 + markup)
+ *   heading   a group of cost items the shop names itself, with its own markup
+ *   price     selling price = the sum of every heading's cost × (1 + its markup)
  *   profit    price − cost
  *   margin    profit ÷ price   (NOT profit ÷ cost — that is the markup)
  */
 
-export type CostCategory = 'material' | 'rental' | 'labor' | 'transport' | 'other';
+import { jobPricing } from '../../shared/quote-math.js';
 
-export const COST_CATEGORIES: Array<{ id: CostCategory; label: string; paidBefore: boolean }> = [
-  { id: 'material', label: 'ดอกไม้/วัสดุ', paidBefore: true },
-  { id: 'rental', label: 'เช่าอุปกรณ์/พร็อพ', paidBefore: true },
-  { id: 'labor', label: 'ค่าแรง', paidBefore: false },
-  { id: 'transport', label: 'ขนส่ง/รถ', paidBefore: false },
-  { id: 'other', label: 'อื่น ๆ', paidBefore: true },
+export type BuiltInCategory = 'material' | 'rental' | 'labor' | 'owner_labor' | 'transport' | 'teardown' | 'other';
+/** a built-in category, or one the shop added in its settings ('c12') */
+export type CostCategory = BuiltInCategory | `c${number}`;
+
+const BUILT_IN_CATEGORIES: Array<{ id: CostCategory; label: string }> = [
+  { id: 'material', label: 'ดอกไม้/วัสดุ' },
+  { id: 'rental', label: 'เช่าอุปกรณ์/พร็อพ' },
+  { id: 'labor', label: 'ค่าแรง' },
+  { id: 'owner_labor', label: 'ค่าแรงเจ้าของ' },
+  { id: 'transport', label: 'ขนส่ง/รถ' },
+  { id: 'teardown', label: 'เก็บงาน/ขนส่งกลับ' },
+  { id: 'other', label: 'อื่น ๆ' },
 ];
+/** The categories to choose from: the built-in ones, with the shop's own just before "อื่น ๆ". */
+export let COST_CATEGORIES = BUILT_IN_CATEGORIES;
+/** Called with the signed-in shop's own categories (none when signed out). */
+export function setShopCategories(own: Array<{ id: string; name: string }>) {
+  COST_CATEGORIES = [...BUILT_IN_CATEGORIES.slice(0, -1), ...own.map((c) => ({ id: c.id as CostCategory, label: c.name })), BUILT_IN_CATEGORIES[BUILT_IN_CATEGORIES.length - 1]];
+}
 export const categoryLabel = (c: CostCategory) => COST_CATEGORIES.find((x) => x.id === c)?.label ?? 'อื่น ๆ';
 
 export interface Rules {
@@ -56,14 +69,24 @@ export interface JobCost {
   category: CostCategory;
   quantity: number;
   price: number;
-  paidBefore: boolean;
+  /** the heading it sits under; unplanned extras have none */
+  groupId?: number | null;
   actual?: number | null;
   isExtra?: boolean;
 }
 
+/** a heading of costs with its own markup on cost, in % */
+export interface JobGroup {
+  id: number;
+  name: string;
+  markup: number;
+}
+
 export interface Job {
   costItems: JobCost[];
-  /** markup on cost, in % (stored as `profitMargin` for historical reasons) */
+  /** every planned cost item sits under one of these; a job without any is priced at `profitMargin` as a whole */
+  groups?: JobGroup[];
+  /** markup on cost for the job as a whole, in % (stored as `profitMargin` for historical reasons) */
   profitMargin: number;
   /** what the client said they can spend; 0 = not given */
   budget: number;
@@ -72,8 +95,12 @@ export interface Job {
   eventDays: number;
   laborDays: number | null;
   teamSize: number | null;
+  /** the owner said their own labour is in the costs; an item in the "ค่าแรงเจ้าของ" category says so too */
   ownerLabor: boolean | null;
+  /** same for teardown and the trip back, and the "เก็บงาน/ขนส่งกลับ" category */
   teardown: boolean | null;
+  /** the price settled with the client (a job made from an accepted quote): fixed, so the margin follows from the costs */
+  agreedPrice?: number | null;
 }
 
 export type Severity = 'high' | 'medium' | 'low';
@@ -92,14 +119,66 @@ export const marginToMarkup = (margin: number) => (margin >= 100 ? 10000 : (marg
 export const priceForMargin = (cost: number, margin: number) => (margin >= 100 ? Infinity : cost / (1 - margin / 100));
 
 export function numbers(job: Job) {
-  const cost = job.costItems.reduce((s, i) => s + estimate(i), 0);
-  const price = cost * (1 + job.profitMargin / 100);
+  const worked = jobPricing(job.costItems, job.groups, job.profitMargin);
+  const agreed = job.agreedPrice ?? null;
+  const cost = worked.cost;
+  // an agreed price stands whatever the costs are; each heading takes the share of it that its costs are of the total
+  const price = agreed ?? worked.price;
+  const priced = agreed === null ? worked.headings : worked.headings.map((g) => ({ ...g, price: cost > 0 ? agreed * (g.cost / cost) : 0, markup: cost > 0 ? (agreed / cost - 1) * 100 : 0 }));
   const profit = price - cost;
   const margin = price > 0 ? (profit / price) * 100 : 0;
-  // money that has to leave the shop before the client pays the balance
-  const cashRequired = job.costItems.filter((i) => i.paidBefore).reduce((s, i) => s + estimate(i), 0);
   const deposit = price * (job.depositPct / 100);
-  return { cost, price, profit, margin, cashRequired, deposit };
+  // what the shop has to find itself: every cost of the job, less the deposit the client pays up front
+  const cashRequired = Math.max(0, cost - deposit);
+  const headings = priced.map((g) => ({ ...g, profit: g.price - g.cost, margin: markupToMargin(g.markup) }));
+  return { cost, price, profit, margin, cashRequired, deposit, headings };
+}
+
+/** money planned under one category, e.g. the owner's own labour */
+export const categoryCost = (job: Job, c: CostCategory) => job.costItems.filter((i) => i.category === c).reduce((s, i) => s + estimate(i), 0);
+/** job conditions are read off the cost categories; a "yes" given before those categories existed still counts */
+export const hasOwnerLabor = (job: Job) => job.ownerLabor === true || categoryCost(job, 'owner_labor') > 0;
+export const hasTeardown = (job: Job) => job.teardown === true || categoryCost(job, 'teardown') > 0;
+
+/**
+ * Each heading's markup after moving the whole job to `price`: every heading keeps its share of the
+ * price. A job is never priced below its cost, and neither is a heading: one that would be is held at
+ * its cost and the other headings make up the difference.
+ */
+export function repriced(job: Job, price: number): { groups: JobGroup[]; profitMargin: number } {
+  const n = numbers(job);
+  const groups = job.groups ?? [];
+  const target = Math.max(price, n.cost);
+  const profitMargin = n.cost > 0 ? (target / n.cost - 1) * 100 : job.profitMargin;
+  if (!(n.cost > 0) || !(n.price > 0)) return { groups, profitMargin };
+  // what the headings have to add up to: all of the price, unless some items sit outside every heading
+  const headTarget = target * (n.headings.reduce((s, h) => s + h.price, 0) / n.price);
+  const held = new Set<number>();
+  let k = 1;
+  for (;;) {
+    const free = n.headings.filter((h) => !held.has(h.id));
+    const freePrice = free.reduce((s, h) => s + h.price, 0);
+    const heldCost = n.headings.reduce((s, h) => s + (held.has(h.id) ? h.cost : 0), 0);
+    k = freePrice > 0 ? (headTarget - heldCost) / freePrice : 1;
+    const under = free.filter((h) => h.cost > 0 && h.price * k < h.cost * (1 - 1e-9));
+    if (under.length === 0) break;
+    for (const h of under) held.add(h.id);
+  }
+  return { groups: groups.map((g) => ({ ...g, markup: held.has(g.id) ? 0 : Math.max(0, (1 + g.markup / 100) * k * 100 - 100) })), profitMargin };
+}
+
+/**
+ * Each heading's markup after moving the whole job to `margin`%: the same as moving it to the price
+ * that gives that margin, so headings with different margins stay different and the job as a whole
+ * lands on the margin asked for. With nothing costed yet there is no price to share out, and every
+ * heading takes the margin itself.
+ */
+export function remargined(job: Job, margin: number): { groups: JobGroup[]; profitMargin: number } {
+  const target = Math.min(95, Math.max(0, margin));
+  const n = numbers(job);
+  if (n.cost > 0 && n.price > 0) return repriced(job, priceForMargin(n.cost, target));
+  const markup = marginToMarkup(target);
+  return { groups: (job.groups ?? []).map((g) => ({ ...g, markup })), profitMargin: markup };
 }
 
 /** Every rule that can flag a job before the quote goes out (Quote Health Check). */
@@ -107,25 +186,25 @@ export function risks(job: Job, rules: Rules): Risk[] {
   const n = numbers(job);
   const out: Risk[] = [];
   const timeline = job.setupDays + job.eventDays;
-  const has = (c: CostCategory) => job.costItems.some((i) => i.category === c && estimate(i) > 0);
+  const has = (c: CostCategory) => categoryCost(job, c) > 0;
 
-  if (job.costItems.filter((i) => !i.isExtra).length === 0)
+  if (job.agreedPrice != null && n.cost === 0)
+    out.push({ id: 'uncosted', severity: 'high', title: 'ยังไม่ได้ใส่ต้นทุน', detail: `งานนี้ตกลงราคากับลูกค้าแล้ว ${fmt(n.price)} บาท ใส่ต้นทุนของแต่ละรายการ ระบบถึงจะบอกกำไรได้` });
+  else if (job.costItems.filter((i) => !i.isExtra).length === 0)
     out.push({ id: 'no-costs', severity: 'high', title: 'ยังไม่มีรายการต้นทุน', detail: 'ใส่ต้นทุนอย่างน้อยหนึ่งรายการ ระบบถึงจะคำนวณกำไรได้' });
   if (n.price > 0 && n.margin < rules.highRiskMargin)
     out.push({ id: 'margin-high-risk', severity: 'high', title: `Margin ${n.margin.toFixed(1)}% ต่ำกว่า ${rules.highRiskMargin}% — เสี่ยงสูง`, detail: `ราคาที่ควรเสนออย่างน้อย ${fmt(priceForMargin(n.cost, rules.minMargin))} บาท (Margin ${rules.minMargin}%)` });
   else if (n.price > 0 && n.margin < rules.minMargin)
     out.push({ id: 'margin-low', severity: 'medium', title: `Margin ${n.margin.toFixed(1)}% ต่ำกว่าเป้า ${rules.minMargin}%`, detail: `ขยับราคาเป็น ${fmt(priceForMargin(n.cost, rules.minMargin))} บาท จะได้ Margin ตามเป้า` });
-  if (n.deposit < n.cashRequired)
-    out.push({ id: 'cash-flow', severity: 'high', title: 'เงินมัดจำต่ำกว่าเงินสดที่ต้องจ่ายก่อนงาน', detail: `ต้องจ่ายก่อนงาน ${fmt(n.cashRequired)} บาท แต่มัดจำ ${job.depositPct}% ได้ ${fmt(n.deposit)} บาท — ขอมัดจำอย่างน้อย ${Math.ceil((n.cashRequired / Math.max(n.price, 1)) * 100)}%` });
-  if (job.ownerLabor !== true)
-    out.push({ id: 'owner-labor', severity: 'medium', title: 'ยังไม่ได้ใส่ค่าแรงเจ้าของ', detail: 'เวลาของคุณคือต้นทุน ถ้าไม่คิด กำไรที่เห็นจะสูงกว่าความจริง' });
-  if (job.teardown !== true)
-    out.push({ id: 'teardown', severity: 'medium', title: 'ไม่มีค่าเก็บงานและขนส่งกลับ', detail: 'งานส่วนใหญ่ต้องรื้อถอนและขนของกลับหลังงาน — ใส่ไว้ในต้นทุนด้วย' });
+  if (!hasOwnerLabor(job))
+    out.push({ id: 'owner-labor', severity: 'medium', title: 'ยังไม่ได้ใส่ค่าแรงเจ้าของ', detail: 'เวลาของคุณคือต้นทุน ถ้าไม่คิด กำไรที่เห็นจะสูงกว่าความจริง — เพิ่มรายการในหมวด "ค่าแรงเจ้าของ"' });
+  if (!hasTeardown(job))
+    out.push({ id: 'teardown', severity: 'medium', title: 'ไม่มีค่าเก็บงานและขนส่งกลับ', detail: 'งานส่วนใหญ่ต้องรื้อถอนและขนของกลับหลังงาน — เพิ่มรายการในหมวด "เก็บงาน/ขนส่งกลับ"' });
   if (job.laborDays !== null && job.laborDays < timeline)
     out.push({ id: 'labor-days', severity: 'medium', title: `ค่าแรงคิด ${job.laborDays} วัน แต่ Timeline ${timeline} วัน`, detail: `รวมวันเซ็ตอัพ ${job.setupDays} วัน + วันงาน ${job.eventDays} วัน ค่าแรงควรครอบคลุมทุกวัน` });
-  if (!has('labor'))
+  if (!has('labor') && !has('owner_labor'))
     out.push({ id: 'no-labor', severity: 'medium', title: 'ยังไม่มีรายการค่าแรง', detail: 'ใส่ค่าแรงทีมงาน (และค่าแรงตัวเอง) เป็นต้นทุนของงาน' });
-  if (!has('transport'))
+  if (!has('transport') && !has('teardown'))
     out.push({ id: 'no-transport', severity: 'low', title: 'ยังไม่มีค่าขนส่ง', detail: 'ค่ารถ ค่าน้ำมัน และค่าทางด่วน มักถูกลืมใส่' });
   if (job.budget > 0 && n.price > job.budget)
     out.push({ id: 'over-budget', severity: 'low', title: `ราคาสูงกว่างบลูกค้า ${fmt(n.price - job.budget)} บาท`, detail: `ลูกค้ามีงบ ${fmt(job.budget)} บาท — ลองใช้หน้าจำลองสถานการณ์ เพื่อดูว่าลดได้แค่ไหน` });
@@ -137,13 +216,14 @@ export function health(job: Job, rules: Rules) {
   const n = numbers(job);
   const list = risks(job, rules);
   let score = 100;
-  if (n.price <= 0) score = 0;
+  // a price with no costs against it says nothing about profit yet
+  if (n.price <= 0 || (job.agreedPrice != null && n.cost === 0)) score = 0;
   else if (n.margin < 0) score -= 60;
   else if (n.margin < rules.highRiskMargin) score -= 45;
   else if (n.margin < rules.minMargin) score -= 25;
   else if (n.margin < rules.goodMargin) score -= 10;
   for (const r of list) {
-    if (r.id.startsWith('margin') || r.id === 'no-costs') continue; // already counted above
+    if (r.id.startsWith('margin') || r.id === 'no-costs' || r.id === 'uncosted') continue; // already counted above
     score -= r.severity === 'high' ? 15 : r.severity === 'medium' ? 6 : 3;
   }
   score = Math.max(0, Math.min(100, Math.round(score)));
@@ -177,11 +257,12 @@ export interface QuickAnswers {
 /** Turns the 10 quick answers into a job priced at the client's budget. */
 export function quickJob(a: QuickAnswers): Job {
   const all: JobCost[] = [
-    { name: 'ดอกไม้และวัสดุ', category: 'material', quantity: 1, price: a.materials, paidBefore: true },
-    { name: 'เช่าอุปกรณ์/พร็อพ', category: 'rental', quantity: 1, price: a.rentals, paidBefore: true },
-    { name: `ค่าแรงทีม ${a.teamSize} คน × ${a.workDays} วัน`, category: 'labor', quantity: a.teamSize * a.workDays, price: a.dailyWage, paidBefore: false },
-    { name: 'ค่าแรงเจ้าของ', category: 'labor', quantity: 1, price: a.ownerLabor, paidBefore: false },
-    { name: a.teardownIncluded ? 'ขนส่งไป-กลับ และเก็บงาน' : 'ขนส่ง', category: 'transport', quantity: 1, price: a.transport, paidBefore: false },
+    { name: 'ดอกไม้และวัสดุ', category: 'material', quantity: 1, price: a.materials },
+    { name: 'เช่าอุปกรณ์/พร็อพ', category: 'rental', quantity: 1, price: a.rentals },
+    { name: `ค่าแรงทีม ${a.teamSize} คน × ${a.workDays} วัน`, category: 'labor', quantity: a.teamSize * a.workDays, price: a.dailyWage },
+    { name: 'ค่าแรงเจ้าของ', category: 'owner_labor', quantity: 1, price: a.ownerLabor },
+    // one figure covers the trip there and, when included, teardown and the trip back
+    { name: a.teardownIncluded ? 'ขนส่งไป-กลับ และเก็บงาน' : 'ขนส่ง', category: 'transport', quantity: 1, price: a.transport },
   ];
   const items = all.filter((i) => i.quantity * i.price > 0);
   const cost = items.reduce((s, i) => s + i.quantity * i.price, 0);
@@ -207,21 +288,20 @@ export function canTakeJob(a: QuickAnswers, rules: Rules) {
   const reasons: string[] = [];
   reasons.push(`ต้นทุนรวมโดยประมาณ ${fmt(n.cost)} บาท (ดอกไม้/วัสดุ ${fmt(a.materials)} + เช่า ${fmt(a.rentals)} + ค่าแรงทีม ${a.teamSize}×${a.workDays}×${fmt(a.dailyWage)} + ค่าแรงเจ้าของ ${fmt(a.ownerLabor)} + ขนส่ง ${fmt(a.transport)})`);
   reasons.push(`ที่งบ ${fmt(a.budget)} บาท จะเหลือกำไร ${fmt(n.profit)} บาท → Margin = ${fmt(n.profit)} ÷ ${fmt(a.budget)} = ${n.margin.toFixed(1)}%`);
-  reasons.push(`เงินที่ต้องสำรองจ่ายก่อนงาน ${fmt(n.cashRequired)} บาท / มัดจำ ${a.depositPct}% = ${fmt(n.deposit)} บาท`);
+  reasons.push(`เงินสดที่ต้องสำรองเอง ${fmt(n.cashRequired)} บาท = ต้นทุน ${fmt(n.cost)} − มัดจำ ${a.depositPct}% (${fmt(n.deposit)} บาท)`);
   if (a.ownerLabor <= 0) reasons.push('ยังไม่ได้คิดค่าแรงเจ้าของ — กำไรจริงจะน้อยกว่านี้');
   if (!a.teardownIncluded) reasons.push('ยังไม่รวมค่าเก็บงานและขนส่งกลับ');
 
   // what to change before saying yes, most important first
   const fixes: string[] = [];
   if (n.margin < rules.minMargin) fixes.push(`เสนอราคาอย่างน้อย ${fmt(minPrice)} บาท (Margin ${rules.minMargin}%)`);
-  if (n.deposit < n.cashRequired) fixes.push(`ขอมัดจำอย่างน้อย ${Math.ceil((n.cashRequired / Math.max(a.budget, 1)) * 100)}% (${fmt(n.cashRequired)} บาท) ให้พอจ่ายก่อนงาน`);
   if (a.ownerLabor <= 0) fixes.push('ใส่ค่าแรงของคุณเองเป็นต้นทุน');
   if (!a.teardownIncluded) fixes.push('รวมค่าเก็บงานและขนส่งกลับในค่าขนส่ง');
 
   let verdict: Verdict;
   if (n.cost <= 0 || a.budget <= 0) verdict = 'risky';
   else if (n.margin < rules.highRiskMargin) verdict = 'risky';
-  else if (n.margin < rules.minMargin || n.deposit < n.cashRequired || a.ownerLabor <= 0 || !a.teardownIncluded) verdict = 'adjust';
+  else if (n.margin < rules.minMargin || a.ownerLabor <= 0 || !a.teardownIncluded) verdict = 'adjust';
   else verdict = 'take';
 
   return { job, ...n, minPrice, verdict, reasons, fixes };

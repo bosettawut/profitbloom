@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin } from 'lucide-react';
-import { api, Project, QuoteStatus, User } from '../lib/api';
+import { Plus, Trash2, Save, Eye, FileText, Calculator, ArrowLeft, Download, Send, X, Phone, Mail, Calendar, MapPin, Lock, FolderPlus } from 'lucide-react';
+import { api, baht, Project, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
+import { CustomerPicker } from './CustomerPicker';
+import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
+import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -11,6 +14,8 @@ interface QuoteItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  /** round this line's amount up to a whole baht as soon as it has a fraction */
+  roundUp?: boolean;
 }
 
 interface NewQuoteProps {
@@ -18,16 +23,19 @@ interface NewQuoteProps {
   quoteId: string | null;
   fromProject: Project | null;
   startInPreview: boolean;
+  /** opens a job on its cost step */
+  onOpenProjectCosts: (project: Project) => void;
   onDone: () => void;
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
-export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }: NewQuoteProps) {
+export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [projectId, setProjectId] = useState<string | null>(fromProject?.id ?? null);
+  const [customerId, setCustomerId] = useState<string | null>(fromProject?.customerId ?? null);
   const [createdDate, setCreatedDate] = useState(new Date().toLocaleDateString('th-TH'));
   const [loading, setLoading] = useState(!!quoteId);
   const [saving, setSaving] = useState(false);
@@ -42,19 +50,40 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
     notes: fromProject?.notes ?? ''
   });
 
-  // a quote created from a project lists each cost item at its selling price (cost + project margin)
-  const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() =>
-    fromProject && fromProject.costItems.some((i) => !i.isExtra)
-      ? fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
-          const unitPrice = Math.round(item.price * (1 + fromProject.profitMargin / 100) * 100) / 100;
-          return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: unitPrice * item.quantity };
-        })
-      : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }]
-  );
+  // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
+  const [lockedPrice, setLockedPrice] = useState<number | null>(() => {
+    const price = fromProject ? fromProject.agreedPrice ?? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
+    return price > 0 ? price : null;
+  });
+  // each line chooses whether its amount rounds up to a whole baht ('line'); a quote made before that
+  // choice existed opens on the old rule ('baht') until the user switches it
+  const [rounding, setRounding] = useState<Rounding>('line');
+  // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
+  const startRoundUp = lockedPrice === null || Number.isInteger(lockedPrice);
+
+  // it lists each cost item at its selling price (cost + its heading's margin) in whole baht; rounding each
+  // line can leave the sum a few baht off the job's price, so one line takes up the difference
+  const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
+    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: true }];
+    const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
+      const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin) / 100));
+      return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0, roundUp: startRoundUp };
+    });
+    const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
+    return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
+  });
 
   const [taxRate, setTaxRate] = useState(7);
+  const [vatMode, setVatMode] = useState<VatMode>(user.vatMode);
   const [discountRate, setDiscountRate] = useState(0);
+  // withholding tax: only some customers (companies paying for a service) hold it back, so it starts at none
+  const [whtRate, setWhtRate] = useState(0);
   const [notification, setNotification] = useState('');
+  const contactPrompt = useCustomerContactPrompt();
+  /** the contact details this quote started with (from its project, or as last saved): unchanged, they are not asked about */
+  const startContact = useRef<TypedContact | undefined>(
+    fromProject ? { customerId: fromProject.customerId, name: fromProject.client, phone: fromProject.phone, email: fromProject.email } : undefined,
+  );
 
   useEffect(() => {
     if (!quoteId) return;
@@ -63,6 +92,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         setQuoteCode(q.code);
         setStatus(q.status);
         setProjectId(q.projectId);
+        setCustomerId(q.customerId);
+        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail };
         setCreatedDate(q.createdDate);
         setQuoteData({
           clientName: q.clientName,
@@ -73,27 +104,48 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
           validUntil: q.validUntil,
           notes: q.notes
         });
-        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0 }]);
+        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
+        setWhtRate(q.whtRate);
+        setVatMode(q.vatMode);
+        setRounding(q.rounding === 'baht' ? 'baht' : 'line');
+        setLockedPrice(q.lockedPrice);
         if (startInPreview) setShowPreview(true);
       })
       .catch(err => showNotification(err.message))
       .finally(() => setLoading(false));
   }, [quoteId, startInPreview]);
 
-  const subtotal = quoteItems.reduce((sum, item) => sum + item.total, 0);
-  const discount = subtotal * (discountRate / 100);
-  const afterDiscount = subtotal - discount;
-  const tax = afterDiscount * (taxRate / 100);
-  const grandTotal = afterDiscount + tax;
+  const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate, withholding, payable } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding, whtRate });
+  // show the satang only when some amount on this quote has any, so a whole-baht quote stays clean
+  const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, withholding, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
+  const money = (n: number) => baht(n, showSatang ? 2 : 0);
+  /** how far the lines are from the locked job price (0 = they match) */
+  const lockGap = lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
+
+  const fitToLock = () => {
+    if (lockedPrice === null) return;
+    const fitted = fitToPrice(quoteItems, lockedPrice, discountRate, rounding);
+    if (!fitted) return showNotification('ปรับอัตโนมัติไม่ได้กับส่วนลดนี้ ลองเปลี่ยนส่วนลดหรือแก้รายการเอง');
+    setQuoteItems(fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) })));
+    showNotification('ปรับยอดรายการให้ตรงกับราคาที่ล็อกแล้ว');
+  };
+
+  /** moves a quote from the old whole-baht rule to choosing line by line, starting with every line rounding up */
+  const chooseByLine = () => {
+    setRounding('line');
+    setQuoteItems((items) => items.map((i) => ({ ...i, roundUp: true })).map((i) => ({ ...i, total: lineAmount(i, 'line') })));
+  };
+  const setRoundUp = (id: number, roundUp: boolean) =>
+    setQuoteItems((items) => items.map((i) => (i.id === id ? { ...i, roundUp, total: lineAmount({ ...i, roundUp }, rounding) } : i)));
 
   const updateQuoteItem = (id: number, field: string, value: string | number) => {
     setQuoteItems(items => items.map(item => {
       if (item.id === id) {
         const updatedItem = { ...item, [field]: value };
         if (field === 'quantity' || field === 'unitPrice') {
-          updatedItem.total = updatedItem.quantity * updatedItem.unitPrice;
+          updatedItem.total = lineAmount(updatedItem, rounding);
         }
         return updatedItem;
       }
@@ -108,7 +160,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       description: '',
       quantity: 1,
       unitPrice: 0,
-      total: 0
+      total: 0,
+      roundUp: rounding === 'line',
     }]);
   };
 
@@ -127,22 +180,37 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       showNotification('กรุณากรอกชื่อลูกค้า');
       return null;
     }
+    if (lockGap !== 0) {
+      setShowPreview(false);
+      showNotification(`ยอดรายการยังไม่เท่าราคาที่ล็อกไว้ ${money(lockedPrice ?? 0)} กด "ปรับส่วนต่างอัตโนมัติ"`);
+      return null;
+    }
+    const contact: TypedContact = { customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail };
+    const updateCustomer = await contactPrompt.ask(contact, startContact.current);
+    if (updateCustomer === null) return null;
     setSaving(true);
     try {
       const body = {
         ...quoteData,
         projectId,
+        customerId,
+        updateCustomer,
         taxRate,
         discountRate,
+        whtRate,
+        vatMode,
+        rounding,
         status: nextStatus === 'expired' ? undefined : nextStatus,
         items: quoteItems
           .filter(item => item.description.trim() || item.total > 0)
-          .map(({ description, quantity, unitPrice }) => ({ description, quantity, unitPrice })),
+          .map(({ description, quantity, unitPrice, roundUp }) => ({ description, quantity, unitPrice, roundUp: !!roundUp })),
       };
       const saved = savedId ? await api.updateQuote(savedId, body) : await api.createQuote(body);
       setSavedId(saved.id);
+      startContact.current = contact;
       setQuoteCode(saved.code);
       setStatus(saved.status);
+      setLockedPrice(saved.lockedPrice);
       return saved;
     } catch (err) {
       showNotification((err as Error).message);
@@ -162,7 +230,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
   };
 
   const docRef = useRef<HTMLDivElement>(null);
-  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, items: quoteItems };
+  const docData = { ...quoteData, code: quoteCode, createdDate, taxRate, discountRate, whtRate, vatMode, rounding, items: quoteItems };
   const [exporting, setExporting] = useState(false);
 
   /** Saves first so the PDF always carries a real quote number, then downloads it. */
@@ -182,6 +250,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
     }
   };
 
+  /** an approved quote that was written on its own becomes a job, and the costs get filled in there */
+  const makeProject = async () => {
+    const saved = await persist();
+    if (!saved) return;
+    try {
+      onOpenProjectCosts(await api.createProjectFromQuote(saved.id));
+    } catch (err) {
+      showNotification((err as Error).message);
+    }
+  };
+
   const handleSend = async () => {
     if (!(await exportPdf())) return;
     const saved = await persist(status === 'approved' || status === 'rejected' ? status : 'sent');
@@ -193,9 +272,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
         `เรียน ${saved.clientName}`,
         '',
         `ขอส่งใบเสนอราคา ${saved.code}${saved.projectTitle ? ` สำหรับ ${saved.projectTitle}` : ''}`,
-        ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ฿${i.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`),
+        ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ${money(i.total)}`),
         '',
-        `ยอดรวมสุทธิ ฿${saved.totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        `ยอดรวมสุทธิ ${money(saved.totalAmount)}`,
+        ...(saved.withholding > 0 ? [`หัก ณ ที่จ่าย ${saved.whtRate}% ${money(saved.withholding)}`, `ยอดชำระ ${money(saved.payableAmount)}`] : []),
         saved.validUntilText ? `ใบเสนอราคานี้ใช้ได้ถึง ${saved.validUntilText}` : '',
         '',
         user.businessName || user.name,
@@ -219,14 +299,14 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
           <ArrowLeft className="w-4 h-4" /> ใบเสนอราคาทั้งหมด
         </button>
         <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">{savedId ? `ใบเสนอราคา ${quoteCode}` : 'สร้างใบเสนอราคาใหม่'}</h2>
-        <p className="text-sm md:text-base text-ink-muted">
+        <p className="text-sm text-ink-muted">
           {fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (ราคาต่อหน่วยรวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6 md:space-y-8">
+        <div className="xl:col-span-2 space-y-6">
           {/* Client Information */}
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">ข้อมูลลูกค้า</h3>
@@ -234,12 +314,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
               <div>
                 <label className="pb-label">ชื่อลูกค้า *</label>
-                <input
-                  type="text"
+                <CustomerPicker
                   value={quoteData.clientName}
-                  onChange={(e) => setQuoteData({ ...quoteData, clientName: e.target.value })}
-                  className="pb-input"
                   placeholder="เช่น คุณสมชาย"
+                  onChange={(clientName) => {
+                    setCustomerId(null);
+                    setQuoteData({ ...quoteData, clientName });
+                  }}
+                  onPick={(c) => {
+                    setCustomerId(c.id);
+                    setQuoteData({ ...quoteData, clientName: c.name, clientPhone: c.phone, clientEmail: c.email });
+                  }}
                 />
               </div>
 
@@ -358,11 +443,22 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                         />
                       </div>
                     </div>
+                    {rounding === 'line' && (
+                      <label className="flex items-center gap-2 text-sm text-ink">
+                        <input
+                          type="checkbox"
+                          checked={!!item.roundUp}
+                          onChange={(e) => setRoundUp(item.id, e.target.checked)}
+                          className="w-4 h-4 accent-[#673AB7]"
+                        />
+                        ปัดขึ้นเป็นบาทเต็ม
+                      </label>
+                    )}
                     <div className="flex justify-between items-center">
                       <div>
                         <span className="text-xs text-ink-muted">รวม: </span>
                         <span className="font-medium text-ink">
-                          ฿{item.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {money(item.total)}
                         </span>
                       </div>
                       <button
@@ -379,20 +475,29 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
 
             {/* Desktop View - Table */}
             <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full min-w-[34rem] table-fixed">
+                <colgroup>
+                  <col />
+                  <col className="w-20" />
+                  <col className="w-28" />
+                  {rounding === 'line' && <col className="w-14" />}
+                  <col className="w-32" />
+                  <col className="w-12" />
+                </colgroup>
                 <thead>
                   <tr className="bg-canvas/60 border-b border-line">
-                    <th className="text-left p-4 text-ink font-medium">รายละเอียด</th>
-                    <th className="text-left p-4 text-ink font-medium">จำนวน</th>
-                    <th className="text-left p-4 text-ink font-medium">ราคาต่อหน่วย</th>
-                    <th className="text-right p-4 text-ink font-medium">รวม</th>
-                    <th className="text-center p-4 text-ink font-medium">การจัดการ</th>
+                    <th className="text-left px-3 py-4 text-ink font-medium">รายละเอียด</th>
+                    <th className="text-right px-3 py-4 text-ink font-medium">จำนวน</th>
+                    <th className="text-right px-3 py-4 text-ink font-medium whitespace-nowrap">ราคา/หน่วย</th>
+                    {rounding === 'line' && <th className="text-center px-1 py-4 text-ink font-medium" title="ปัดยอดของรายการขึ้นเป็นบาทเต็มเมื่อมีเศษ">ปัด</th>}
+                    <th className="text-right px-3 py-4 text-ink font-medium">รวม</th>
+                    <th className="px-3 py-4"><span className="sr-only">ลบรายการ</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {quoteItems.map((item) => (
                     <tr key={item.id} className="border-b border-line hover:bg-canvas/60">
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="text"
                           value={item.description}
@@ -401,31 +506,45 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                           placeholder="รายละเอียดสินค้า/บริการ"
                         />
                       </td>
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="number"
                           value={item.quantity}
                           onChange={(e) => updateQuoteItem(item.id, 'quantity', parseFloat(e.target.value) || 0)}
-                          className="w-full bg-transparent text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
+                          className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
-                      <td className="p-4">
+                      <td className="px-3 py-4">
                         <input
                           type="number"
                           step="0.01"
                           value={item.unitPrice}
                           onChange={(e) => updateQuoteItem(item.id, 'unitPrice', parseFloat(e.target.value) || 0)}
-                          className="w-full bg-transparent text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
+                          className="w-full bg-transparent text-right text-ink-muted outline-none border-b border-line focus:border-[#673AB7] py-2"
                         />
                       </td>
-                      <td className="p-4 text-right">
+                      {rounding === 'line' && (
+                        <td className="px-1 py-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={!!item.roundUp}
+                            onChange={(e) => setRoundUp(item.id, e.target.checked)}
+                            aria-label="ปัดขึ้นเป็นบาทเต็ม"
+                            title="ปัดยอดของรายการนี้ขึ้นเป็นบาทเต็มเมื่อมีเศษ"
+                            className="w-4 h-4 align-middle accent-[#673AB7] cursor-pointer"
+                          />
+                        </td>
+                      )}
+                      <td className="px-3 py-4 text-right whitespace-nowrap">
                         <span className="text-ink font-medium">
-                          ฿{item.total.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          {money(item.total)}
                         </span>
                       </td>
-                      <td className="p-4 text-center">
+                      <td className="px-1 py-4 text-center">
                         <button
                           onClick={() => removeQuoteItem(item.id)}
+                          aria-label="ลบรายการ"
+                          title="ลบรายการ"
                           className="p-2 text-red-500 hover:bg-red-100 rounded-lg transition-colors"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -436,13 +555,21 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                 </tbody>
               </table>
             </div>
+            {rounding === 'line' ? (
+              <p className="text-xs text-ink-muted mt-3 md:mt-4">รายการที่ติ๊ก "ปัด" จะปัดยอดขึ้นเป็นบาทเต็มทันทีที่มีเศษ เช่น 99.01 เป็น 100 รายการที่ไม่ติ๊กคิดถึงสตางค์</p>
+            ) : (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#F7F6FA] px-3 py-3 mt-3 md:mt-4">
+                <p className="text-xs text-ink-muted">ใบนี้ใช้การปัดแบบเดิม: ทุกยอดปัดเป็นบาทเต็ม (ตั้งแต่ 50 สตางค์ปัดขึ้น)</p>
+                <button type="button" onClick={chooseByLine} className="pb-btn-secondary !py-2 text-sm">เลือกปัดทีละรายการ</button>
+              </div>
+            )}
           </div>
 
           {/* Tax and Discount Settings */}
           <div className="pb-card p-4 md:p-6">
             <h3 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">การคำนวณเพิ่มเติม</h3>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+            <div className={`grid grid-cols-1 gap-4 md:gap-6 ${vatMode === 'none' ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
               <div>
                 <label className="pb-label">ส่วนลด (%)</label>
                 <input
@@ -457,32 +584,58 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               </div>
 
               <div>
-                <label className="pb-label">ภาษี (%)</label>
+                <label className="pb-label">ภาษีมูลค่าเพิ่ม (VAT)</label>
+                <select className="pb-input" value={vatMode} onChange={(e) => setVatMode(e.target.value as VatMode)}>
+                  <option value="exclusive">บวก VAT เพิ่มจากราคา</option>
+                  <option value="inclusive">ราคารวม VAT แล้ว (ถอด VAT)</option>
+                  <option value="none">ไม่มี VAT</option>
+                </select>
+              </div>
+
+              {vatMode !== 'none' && (
+                <div>
+                  <label className="pb-label">อัตรา VAT (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={taxRate}
+                    onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                    className="pb-input"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="pb-label">หัก ณ ที่จ่าย (%)</label>
                 <input
                   type="number"
                   min="0"
                   max="100"
                   step="0.1"
-                  value={taxRate}
-                  onChange={(e) => setTaxRate(parseFloat(e.target.value) || 0)}
+                  value={whtRate}
+                  onChange={(e) => setWhtRate(Math.min(100, Math.max(0, parseFloat(e.target.value) || 0)))}
                   className="pb-input"
                 />
               </div>
             </div>
+            <p className="text-xs text-ink-muted mt-3 md:mt-4">หัก ณ ที่จ่าย: ใส่ 0 ถ้าลูกค้าไม่หัก ค่าบริการทั่วไปหัก 3% คิดจากยอดก่อน VAT</p>
+            {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-1">ส่วนลด VAT และหัก ณ ที่จ่าย คิดถึงสตางค์ ไม่ปัดเศษ</p>}
           </div>
         </div>
 
         {/* Summary Sidebar */}
-        <div className="space-y-6">
+        <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
           {/* Financial Summary */}
-          <div className="pb-card p-4 md:p-6 sticky top-4">
+          <div className="pb-card p-4 md:p-6">
             <h4 className="text-base md:text-lg text-ink mb-4 md:mb-6 font-semibold">สรุปการเงิน</h4>
             
             <div className="space-y-3 md:space-y-4">
               <div className="flex justify-between">
                 <span className="text-sm md:text-base text-ink-muted">ยอดรวม</span>
                 <span className="font-medium text-ink text-sm md:text-base">
-                  ฿{subtotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(subtotal)}
                 </span>
               </div>
               
@@ -490,7 +643,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
                 <div className="flex justify-between">
                   <span className="text-sm md:text-base text-ink-muted">ส่วนลด ({discountRate}%)</span>
                   <span className="font-medium text-red-600 text-sm md:text-base">
-                    -฿{discount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    -{money(discount)}
                   </span>
                 </div>
               )}
@@ -498,15 +651,24 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               <div className="flex justify-between">
                 <span className="text-sm md:text-base text-ink-muted">ยอดหลังหักส่วนลด</span>
                 <span className="font-medium text-ink text-sm md:text-base">
-                  ฿{afterDiscount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(afterDiscount)}
                 </span>
               </div>
               
-              {taxRate > 0 && (
+              {vatRate > 0 && vatMode === 'inclusive' && (
                 <div className="flex justify-between">
-                  <span className="text-sm md:text-base text-ink-muted">ภาษี ({taxRate}%)</span>
+                  <span className="text-sm md:text-base text-ink-muted">มูลค่าก่อน VAT</span>
+                  <span className="font-medium text-ink text-sm md:text-base">
+                    {money(beforeVat)}
+                  </span>
+                </div>
+              )}
+
+              {vatRate > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-sm md:text-base text-ink-muted">{vatMode === 'inclusive' ? `VAT ${vatRate}% (รวมในราคาแล้ว)` : `ภาษี (${vatRate}%)`}</span>
                   <span className="font-medium text-amber-600 text-sm md:text-base">
-                    ฿{tax.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {money(tax)}
                   </span>
                 </div>
               )}
@@ -514,22 +676,63 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
               <div className="flex justify-between pt-3 md:pt-4 border-t border-line text-base md:text-lg font-medium">
                 <span className="text-ink">ยอดรวมสุทธิ</span>
                 <span className="text-ink">
-                  ฿{grandTotal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {money(grandTotal)}
                 </span>
               </div>
+
+              {whtRate > 0 && (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-sm md:text-base text-ink-muted">หัก ณ ที่จ่าย ({whtRate}%)</span>
+                    <span className="text-sm md:text-base text-rose-600">-{money(withholding)}</span>
+                  </div>
+                  <div className="flex justify-between pt-3 md:pt-4 border-t border-line text-base md:text-lg font-medium">
+                    <span className="text-ink">ยอดชำระ</span>
+                    <span className="text-ink">{money(payable)}</span>
+                  </div>
+                </>
+              )}
             </div>
+
+            {lockedPrice !== null && (
+              <div className="rounded-xl bg-[#F7F6FA] px-3 py-3 mt-4">
+                <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                  <Lock className="w-4 h-4 text-[#673AB7] shrink-0" />
+                  ราคาโปรเจ็กต์ที่ล็อกไว้ {money(lockedPrice)}
+                </p>
+                {lockGap === 0 ? (
+                  <p className="text-xs text-emerald-600 mt-1">ยอดรายการหลังหักส่วนลดตรงกับราคาที่ล็อก</p>
+                ) : (
+                  <>
+                    <p className="text-xs text-rose-600 mt-1">
+                      ยอดรายการหลังหักส่วนลด {money(afterDiscount)} {lockGap > 0 ? 'เกิน' : 'ขาด'}อยู่ {money(Math.abs(lockGap))} ต้องเท่าราคาที่ล็อกจึงจะบันทึกได้
+                    </p>
+                    <button onClick={fitToLock} className="pb-btn-secondary !py-2 w-full mt-3 !bg-white">
+                      ปรับส่วนต่างอัตโนมัติ
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* Action Buttons */}
             <div className="grid grid-cols-1 gap-3 mt-6">
               <button
                 onClick={handlePreview}
-                className="pb-btn-secondary !py-3"
+                className="pb-btn-secondary"
               >
                 <Eye className="w-4 h-4" />
                 ดูตัวอย่าง
               </button>
 
-              <button onClick={exportPdf} disabled={saving || exporting} className="pb-btn-secondary !py-3 disabled:opacity-60">
+              {savedId && status === 'approved' && !projectId && (
+                <button onClick={makeProject} disabled={saving} className="pb-btn-secondary disabled:opacity-60">
+                  <FolderPlus className="w-4 h-4" />
+                  สร้างโปรเจ็กต์และใส่ต้นทุน
+                </button>
+              )}
+
+              <button onClick={exportPdf} disabled={saving || exporting} className="pb-btn-secondary disabled:opacity-60">
                 <Download className="w-4 h-4" />
                 {exporting ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF'}
               </button>
@@ -573,6 +776,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onDone }:
       </div>
 
       {/* Notification */}
+      {contactPrompt.node}
       {notification && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">
           {notification}

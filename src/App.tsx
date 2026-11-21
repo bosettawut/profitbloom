@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   BarChart3, 
   FolderOpen, 
@@ -39,12 +39,16 @@ import { AllQuotes } from './components/AllQuotes';
 import { Packages } from './components/Packages';
 import { AdminPage } from './components/AdminPage';
 import { QuickCheck } from './components/QuickCheck';
-import { LEVEL_STYLE, projectHealth } from './lib/job';
-import { AuthScreen } from './components/AuthScreen';
+import { LEVEL_STYLE, projectHealth, salePrice } from './lib/job';
+import { AuthScreen, type AuthMode } from './components/AuthScreen';
+import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
+import { CustomerPage, Customers } from './components/Customers';
+import { setShopCategories } from './lib/decision';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
 import { trialDaysLeft } from './lib/plans';
+import { parseView, viewPath, type View } from './lib/route';
 import { api, Activity, baht, Dashboard, Project, ProjectInput, timeAgo, UNAUTHORIZED_EVENT, User } from './lib/api';
 
 // Function to calculate progress based on status
@@ -61,12 +65,12 @@ export const getProgressFromStatus = (status: string): number => {
 };
 
 const activityIcon = (kind: string) => {
-  if (kind.startsWith('quote_deleted') || kind === 'project_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
+  if (kind.startsWith('quote_deleted') || kind === 'project_deleted' || kind === 'customer_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind === 'quote_sent') return { icon: Send, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'quote_rejected' || kind === 'project_cancelled') return { icon: XCircle, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind.startsWith('quote_')) return { icon: FileText, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'plan_changed') return { icon: Crown, iconBg: 'bg-amber-50 text-amber-600' };
-  if (kind === 'project_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
+  if (kind === 'project_created' || kind === 'customer_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
   if (kind === 'project_completed' || kind === 'project_approved') return { icon: CheckCircle, iconBg: 'bg-amber-50 text-amber-600' };
   return { icon: DollarSign, iconBg: 'bg-violet-50 text-[#673AB7]' };
 };
@@ -80,22 +84,28 @@ const formatEventDate = (iso: string) =>
 
 interface AppProps {
   /** which tab the sign-in screen opens on when nobody is logged in */
-  authMode?: 'login' | 'register';
-  /** move to another top-level page (landing, /login, /signup, /app) */
-  go?: (path: string) => void;
+  authMode?: AuthMode;
+  /** the current address (path + query); decides which app screen is showing */
+  path: string;
+  /** move to another address: landing, /login, /signup, or a screen under /app */
+  go: (path: string, options?: { replace?: boolean }) => void;
 }
 
-export default function App({ authMode = 'login', go }: AppProps) {
+export default function App({ authMode = 'login', path, go }: AppProps) {
   const [user, setUser] = useState<User | null>(null);
+  // the category menus read this list; set while rendering so every screen below sees the signed-in shop's categories
+  setShopCategories(user?.costCategories ?? []);
   const [authChecked, setAuthChecked] = useState(false);
-  const [activeNav, setActiveNav] = useState('dashboard');
   const [chartType, setChartType] = useState<'line' | 'bar'>('bar');
   const [chartRange, setChartRange] = useState<'6' | '12' | 'year'>('6');
+  // the screen comes from the address, so the browser's back/forward buttons walk through the app
+  const view = useMemo(() => parseView(path), [path]);
+  /** the page a password reset email links to; it works whether or not someone is signed in here */
+  const onResetPage = path.startsWith('/reset');
+  const activeNav = view.nav;
+  /** the job the address points at (open in the workspace, or the one a new quote is built from) */
+  const neededProjectId = view.projectId ?? view.fromProjectId;
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [editOnOpen, setEditOnOpen] = useState(false);
-  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
-  const [quoteStartsInPreview, setQuoteStartsInPreview] = useState(false);
-  const [quoteFromProject, setQuoteFromProject] = useState<Project | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [openJobs, setOpenJobs] = useState<Project[]>([]);
   const [allActivities, setAllActivities] = useState<Activity[] | null>(null);
@@ -117,35 +127,43 @@ export default function App({ authMode = 'login', go }: AppProps) {
 
   useEffect(() => {
     document.title = user ? brandName(user) : 'ProfitBloom';
-    // a signed-in user always lives at /app, even if they arrived via /login or /signup (or the back button)
-    const keepAtApp = () => {
-      if (user && window.location.pathname !== '/app') window.history.replaceState(null, '', '/app');
-    };
-    keepAtApp();
-    window.addEventListener('popstate', keepAtApp);
-    return () => window.removeEventListener('popstate', keepAtApp);
   }, [user]);
+
+  useEffect(() => {
+    // a signed-in user never sees /login or /signup again, not even through the back button
+    if (user && !path.startsWith('/app') && !onResetPage) go('/app', { replace: true });
+  }, [user, path]);
+
+  const show = (next: View, options?: { replace?: boolean }) => {
+    setAllActivities(null);
+    go(viewPath(next), options);
+  };
+
+  useEffect(() => {
+    // arrived by back/forward, refresh or a link: the job isn't in memory yet
+    if (!user || !neededProjectId || selectedProject?.id === neededProjectId) return;
+    let stale = false;
+    api.project(neededProjectId)
+      .then((p) => !stale && setSelectedProject(p))
+      .catch(() => !stale && show({ nav: 'projects' }, { replace: true }));
+    return () => {
+      stale = true;
+    };
+  }, [user, neededProjectId, selectedProject?.id]);
 
   useEffect(() => {
     if (user && activeNav === 'dashboard') loadDashboard();
   }, [user, activeNav, loadDashboard]);
 
-  const navigate = (nav: string) => {
-    setActiveNav(nav);
-    setSelectedProject(null);
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(null);
-    setAllActivities(null);
-    window.scrollTo(0, 0);
-  };
+  const navigate = (nav: string) => show({ nav });
 
-  const handleLogout = async () => {
-    await api.logout().catch(() => {});
+  const handleLogout = async (everywhere = false) => {
+    if (everywhere) await api.logoutAll();
+    else await api.logout().catch(() => {});
     setUser(null);
     setDashboard(null);
-    navigate('dashboard');
-    go?.('/');
+    setSelectedProject(null);
+    go('/');
   };
 
   if (!authChecked) {
@@ -156,18 +174,33 @@ export default function App({ authMode = 'login', go }: AppProps) {
     );
   }
 
+  if (onResetPage) {
+    return (
+      <ResetPassword
+        token={new URLSearchParams(path.split('?')[1] ?? '').get('token') ?? ''}
+        onDone={(u) => {
+          // possibly a different account from the one that was signed in on this device
+          setSelectedProject(null);
+          setDashboard(null);
+          setUser(u);
+          go('/app', { replace: true });
+        }}
+        onRequestNew={() => go('/forgot', { replace: true })}
+        onBack={() => go('/')}
+      />
+    );
+  }
+
   if (!user) {
     return (
       <AuthScreen
         key={authMode}
         initialMode={authMode}
-        onModeChange={(m) => go?.(m === 'register' ? '/signup' : '/login')}
-        onBack={go && (() => go('/'))}
-        onAuthenticated={(u) => {
-          setUser(u);
-          navigate('dashboard');
-          go?.('/app');
-        }}
+        onModeChange={(m) => go(m === 'register' ? '/signup' : m === 'forgot' ? '/forgot' : '/login')}
+        onBack={() => go('/')}
+        // signing in from /login lands on /app (see the effect above); a session that ran out
+        // mid-work signs back in to the screen it was on
+        onAuthenticated={setUser}
       />
     );
   }
@@ -226,10 +259,8 @@ export default function App({ authMode = 'login', go }: AppProps) {
     activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav));
 
   const handleProjectSelect = (project: Project, edit = false) => {
-    setActiveNav('projects');
-    setEditOnOpen(edit);
     setSelectedProject(project);
-    window.scrollTo(0, 0);
+    show({ nav: 'projects', projectId: project.id, edit });
   };
 
   const handleProjectUpdate = async (updatedProject: ProjectInput & { id: string }) => {
@@ -240,43 +271,41 @@ export default function App({ authMode = 'login', go }: AppProps) {
 
   const handleProjectDelete = async (projectId: string) => {
     await api.deleteProject(projectId);
+    // the deleted job's address is replaced, so the back button can't land on it again
     setSelectedProject(null);
+    show({ nav: 'projects' }, { replace: true });
   };
 
-  const handleBackToProjects = () => {
-    setSelectedProject(null);
-  };
+  const handleBackToProjects = () => show({ nav: 'projects' });
 
-  const openQuote = (quoteId: string | null, preview = false) => {
-    setEditingQuoteId(quoteId);
-    setQuoteStartsInPreview(preview);
-    setQuoteFromProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
-  };
+  const openQuote = (quoteId: string | null, preview = false) => show({ nav: 'quotes-new', quoteId: quoteId ?? undefined, preview });
 
   const createQuoteFromProject = (project: Project) => {
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(project);
-    setSelectedProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
+    setSelectedProject(project);
+    show({ nav: 'quotes-new', fromProjectId: project.id });
   };
 
+  const loadingScreen = (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-[#673AB7] animate-spin" />
+    </div>
+  );
+
   const renderContent = () => {
-    // If a project is selected, show project detail
-    if (selectedProject && activeNav === 'projects') {
+    // the address names a job that is still being fetched
+    if (neededProjectId && selectedProject?.id !== neededProjectId) return loadingScreen;
+
+    if (view.projectId && selectedProject) {
       return (
         <JobWorkspace
-          key={`${selectedProject.id}-${editOnOpen}`}
+          key={`${selectedProject.id}-${!!view.edit}`}
           project={selectedProject}
           user={user}
           onBack={handleBackToProjects}
           onUpdate={handleProjectUpdate}
           onDelete={handleProjectDelete}
           onCreateQuote={createQuoteFromProject}
-          startStage={editOnOpen ? 'quote' : undefined}
+          startStage={view.edit ? 'quote' : undefined}
         />
       );
     }
@@ -288,24 +317,39 @@ export default function App({ authMode = 'login', go }: AppProps) {
         return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} />;
       case 'quotes':
       case 'quotes-all':
-        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} user={user} />;
+        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} onOpenProjectCosts={(p) => handleProjectSelect(p, true)} user={user} />;
       case 'quotes-new':
         return (
           <NewQuote
-            key={editingQuoteId ?? quoteFromProject?.id ?? 'new'}
+            key={view.quoteId ?? view.fromProjectId ?? 'new'}
             user={user}
-            quoteId={editingQuoteId}
-            fromProject={quoteFromProject}
-            startInPreview={quoteStartsInPreview}
+            quoteId={view.quoteId ?? null}
+            fromProject={view.fromProjectId ? selectedProject : null}
+            startInPreview={!!view.preview}
+            onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
             onDone={() => navigate('quotes-all')}
           />
         );
       case 'quick-check':
         return <QuickCheck user={user} onCreated={(p) => handleProjectSelect(p)} />;
+      case 'customers':
+        return view.customerId ? (
+          <CustomerPage
+            key={view.customerId}
+            customerId={view.customerId}
+            onBack={() => show({ nav: 'customers' })}
+            // the deleted customer's address is replaced, so the back button can't land on it again
+            onGone={() => show({ nav: 'customers' }, { replace: true })}
+            onOpenProject={(p) => handleProjectSelect(p)}
+            onOpenQuote={(id) => openQuote(id, true)}
+          />
+        ) : (
+          <Customers onOpenCustomer={(id) => show({ nav: 'customers', customerId: id })} />
+        );
       case 'reports':
         return <Reports user={user} onOpenProject={(p) => handleProjectSelect(p)} />;
       case 'settings':
-        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={handleLogout} onNavigate={navigate} />;
+        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={() => handleLogout()} onLogoutAll={() => handleLogout(true)} onNavigate={navigate} />;
       case 'admin':
         return user.role === 'admin' ? <AdminPage user={user} /> : null;
       case 'subscription':
@@ -474,7 +518,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
                     key={project.id}
                     title={project.title}
                     date={formatEventDate(project.eventDate)}
-                    budget={baht(project.costItems.reduce((s, i) => s + i.total, 0) * (1 + project.profitMargin / 100))}
+                    budget={baht(salePrice(project))}
                     status={project.status}
                     statusText={project.statusText}
                     onClick={() => handleProjectSelect(project)}
@@ -491,7 +535,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
     <div className="min-h-screen bg-canvas text-ink">
       {/* Desktop sidebar: floating purple panel */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
-        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={handleLogout} />
+        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
       </aside>
 
       {/* Mobile top bar */}
