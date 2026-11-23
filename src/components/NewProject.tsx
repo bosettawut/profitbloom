@@ -22,10 +22,32 @@ const steps = [
   { id: 3, title: 'เช็คสุขภาพงาน' },
 ];
 
+/** The step the browser's current history entry stands for: "ถัดไป" adds an entry per step, so the browser's back button goes one step back. */
+const stepOfEntry = (): number => {
+  const s = window.history.state?.wizardStep;
+  return s === 2 || s === 3 ? s : 1;
+};
+
 /** New job: the same building blocks as the job workspace, so nothing has to be typed twice later. */
 export function NewProject({ user, onCreated }: NewProjectProps) {
   const rules = useMemo(() => rulesOf(user), [user]);
   const [step, setStep] = useState(1);
+
+  useEffect(() => {
+    // a refresh, or coming back from another page, lands on a later step's entry with an empty form: rewind to the first step
+    const stale = stepOfEntry();
+    if (stale > 1) {
+      window.history.replaceState({ ...window.history.state, wizardStep: 1 }, '');
+      window.history.go(1 - stale);
+    }
+    const onPop = () => {
+      // a number still being typed is kept on blur, so keep it before its box goes away
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      setStep(stepOfEntry());
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [history, setHistory] = useState<Project[]>([]);
@@ -89,14 +111,17 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const next = () => {
     const m = step === 1 ? missing() : '';
     if (m) return flash(m);
+    window.history.pushState({ wizardStep: step + 1 }, '');
     setStep(step + 1);
     window.scrollTo(0, 0);
   };
+  /** back through the browser's own history, so its back and forward buttons stay in step with the page */
+  const back = (steps = 1) => window.history.go(-steps);
 
   const save = async () => {
     const m = missing();
     if (m) {
-      setStep(1);
+      if (step > 1) back(step - 1);
       return flash(m);
     }
     const updateCustomer = await contactPrompt.ask({ customerId: draft.customerId, name: draft.client, phone: draft.phone, email: draft.email });
@@ -173,7 +198,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
 
       <div className="mt-6 flex flex-col-reverse md:flex-row md:justify-end gap-3">
         {step > 1 && (
-          <button onClick={() => setStep(step - 1)} className="pb-btn-secondary">
+          <button onClick={() => back()} className="pb-btn-secondary">
             <ArrowLeft className="w-4 h-4" /> ย้อนกลับ
           </button>
         )}
