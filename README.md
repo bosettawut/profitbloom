@@ -33,7 +33,7 @@ npm run dev
 | `/` | หน้าเว็บหลัก (Landing page) |
 | `/login`, `/signup` | เข้าสู่ระบบ / สมัครสมาชิก |
 | `/forgot`, `/reset?token=…` | ขอลิงก์ตั้งรหัสผ่านใหม่ / หน้าที่ลิงก์ในอีเมลเปิด |
-| `/app`, `/app/projects`, `/app/projects/12`, `/app/quotes`, `/app/customers`, … | ตัวโปรแกรม ProfitBloom — แต่ละหน้าจอมีที่อยู่ของตัวเอง (ดู `src/lib/route.ts`) ปุ่มย้อนกลับของเบราว์เซอร์จึงย้อนทีละหน้าจอ |
+| `/app`, `/app/projects`, `/app/projects/12`, `/app/quotes`, `/app/customers`, … | ตัวโปรแกรม ProfitBloom — แต่ละหน้าจอมีที่อยู่ของตัวเอง (ดู `src/lib/route.ts`) ปุ่มย้อนกลับของเบราว์เซอร์จึงย้อนทีละหน้าจอ ส่วนฟอร์มสร้างโปรเจ็กต์ใหม่ (`/app/projects/new`) ย้อนทีละขั้นของฟอร์ม |
 
 ข้อความ ตัวเลข ราคาแพ็กเกจ รีวิว อีเมลติดต่อ และลิงก์โซเชียลของหน้าเว็บหลักแก้ได้ที่เดียวใน `src/landing/content.ts`
 รูปภาพอยู่ใน `public/landing/`

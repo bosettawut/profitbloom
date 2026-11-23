@@ -9,6 +9,9 @@
  *   /app/quotes/7             one quote           ?preview=1 opens the preview
  *   /app/customers            customer list       /app/customers/5    one customer
  *   /app/quick-check · /app/reports · /app/settings · /app/packages · /app/admin
+ *
+ * The new-project form keeps one address for its three steps and adds a history entry per step
+ * itself (see NewProject), so the back button goes one step back there too.
  */
 export interface View {
   /** same ids the sidebar uses */
