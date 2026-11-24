@@ -161,13 +161,15 @@
 }
 
 @theme {
-  /* the stock breakpoints, moved out in step with the larger root size (15→16px on phones and tablets, 16→18px on a
-     wide screen), so each layout still gets about the room it was drawn for */
-  --breakpoint-sm: 42.5rem;
-  --breakpoint-md: 51.25rem;
-  --breakpoint-lg: 72rem;
-  --breakpoint-xl: 90rem;
-  --breakpoint-2xl: 108rem;
+  /* The stock breakpoints, moved out in step with the root size below, so each layout still gets the room it was
+     drawn for: a layout needs so many times the text size across, not so many pixels. In those terms the steps
+     are 42.5 / 51.25 / 67.8 / 80 / 96 times the root size (18px on a tablet, 21px from md up).
+     Media queries always count a rem as 16px, hence the odd figures: 765 / 1080 / 1424 / 1680 / 2016px. */
+  --breakpoint-sm: 47.8125rem;
+  --breakpoint-md: 67.5rem;
+  --breakpoint-lg: 89rem;
+  --breakpoint-xl: 105rem;
+  --breakpoint-2xl: 126rem;
 }
 
 @theme inline {
@@ -568,25 +570,57 @@
 /*
  * Everything in the app is sized from the root (text, boxes and spacing are in rem), so this one figure makes
  * the whole of it larger. It is set generously: most of the people using the app are older and read it more
- * easily at this size. 16px on a phone also keeps Safari from zooming in when a box is tapped.
- * The breakpoints in the theme above are moved by the same proportion.
+ * easily at this size (it was 15px on a phone and 16px on a computer). Anything of 16px or more in a box also
+ * keeps Safari on a phone from zooming in when the box is tapped.
+ * The breakpoints in the theme above are moved by the same proportion, so change them together.
  */
 html {
   font-size: 16px;
 }
 
-/* a 1366-wide laptop has less room beside the menu than a 1440-wide one, so it steps up by half as much */
-@media (min-width: 72rem) {
+/* A phone's layouts need about 22.5 times the text size across before boxes start to clip, so the size steps
+   up with the width of the phone: 360px → 16px, 390px → 17px, 430px and tablets → 18px. */
+@media (min-width: 23.75rem) {
   html {
     font-size: 17px;
   }
 }
 
-@media (min-width: 90rem) {
+@media (min-width: 26.875rem) {
   html {
     font-size: 18px;
   }
 }
+
+/* from the md breakpoint up (the layout with the menu at the side) */
+@media (min-width: 67.5rem) {
+  html {
+    font-size: 21px;
+  }
+}
+/*
+ * The menu at the side has to show every entry without scrolling, and at this text size a laptop's window is
+ * not tall enough for it. So on a short window the menu alone is drawn a step smaller (its text and its
+ * spacing both come from these variables); the pages keep the full size.
+ */
+@media (max-height: 800px) {
+  .pb-sidebar {
+    --spacing: 0.2125rem;
+    --text-sm: 0.8rem;
+    --text-xs: 0.69rem;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-height: 700px) {
+  .pb-sidebar {
+    --spacing: 0.1875rem;
+    --text-sm: 0.7rem;
+    --text-xs: 0.61rem;
+    font-size: 0.75rem;
+  }
+}
+
 /* ---------- Clean UI building blocks ---------- */
 @layer components {
   /* the floating panel the content sits on */

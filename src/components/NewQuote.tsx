@@ -377,7 +377,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
       <div className="pb-card p-4 md:p-6 xl:p-8">
         {/* the customer on the left; the total, what can be done with the quote and its dates on the right */}
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)] gap-6 lg:gap-12">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-6 lg:gap-12">
           <div role="group" aria-label="ข้อมูลลูกค้า" className="space-y-4">
             <div>
               <label className="pb-label">ชื่อลูกค้า *</label>
@@ -403,7 +403,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 }}
               />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 gap-4">
               <div>
                 <label className="pb-label">เบอร์โทรศัพท์</label>
                 <input
@@ -436,7 +436,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 placeholder="เช่น 99/1 ถ.สุขุมวิท แขวงคลองตัน เขตคลองเตย กรุงเทพฯ 10110"
               />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 gap-4">
               <div>
                 <label className="pb-label">เลขประจำตัวผู้เสียภาษี</label>
                 <input
@@ -579,7 +579,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                       placeholder="รายละเอียดสินค้า/บริการ"
                     />
                   </div>
-                  <div className="grid grid-cols-[2.5fr_3.3fr_3.4fr] gap-2">
+                  <div className="grid grid-cols-[2.4fr_3.5fr_3.3fr] gap-2">
                     <div>
                       <label className="pb-label">จำนวน</label>
                       <input

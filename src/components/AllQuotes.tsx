@@ -242,7 +242,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden md:block pb-card overflow-hidden mb-6">
+        <div className="hidden xl:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -308,10 +308,11 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
       )}
 
       {/* Cards (phones) */}
-      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((quote) => (
           <div
             key={quote.id}
+            onClick={() => onOpenQuote(quote.id, true)}
             className="pb-card cursor-pointer transition-all duration-300 overflow-hidden"
           >
             {/* Quote Header */}
@@ -323,6 +324,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                 </div>
                 <select
                   value={quote.status}
+                  onClick={(e) => e.stopPropagation()}
                   onChange={(e) => changeStatus(quote, e.target.value as QuoteStatus)}
                   title="เปลี่ยนสถานะ"
                   className={`px-2 md:px-3 py-1 rounded-full text-xs md:text-sm font-medium border ml-2 cursor-pointer outline-none whitespace-nowrap ${getStatusStyles(quote.status)}`}
@@ -368,8 +370,8 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
+              {/* Actions: each does its own thing, so a tap here is not also a tap on the card */}
+              <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2" onClick={(e) => e.stopPropagation()}>
                 <button onClick={() => onOpenQuote(quote.id, true)} className="flex items-center justify-center gap-1.5 py-2 px-2 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors text-sm">
                   <Eye className="w-4 h-4" />
                   <span className="hidden md:inline">ดู</span>

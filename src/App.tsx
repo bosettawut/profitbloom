@@ -382,11 +382,12 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
                 </p>
                 <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">สวัสดี คุณ{user.name}</h1>
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => navigate('new-project')} className="pb-btn-secondary flex-1 lg:flex-none">
+              {/* each button is as wide as its words need and never breaks them; on a phone too narrow for both, the second drops below */}
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => navigate('new-project')} className="pb-btn-secondary flex-auto lg:flex-none whitespace-nowrap max-sm:!px-3">
                   <Plus className="w-4 h-4" /> สร้างโปรเจ็กต์
                 </button>
-                <button onClick={() => navigate('quick-check')} className="pb-btn-primary flex-1 lg:flex-none">
+                <button onClick={() => navigate('quick-check')} className="pb-btn-primary flex-auto lg:flex-none whitespace-nowrap max-sm:!px-3">
                   <ClipboardCheck className="w-4 h-4" /> เช็คก่อนรับงาน
                 </button>
               </div>
@@ -578,7 +579,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             <button
               key={item.id}
               onClick={() => navigate(item.id)}
-              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-xs ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
+              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-xs whitespace-nowrap ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
             >
               <Icon className="w-5 h-5" />
               {item.label}

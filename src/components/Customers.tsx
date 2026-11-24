@@ -168,8 +168,8 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          {/* phones have no column headings to sort by */}
-          <select className="pb-input text-ink-muted md:hidden" value={sort.key} onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })} aria-label="เรียงลำดับ">
+          {/* the cards have no column headings to sort by */}
+          <select className="pb-input text-ink-muted xl:hidden" value={sort.key} onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })} aria-label="เรียงลำดับ">
             <option value="name">เรียงตามชื่อ</option>
             <option value="sales">เรียงตามยอดซื้อรวม</option>
             <option value="projects">เรียงตามจำนวนโปรเจ็กต์</option>
@@ -192,7 +192,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden md:block pb-card overflow-hidden mb-6">
+        <div className="hidden xl:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -227,7 +227,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
       )}
 
       {/* Cards (phone) */}
-      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((c) => (
           <div key={c.id} onClick={() => onOpenCustomer(c.id)} className="pb-card cursor-pointer transition-all duration-300 overflow-hidden">
             <div className="p-4 md:p-6 border-b border-line">

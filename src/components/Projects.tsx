@@ -313,7 +313,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden md:block pb-card overflow-hidden mb-6">
+        <div className="hidden xl:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -384,7 +384,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
       )}
 
       {/* Cards (phones) */}
-      <div className="md:hidden grid grid-cols-1 gap-4 mb-6">
+      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((project) => {
           const progress = getProgressFromStatus(project.status);
           
