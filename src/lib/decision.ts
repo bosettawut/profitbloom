@@ -134,6 +134,12 @@ export function numbers(job: Job) {
   return { cost, price, profit, margin, cashRequired, deposit, headings };
 }
 
+/**
+ * How far a selling price is above the client's budget, in whole baht as the screens show the price, so a price
+ * set to the budget is not "over" by a rounding error. Negative = room left; null without a budget or a price.
+ */
+export const overBudget = (price: number, budget: number): number | null => (budget > 0 && price > 0 ? Math.round(price) - budget : null);
+
 /** money planned under one category, e.g. the owner's own labour */
 export const categoryCost = (job: Job, c: CostCategory) => job.costItems.filter((i) => i.category === c).reduce((s, i) => s + estimate(i), 0);
 /** a job condition that is read off the cost rows */
@@ -217,8 +223,9 @@ export function risks(job: Job, rules: Rules): Risk[] {
     out.push({ id: 'no-labor', severity: 'medium', title: 'ยังไม่มีรายการค่าแรง', detail: 'ใส่ค่าแรงทีมงาน (และค่าแรงตัวเอง) เป็นต้นทุนของงาน' });
   if (!has('transport') && !has('teardown'))
     out.push({ id: 'no-transport', severity: 'low', title: 'ยังไม่มีค่าขนส่ง', detail: 'ค่ารถ ค่าน้ำมัน และค่าทางด่วน มักถูกลืมใส่' });
-  if (job.budget > 0 && n.price > job.budget)
-    out.push({ id: 'over-budget', severity: 'low', title: `ราคาสูงกว่างบลูกค้า ${fmt(n.price - job.budget)} บาท`, detail: `ลูกค้ามีงบ ${fmt(job.budget)} บาท — ลองใช้หน้าจำลองสถานการณ์ เพื่อดูว่าลดได้แค่ไหน` });
+  const over = overBudget(n.price, job.budget);
+  if (over !== null && over > 0)
+    out.push({ id: 'over-budget', severity: 'low', title: `ราคาสูงกว่างบลูกค้า ${fmt(over)} บาท`, detail: `ลูกค้ามีงบ ${fmt(job.budget)} บาท — ลองใช้หน้าจำลองสถานการณ์ เพื่อดูว่าลดได้แค่ไหน` });
   return out;
 }
 

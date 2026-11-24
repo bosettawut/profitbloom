@@ -14,6 +14,7 @@ import {
   marginToMarkup,
   markupToMargin,
   numbers,
+  overBudget,
   remargined,
   repriced,
   review,
@@ -215,6 +216,26 @@ test('Job conditions come from the cost categories', () => {
   // a zero-baht line does not count, and a "yes" saved before the categories existed still does
   assert.ok(ids({ ...base, costItems: [...base.costItems, item('ค่าแรงตัวเอง', 'owner_labor', 0)] }).includes('owner-labor'));
   assert.ok(!ids({ ...base, ownerLabor: true, teardown: true }).some((id) => id === 'owner-labor' || id === 'teardown'));
+});
+
+test('Budget: the price is compared in whole baht, so a price set to the budget is not "over" it', () => {
+  assert.equal(overBudget(15384.62, 15000), 385);
+  assert.equal(overBudget(15384.62, 16000), -615);
+  assert.equal(overBudget(15384.62, 15385), 0);
+  assert.equal(overBudget(9999.000000000002, 9999), 0);
+  assert.equal(overBudget(15384.62, 0), null);
+  assert.equal(overBudget(0, 15000), null);
+
+  // costs 199 and 4,501 under headings at 35% and 14%, moved to the client's 9,999: the sum comes out a hair above it
+  const j = job({ budget: 9999, groups: [{ id: 1, name: 'a', markup: marginToMarkup(35) }, { id: 2, name: 'b', markup: marginToMarkup(14) }], costItems: [item('x', 'material', 199, 1), item('y', 'material', 4501, 2)] });
+  const ids = (x: any) => risks(x, DEFAULT_RULES).map((r) => r.id);
+  assert.ok(!ids(j).includes('over-budget'), 'under budget before');
+  const moved = { ...j, ...repriced(j, 9999) };
+  assert.ok(numbers(moved).price > 9999, 'the float sum is above the budget');
+  assert.ok(!ids(moved).includes('over-budget'), 'but it is not reported as over budget');
+  // really over: reported with the whole-baht difference
+  const over = risks({ ...j, budget: 5000 }, DEFAULT_RULES).find((r) => r.id === 'over-budget');
+  assert.equal(over?.title, 'ราคาสูงกว่างบลูกค้า 540 บาท');
 });
 
 test('Job conditions are also recognised by what a row is called, whatever its category', () => {
