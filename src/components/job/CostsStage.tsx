@@ -251,6 +251,12 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
             );
           })}
         </div>
+        {/* on a phone the headings make a long list: a second button at its end saves scrolling back up */}
+        {groups.length > 0 && (
+          <button type="button" onClick={addGroup} className="pb-btn-secondary !py-2 w-full mt-4 md:hidden">
+            <Plus className="w-4 h-4" /> เพิ่มหัวข้อ
+          </button>
+        )}
         <div className="mt-5 pt-4 border-t border-line flex flex-wrap justify-between gap-2 text-sm">
           <span className="text-ink-muted">ต้นทุนรวม</span>
           <span className="font-semibold text-ink">฿{fmt(h.cost)}</span>
