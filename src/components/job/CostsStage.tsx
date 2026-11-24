@@ -238,7 +238,7 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
                       {/* on a phone the category sits under the three number boxes, beside the total */}
                       <div className="order-1 sm:order-none">
                         <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
-                        {/* nothing is chosen for the user; a row that holds something turns this red until a category is picked */}
+                        {/* nothing is chosen for the user; a row that holds something shows this in red until a category is picked (a reminder: it does not stop saving) */}
                         <select className={`${input} ${i.category ? '' : lacksCategory(i) ? '!border-rose-400 !text-rose-600' : '!text-[#8C879D]'}`} aria-label="หมวด" aria-invalid={lacksCategory(i) || undefined} value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
                           <option value="" disabled>เลือกหมวด</option>
                           {COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
