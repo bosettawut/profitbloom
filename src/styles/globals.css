@@ -163,13 +163,15 @@
 @theme {
   /* The stock breakpoints, moved out in step with the root size below, so each layout still gets the room it was
      drawn for: a layout needs so many times the text size across, not so many pixels. In those terms the steps
-     are 42.5 / 51.25 / 67.8 / 80 / 96 times the root size (18px on a tablet, 21px from md up).
-     Media queries always count a rem as 16px, hence the odd figures: 765 / 1080 / 1424 / 1680 / 2016px. */
+     are 42.5 / 61.5 / 67.8 / 80 / 96 times the root size (18px on a tablet, 19.5px from md up).
+     Media queries always count a rem as 16px, hence the odd figures: 765 / 1200 / 1320 / 1560 / 1872px.
+     md is where the menu moves to the side and takes 18rem of the width with it, so it starts late enough that
+     a page still has the room it had at sm; a tablet held sideways (1024-1194px) keeps the phone layout. */
   --breakpoint-sm: 47.8125rem;
-  --breakpoint-md: 67.5rem;
-  --breakpoint-lg: 89rem;
-  --breakpoint-xl: 105rem;
-  --breakpoint-2xl: 126rem;
+  --breakpoint-md: 75rem;
+  --breakpoint-lg: 82.5rem;
+  --breakpoint-xl: 97.5rem;
+  --breakpoint-2xl: 117rem;
 }
 
 @theme inline {
@@ -592,10 +594,11 @@ html {
   }
 }
 
-/* from the md breakpoint up (the layout with the menu at the side) */
-@media (min-width: 67.5rem) {
+/* From the md breakpoint up (the layout with the menu at the side). 18px was judged too small to be a clear
+   change and 21px too large, so it sits between the two. */
+@media (min-width: 75rem) {
   html {
-    font-size: 21px;
+    font-size: 19.5px;
   }
 }
 /*
@@ -603,7 +606,7 @@ html {
  * not tall enough for it. So on a short window the menu alone is drawn a step smaller (its text and its
  * spacing both come from these variables); the pages keep the full size.
  */
-@media (max-height: 800px) {
+@media (max-height: 770px) {
   .pb-sidebar {
     --spacing: 0.2125rem;
     --text-sm: 0.8rem;
@@ -612,7 +615,7 @@ html {
   }
 }
 
-@media (max-height: 700px) {
+@media (max-height: 660px) {
   .pb-sidebar {
     --spacing: 0.1875rem;
     --text-sm: 0.7rem;
