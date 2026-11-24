@@ -602,6 +602,7 @@ async function serializeProject(p) {
       name: i.name,
       category: i.category,
       quantity: i.quantity,
+      unit: i.unit,
       price: i.price,
       total: i.quantity * i.price,
       actual: i.actual,
@@ -646,8 +647,10 @@ function readProjectBody(body, existing, categories = COST_CATEGORIES) {
       ? body.costItems.slice(0, 500).map((i) => ({
           group: i.groupId,
           name: str(i.name, 200),
-          category: categories.includes(i.category) ? i.category : 'material',
+          // '' = no category chosen yet (the form asks for one before a filled-in row is saved)
+          category: categories.includes(i.category) ? i.category : i.category === '' ? '' : 'material',
           quantity: num(i.quantity, { min: 0 }),
+          unit: str(i.unit, 30),
           price: num(i.price, { min: 0 }),
           actual: i.actual === null || i.actual === undefined || i.actual === '' ? null : num(i.actual, { min: 0 }),
           is_extra: i.isExtra ? 1 : 0,
@@ -687,11 +690,11 @@ async function replaceCosts(projectId, d, oneMarkup = false) {
     if (known.has(g.id)) newId.set(g.id, id);
     saved.push({ id, name: g.name, markup: g.markup });
   }
-  const ins = db.prepare('INSERT INTO cost_items (project_id, group_id, name, category, quantity, price, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const ins = db.prepare('INSERT INTO cost_items (project_id, group_id, name, category, quantity, unit, price, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const priced = [];
   for (const [idx, i] of items.entries()) {
     const groupId = i.is_extra ? null : newId.get(i.group) ?? saved[0].id;
-    await ins.run(projectId, groupId, i.name, i.category, i.quantity, i.price, i.actual, i.is_extra, idx);
+    await ins.run(projectId, groupId, i.name, i.category, i.quantity, i.unit ?? '', i.price, i.actual, i.is_extra, idx);
     priced.push({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId });
   }
   const { cost, price } = jobPricing(priced, saved);

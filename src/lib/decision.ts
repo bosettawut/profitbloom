@@ -33,7 +33,7 @@ export let COST_CATEGORIES = BUILT_IN_CATEGORIES;
 export function setShopCategories(own: Array<{ id: string; name: string }>) {
   COST_CATEGORIES = [...BUILT_IN_CATEGORIES.slice(0, -1), ...own.map((c) => ({ id: c.id as CostCategory, label: c.name })), BUILT_IN_CATEGORIES[BUILT_IN_CATEGORIES.length - 1]];
 }
-export const categoryLabel = (c: CostCategory) => COST_CATEGORIES.find((x) => x.id === c)?.label ?? 'อื่น ๆ';
+export const categoryLabel = (c: CostCategory | '') => COST_CATEGORIES.find((x) => x.id === c)?.label ?? 'อื่น ๆ';
 
 export interface Rules {
   /** below this margin the job is High Risk (deck: RULE 1, Margin < 20%) */

@@ -64,8 +64,11 @@ export interface CostItem {
   /** the heading it sits under; unplanned extras have none */
   groupId: number | null;
   name: string;
-  category: CostCategory;
+  /** '' until one is chosen */
+  category: CostCategory | '';
   quantity: number;
+  /** what it is counted in (ดอก, กำ, คน, เที่ยว): free text, not used in any sum */
+  unit: string;
   price: number;
   total: number;
   /** what it really cost, filled in during/after the event */
@@ -241,7 +244,7 @@ interface CustomerUpdate {
   updateCustomer?: boolean;
 }
 export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate & {
-  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'groupId' | 'actual' | 'isExtra'>>>;
+  costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'unit' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
   items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { roundUp?: boolean }>;

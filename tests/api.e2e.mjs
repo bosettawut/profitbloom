@@ -86,6 +86,24 @@ r = await A.call('POST', '/projects', {
   ok('บันทึกหมวดและต้นทุนจริง และไม่มีช่อง "จ่ายก่อนงาน" แล้ว', d.costItems[1].category === 'labor' && d.costItems[1].actual === 1900 && !('paidBefore' in d.costItems[1]), JSON.stringify(d.costItems[1]));
   ok('ไม่ได้ส่งหัวข้อมา → ทุกรายการอยู่ในหัวข้อเดียว ที่ markup ของงาน', d.costGroups.length === 1 && d.costGroups[0].markup === 50 && d.costItems.every((i) => i.groupId === d.costGroups[0].id), JSON.stringify(d.costGroups));
   ok('หมวดที่ไม่มีอยู่จริงถูกปรับเป็น material', d.costItems[2].category === 'material');
+  ok('ไม่ได้ส่งหน่วยมา → หน่วยว่าง', d.costItems.every((i) => i.unit === ''), JSON.stringify(d.costItems.map((i) => i.unit)));
+  {
+    const u = await A.call('POST', '/projects', {
+      title: 'งานทดสอบหน่วย', profitMargin: 50,
+      costItems: [
+        { name: 'กุหลาบ', category: 'material', quantity: 200, unit: '  ดอก  ', price: 25 },
+        { name: 'ยังไม่เลือกหมวด', category: '', quantity: 1, unit: 'x'.repeat(50), price: 10 },
+        { name: 'ไม่ส่งหมวด', quantity: 3, unit: 7, price: 10 },
+      ],
+    });
+    const [a, b, c] = u.data.costItems;
+    ok('หน่วยของรายการถูกบันทึก (ตัดช่องว่างหัวท้าย) และไม่กระทบยอดรวม', u.status === 201 && a.unit === 'ดอก' && a.total === 5000, JSON.stringify(a));
+    ok('หน่วยยาวเกิน 30 ตัวอักษรถูกตัด หน่วยที่ไม่ใช่ข้อความกลายเป็นว่าง', b.unit.length === 30 && c.unit === '', `${b.unit.length} / ${JSON.stringify(c.unit)}`);
+    ok('หมวดว่าง (ยังไม่เลือก) ถูกเก็บเป็นว่าง ส่วนที่ไม่ได้ส่งหมวดมายังเป็น material', b.category === '' && c.category === 'material', `${JSON.stringify(b.category)} / ${c.category}`);
+    const again = await A.call('PUT', `/projects/${u.data.id}`, { costGroups: u.data.costGroups, costItems: u.data.costItems.map((i) => (i.name === 'กุหลาบ' ? { ...i, unit: 'กำ' } : i)) });
+    ok('แก้หน่วยแล้วบันทึก → ได้หน่วยใหม่ รายการอื่นคงเดิม', again.data.costItems[0].unit === 'กำ' && again.data.costItems[1].category === '' && again.data.costItems.length === 3, JSON.stringify(again.data.costItems.map((i) => [i.unit.slice(0, 5), i.category])));
+    await A.call('DELETE', `/projects/${u.data.id}`);
+  }
   r = await A.call('PUT', `/projects/${d.id}`, { costItems: [...d.costItems, { name: 'ซื้อหน้างาน', category: 'other', quantity: 0, price: 0, actual: 500, isExtra: true }], reviewApplied: true });
   ok('เพิ่มค่าใช้จ่ายนอกแผน + บันทึกบทเรียน', r.data.costItems.at(-1).isExtra === true && r.data.reviewApplied === true && !!r.data.reviewedAt, JSON.stringify(r.data.costItems.at(-1)));
   ok('ค่าใช้จ่ายนอกแผนไม่อยู่ในหัวข้อ รายการเดิมยังอยู่ในหัวข้อเดิม', r.data.costItems.at(-1).groupId === null && r.data.costGroups.length === 1 && r.data.costItems.slice(0, 3).every((i) => i.groupId === r.data.costGroups[0].id), JSON.stringify(r.data.costItems.map((i) => i.groupId)));
