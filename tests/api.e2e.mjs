@@ -679,6 +679,41 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('ร้านอื่นไม่เห็นยอดขายของร้านนี้', (await B.call('GET', '/reports?from=2026-01-01&to=2026-12-31')).data.sales.jobs.every((j) => !['ม.ค. 1', 'มี.ค.'].includes(j.title)));
 }
 
+// --- a heading's discount: a share of its price or an amount, taken off the price its margin gives
+{
+  r = await A.call('POST', '/projects', {
+    title: 'งานมีส่วนลดหัวข้อ', projectType: 'อื่นๆ',
+    costGroups: [
+      { id: -1, name: 'ซุ้ม', markup: 50, discountType: 'percent', discount: 20 },
+      { id: -2, name: 'ทีมงาน', markup: 100, discountType: 'baht', discount: 300 },
+      { id: -3, name: 'ไม่ลด', markup: 10 },
+      { id: -4, name: 'ค่ามั่ว', markup: 10, discountType: 'hacker', discount: -5 },
+      { id: -5, name: 'เกินร้อย', markup: 10, discountType: 'percent', discount: 250 },
+    ],
+    costItems: [
+      { groupId: -1, name: 'กุหลาบ', category: 'material', quantity: 2, price: 3000 },
+      { groupId: -1, name: 'โอเอซิส', category: 'material', quantity: 1, price: 4000 },
+      { groupId: -2, name: 'ทีม', category: 'labor', quantity: 1, price: 1000 },
+    ],
+  });
+  const d = r.data;
+  ok('ส่วนลดของหัวข้อถูกบันทึกทั้งแบบ % และแบบบาท', r.status === 201 && d.costGroups.slice(0, 2).map((g) => `${g.discountType}:${g.discount}`).join() === 'percent:20,baht:300', JSON.stringify(d.costGroups));
+  ok('ไม่ได้ส่งส่วนลดมา → ไม่ลด · ประเภทที่ไม่มีจริงกับค่าติดลบ → ไม่ลด · % เกิน 100 → 100', d.costGroups.slice(2).map((g) => `${g.discountType}:${g.discount}`).join() === 'percent:0,percent:0,percent:100', JSON.stringify(d.costGroups.slice(2)));
+  // 10,000 +50% = 15,000 −20% = 12,000 · 1,000 +100% = 2,000 −300 = 1,700 → 13,700 on a cost of 11,000
+  ok('markup รวมของงานคิดจากราคาหลังลด (13,700 จากต้นทุน 11,000)', Math.abs(d.profitMargin - (13700 / 11000 - 1) * 100) < 1e-6, d.profitMargin);
+  let q = await A.call('POST', '/quotes', { projectId: d.id, clientName: 'ลูกค้าส่วนลด', vatMode: 'none', items: [{ description: 'ทั้งงาน', quantity: 1, unitPrice: 13700 }] });
+  ok('ใบเสนอราคาจากงานนี้ล็อกราคาหลังลด (13,700)', q.status === 201 && q.data.lockedPrice === 13700, JSON.stringify(q.data).slice(0, 200));
+  q = await A.call('POST', '/quotes', { projectId: d.id, clientName: 'ลูกค้าส่วนลด', vatMode: 'none', items: [{ description: 'ราคาก่อนลด', quantity: 1, unitPrice: 17000 }] });
+  ok('ใบเสนอราคาที่ใช้ราคาก่อนลด (17,000) ถูกปฏิเสธ', q.status === 400, q.status);
+  r = await A.call('PUT', `/projects/${d.id}`, { costGroups: d.costGroups.map((g) => (g.name === 'ซุ้ม' ? { ...g, discountType: 'baht', discount: 500 } : g)), costItems: d.costItems });
+  ok('แก้ส่วนลดจาก 20% เป็น 500 บาท → ราคางานเป็น 16,200 และหัวข้ออื่นคงเดิม', r.status === 200 && r.data.costGroups[0].discountType === 'baht' && r.data.costGroups[0].discount === 500 && r.data.costGroups[1].discount === 300 && Math.abs(r.data.profitMargin - (16200 / 11000 - 1) * 100) < 1e-6, JSON.stringify([r.data.costGroups.slice(0, 2), r.data.profitMargin]));
+  r = await A.call('PUT', `/projects/${d.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่นของงาน ส่วนลดของหัวข้อไม่หาย', r.data.costGroups[0].discount === 500 && r.data.costGroups[1].discount === 300, JSON.stringify(r.data.costGroups.slice(0, 2)));
+  const rep = (await A.call('GET', '/reports')).data.sales.jobs?.find((j) => j.title === 'งานมีส่วนลดหัวข้อ');
+  if (rep) ok('รายงานยอดขายใช้ราคาหลังลด', rep.sales === 16200, JSON.stringify(rep));
+  await A.call('DELETE', `/projects/${d.id}`);
+}
+
 // --- cost headings: own items, own margin; the job's price is the sum
 {
   r = await A.call('POST', '/projects', {

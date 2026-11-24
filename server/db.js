@@ -367,6 +367,12 @@ const MIGRATIONS = [
   `
   ALTER TABLE cost_items ADD COLUMN unit TEXT NOT NULL DEFAULT '';
   `,
+
+  // 12 — a heading can take a discount off the price its markup gives: a share of it ('percent') or an amount ('baht'); 0 = none
+  `
+  ALTER TABLE cost_groups ADD COLUMN discount_type TEXT NOT NULL DEFAULT 'percent';
+  ALTER TABLE cost_groups ADD COLUMN discount DOUBLE PRECISION NOT NULL DEFAULT 0;
+  `,
 ];
 
 async function schemaVersion(q) {

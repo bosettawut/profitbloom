@@ -43,7 +43,7 @@ export function reserveTempIds(ids: number[]) {
 
 /** a new heading; it gets a real id when the job is saved */
 export function blankGroup(markup: number, name = ''): CostGroup {
-  return { id: tempId--, name, markup };
+  return { id: tempId--, name, markup, discountType: 'percent', discount: 0 };
 }
 
 /** an empty row: its category is left for the user to choose unless the caller already knows it */
@@ -152,6 +152,12 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
     const g = { ...newGroup(), name: choice.newName };
     patch({ costGroups: [...groups, g], costItems: [...draft.costItems, { ...blankItem(category, g.id), name }] });
   };
+  /** a heading's discount: a share of its price can be at most all of it; switching to a share brings a larger figure down to 100 */
+  const setDiscount = (g: CostGroup, change: { discount?: number; discountType?: 'percent' | 'baht' }) => {
+    const discountType = change.discountType ?? g.discountType ?? 'percent';
+    const discount = Math.max(0, change.discount ?? g.discount ?? 0);
+    setGroup(g.id, { discountType, discount: discountType === 'percent' ? Math.min(100, discount) : discount });
+  };
   const removeGroup = (g: CostGroup) => {
     const inside = items.filter((i) => i.groupId === g.id);
     if (inside.some((i) => i.name.trim() || i.quantity * i.price > 0) && !window.confirm(`ลบหัวข้อ "${g.name || 'ไม่มีชื่อ'}" พร้อมรายการข้างใน ${inside.length} รายการ ใช่หรือไม่?`)) return;
@@ -217,18 +223,32 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
           {groups.map((g) => {
             const inside = items.filter((i) => i.groupId === g.id);
             const sums = h.headings.find((x) => x.id === g.id);
+            const discounted = !!sums && sums.off > 0;
+            const belowCost = !!sums && discounted && sums.cost > 0 && sums.price < sums.cost - 0.005;
             return (
               <section key={g.id} aria-label={g.name || 'หัวข้อ'} className="rounded-2xl border border-line p-3 md:p-4">
-                <div className="grid grid-cols-[1fr_5.5rem_auto] gap-2 md:gap-3 items-end mb-3">
-                  <div className="min-w-0">
+                {/* on a phone the name and the delete button share the first line, the discount and the margin the second */}
+                <div className="grid grid-cols-[1fr_5rem] md:grid-cols-[1fr_auto_5.5rem_auto] gap-2 md:gap-3 items-end mb-3">
+                  <div className="min-w-0 order-1 md:order-none">
                     <label className="pb-label">ชื่อหัวข้อ</label>
                     <input className={`${input} font-medium`} aria-label="ชื่อหัวข้อ" value={g.name} placeholder="เช่น ซุ้มดอกไม้" onChange={(e) => setGroup(g.id, { name: e.target.value })} />
                   </div>
-                  <div>
+                  {/* taken off the price the margin gives, for the whole heading: a share of it, or an amount */}
+                  <div className="min-w-0 order-3 md:order-none">
+                    <label className="pb-label">ส่วนลด</label>
+                    <div className="flex gap-2">
+                      <input className={`${input} min-w-0 flex-1 max-md:max-w-[9rem] max-md:!px-2.5 md:flex-none md:!w-24`} type="number" min="0" inputMode="decimal" aria-label="ส่วนลดของหัวข้อ" disabled={agreed !== null} value={g.discount || ''} placeholder="0" onChange={(e) => setDiscount(g, { discount: num(e.target.value) })} />
+                      <select className={`${input} !w-[4.75rem] md:!w-[5.25rem] shrink-0 max-md:!pl-2.5`} aria-label="หน่วยของส่วนลด" disabled={agreed !== null} value={g.discountType ?? 'percent'} onChange={(e) => setDiscount(g, { discountType: e.target.value as 'percent' | 'baht' })}>
+                        <option value="percent">%</option>
+                        <option value="baht">บาท</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="order-4 md:order-none">
                     <label className="pb-label">Margin (%)</label>
                     <CommitNumber min="0" max="95" step="0.1" aria-label="Margin ของหัวข้อ" disabled={agreed !== null} value={Number(markupToMargin(agreed === null ? g.markup : sums?.markup ?? 0).toFixed(1))} onCommit={(m) => setGroup(g.id, { markup: marginToMarkup(Math.min(95, Math.max(0, m))) })} />
                   </div>
-                  <button type="button" onClick={() => removeGroup(g)} aria-label="ลบหัวข้อ" title="ลบหัวข้อ" className="p-2 mb-0.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
+                  <button type="button" onClick={() => removeGroup(g)} aria-label="ลบหัวข้อ" title="ลบหัวข้อ" className="order-2 md:order-none justify-self-end md:justify-self-auto p-2 mb-0.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
@@ -279,7 +299,11 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
                     <Plus className="w-4 h-4" /> เพิ่มรายการ
                   </button>
                   <p className="text-ink-muted">
-                    ต้นทุน <span className="font-semibold text-ink">฿{fmt(sums?.cost ?? 0)}</span> · ราคาขาย <span className="font-semibold text-ink">฿{fmt(sums?.price ?? 0)}</span>
+                    ต้นทุน <span className="font-semibold text-ink">฿{fmt(sums?.cost ?? 0)}</span>
+                    {discounted && <> · ลด <span className="font-semibold text-ink">฿{fmt(sums.off)}</span></>} · ราคาขาย{' '}
+                    <span className={`font-semibold ${belowCost ? 'text-rose-600' : 'text-ink'}`}>฿{fmt(sums?.price ?? 0)}</span>
+                    {/* with a discount the heading earns less than its Margin box says: show what is left, and say so when it sells under cost */}
+                    {discounted && <span className={belowCost ? 'font-medium text-rose-600' : ''}> ({belowCost ? 'ต่ำกว่าทุน' : `Margin หลังลด ${sums.netMargin.toFixed(1)}%`})</span>}
                   </p>
                 </div>
               </section>

@@ -59,9 +59,23 @@ export function quoteTotals({ items, discountRate = 0, taxRate = 0, vatMode = 'e
   return { subtotal, discount, afterDiscount, beforeVat: afterDiscount, vat, total, rate, ...withheld(afterDiscount, total) };
 }
 
+/** how a heading's discount is given: a share of its price, or an amount in baht */
+export const DISCOUNT_TYPES = ['percent', 'baht'];
+
 /**
- * A job's planned cost and selling price, heading by heading: each heading has its own markup and the
- * job's price is the sum of its headings. Items outside any heading use the job's own markup.
+ * What a heading's discount takes off a price of `listPrice` (the heading's price before the discount), in baht:
+ * a share of it (never more than all of it) or a fixed amount (never more than the price itself).
+ */
+export function headingDiscount(group, listPrice) {
+  const d = Number(group?.discount) || 0;
+  if (!(d > 0) || !(listPrice > 0)) return 0;
+  return Math.min(listPrice, group.discountType === 'baht' ? d : listPrice * (Math.min(d, 100) / 100));
+}
+
+/**
+ * A job's planned cost and selling price, heading by heading: each heading has its own markup, and may take a
+ * discount off the price that markup gives (`listPrice` before it, `off` in baht, `price` after it). The job's
+ * price is the sum of its headings. Items outside any heading use the job's own markup.
  * Unplanned extras are not part of the price. Amounts are not rounded here.
  */
 export function jobPricing(costItems, groups, markupPct = 0) {
@@ -71,7 +85,9 @@ export function jobPricing(costItems, groups, markupPct = 0) {
   const ids = new Set(list.map((g) => g.id));
   const headings = list.map((g) => {
     const cost = sum(planned.filter((i) => i.groupId === g.id));
-    return { id: g.id, name: g.name, markup: g.markup, cost, price: cost * (1 + g.markup / 100) };
+    const listPrice = cost * (1 + g.markup / 100);
+    const off = headingDiscount(g, listPrice);
+    return { id: g.id, name: g.name, markup: g.markup, cost, listPrice, off, price: listPrice - off };
   });
   const loose = sum(planned.filter((i) => !ids.has(i.groupId)));
   return {
@@ -81,10 +97,17 @@ export function jobPricing(costItems, groups, markupPct = 0) {
   };
 }
 
-/** the markup one cost item is sold at: its heading's, or the job's when it has no heading */
-export function markupOf(item, groups, markupPct = 0) {
+/**
+ * The markup one cost item is sold at: its heading's, or the job's when it has no heading. Given the job's
+ * items too, a heading's discount is counted in: the markup is what the heading sells at after it, so the
+ * items priced this way add up to the heading's price.
+ */
+export function markupOf(item, groups, markupPct = 0, costItems) {
   const g = (groups || []).find((x) => x.id === item.groupId);
-  return g ? g.markup : markupPct;
+  if (!g) return markupPct;
+  if (!costItems || !(Number(g.discount) > 0)) return g.markup;
+  const h = jobPricing(costItems, groups, markupPct).headings.find((x) => x.id === g.id);
+  return h && h.cost > 0 ? (h.price / h.cost - 1) * 100 : g.markup;
 }
 
 /** a job's selling price in whole baht */

@@ -218,6 +218,73 @@ test('Job conditions come from the cost categories', () => {
   assert.ok(!ids({ ...base, ownerLabor: true, teardown: true }).some((id) => id === 'owner-labor' || id === 'teardown'));
 });
 
+test('Heading discount: comes off the price the margin gives, as a share or as an amount', () => {
+  const two = (g1: any) => job({ groups: [{ id: 1, name: 'a', markup: marginToMarkup(35), ...g1 }, { id: 2, name: 'b', markup: marginToMarkup(35) }], costItems: [item('x', 'material', 10000, 1), item('y', 'labor', 100, 2)] });
+  let n = numbers(two({}));
+  near(n.price, 15538.46, 0.01);
+  near(n.margin, 35, 0.01);
+  assert.equal(n.headings[0].off, 0);
+
+  n = numbers(two({ discountType: 'percent', discount: 10 }));
+  near(n.headings[0].listPrice, 15384.62, 0.01);
+  near(n.headings[0].off, 1538.46, 0.01);
+  near(n.headings[0].price, 13846.15, 0.01);
+  near(n.headings[0].margin, 35, 0.01); // the heading's own setting is not touched
+  near(n.headings[0].netMargin, 27.78, 0.01); // what it earns after the discount
+  near(n.price, 14000, 0.01);
+  near(n.profit, 3900, 0.01);
+  near(n.margin, 27.86, 0.01);
+  near(n.deposit, 14000 * (two({}).depositPct / 100), 0.01); // the deposit is a share of the price after the discount
+
+  n = numbers(two({ discountType: 'baht', discount: 1000 }));
+  near(n.headings[0].price, 14384.62, 0.01);
+  near(n.headings[0].netMargin, 30.48, 0.01);
+  near(n.price, 14538.46, 0.01);
+  near(n.margin, 30.53, 0.01);
+
+  // a discount is never more than the price it comes off
+  assert.equal(numbers(two({ discountType: 'baht', discount: 99999 })).headings[0].price, 0);
+  assert.equal(numbers(two({ discountType: 'percent', discount: 250 })).headings[0].price, 0);
+  // it may take the heading under its cost
+  n = numbers(two({ discountType: 'baht', discount: 6000 }));
+  near(n.headings[0].price, 9384.62, 0.01);
+  assert.ok(n.headings[0].price < n.headings[0].cost && n.headings[0].netMargin < 0);
+  // a heading with no type set reads as a share; one with nothing costed has nothing to take off
+  near(numbers(two({ discount: 10 })).headings[0].price, 13846.15, 0.01);
+  assert.equal(numbers(job({ groups: [{ id: 1, name: 'a', markup: 50, discountType: 'baht', discount: 500 }], costItems: [] })).price, 0);
+  // a price settled with the client stands whatever discount is stored
+  n = numbers({ ...two({ discountType: 'percent', discount: 10 }), agreedPrice: 20000 });
+  assert.equal(n.price, 20000);
+  assert.equal(n.headings[0].off, 0);
+});
+
+test('Heading discount: a new overall margin or price moves the margins and leaves the discounts as set', () => {
+  const j = job({ groups: [{ id: 1, name: 'a', markup: marginToMarkup(35), discountType: 'percent', discount: 10 }, { id: 2, name: 'b', markup: marginToMarkup(14), discountType: 'baht', discount: 200 }], costItems: [item('x', 'material', 10000, 1), item('y', 'labor', 4000, 2)] });
+  const before = numbers(j);
+  near(before.price, 13846.15 + 4451.16, 0.01);
+
+  const r = remargined(j, 35);
+  const after = numbers({ ...j, groups: r.groups, profitMargin: r.profitMargin });
+  near(after.margin, 35, 0.001);
+  assert.deepEqual(r.groups.map((g: any) => [g.discountType, g.discount]), [['percent', 10], ['baht', 200]]);
+  // each heading keeps its share of the price (after its discount)
+  near(after.headings[0].price / after.price, before.headings[0].price / before.price, 1e-9);
+  near(after.headings[1].price / after.price, before.headings[1].price / before.price, 1e-9);
+  // and the margins before discount are what moved
+  assert.ok(after.headings[0].margin > 35 && after.headings[1].margin > 14);
+
+  const up = repriced(j, 20000);
+  near(numbers({ ...j, groups: up.groups }).price, 20000, 0.001);
+
+  // lowered to the job's cost: the second heading would need a negative markup, so it is held at none and the first makes up the rest
+  const low = repriced(j, 14000);
+  assert.ok(low.groups.every((g) => g.markup >= 0));
+  assert.equal(low.groups[1].markup, 0);
+  const l = numbers({ ...j, groups: low.groups });
+  near(l.headings[1].price, 3800, 0.001); // 4,000 at no markup, less 200
+  near(l.price, 14000, 0.001);
+});
+
 test('Budget: the price is compared in whole baht, so a price set to the budget is not "over" it', () => {
   assert.equal(overBudget(15384.62, 15000), 385);
   assert.equal(overBudget(15384.62, 16000), -615);

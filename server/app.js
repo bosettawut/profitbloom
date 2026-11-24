@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
 import { emailError, phoneError } from '../shared/contact.js';
-import { jobPricing, lineAmount, projectPrice, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
+import { DISCOUNT_TYPES, jobPricing, lineAmount, projectPrice, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -595,7 +595,7 @@ async function serializeProject(p) {
     reviewedAt: p.reviewed_at,
     createdDate: thaiDate(p.created_at),
     updatedAt: p.updated_at,
-    costGroups: groups.map((g) => ({ id: g.id, name: g.name, markup: g.markup })),
+    costGroups: groups.map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount })),
     costItems: items.map((i) => ({
       id: i.id,
       groupId: i.group_id,
@@ -641,7 +641,11 @@ function readProjectBody(body, existing, categories = COST_CATEGORIES) {
     review_applied: body.reviewApplied ? 1 : 0,
     status,
     groups: Array.isArray(body.costGroups)
-      ? body.costGroups.slice(0, 100).map((g) => ({ id: g?.id, name: str(g?.name, 200), markup: num(g?.markup, { min: -100, max: 1000 }) }))
+      ? body.costGroups.slice(0, 100).map((g) => {
+          const discountType = DISCOUNT_TYPES.includes(g?.discountType) ? g.discountType : 'percent';
+          // a share cannot be more than all of the price; an amount is capped at the heading's price when it is worked out
+          return { id: g?.id, name: str(g?.name, 200), markup: num(g?.markup, { min: -100, max: 1000 }), discountType, discount: num(g?.discount, { min: 0, max: discountType === 'percent' ? 100 : 1e12 }) };
+        })
       : null,
     items: Array.isArray(body.costItems)
       ? body.costItems.slice(0, 500).map((i) => ({
@@ -685,10 +689,12 @@ async function replaceCosts(projectId, d, oneMarkup = false) {
   const newId = new Map();
   const saved = [];
   for (const [idx, g] of groups.entries()) {
-    const { lastInsertRowid } = await db.prepare('INSERT INTO cost_groups (project_id, name, markup, sort) VALUES (?, ?, ?, ?) RETURNING id').run(projectId, g.name, g.markup, idx);
+    const discountType = g.discountType ?? 'percent';
+    const discount = g.discount ?? 0;
+    const { lastInsertRowid } = await db.prepare('INSERT INTO cost_groups (project_id, name, markup, discount_type, discount, sort) VALUES (?, ?, ?, ?, ?, ?) RETURNING id').run(projectId, g.name, g.markup, discountType, discount, idx);
     const id = Number(lastInsertRowid);
     if (known.has(g.id)) newId.set(g.id, id);
-    saved.push({ id, name: g.name, markup: g.markup });
+    saved.push({ id, name: g.name, markup: g.markup, discountType, discount });
   }
   const ins = db.prepare('INSERT INTO cost_items (project_id, group_id, name, category, quantity, unit, price, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
   const priced = [];
@@ -703,7 +709,8 @@ async function replaceCosts(projectId, d, oneMarkup = false) {
     // the price was settled with the client: every heading gets the one markup that makes the costs come to it
     // (negative when the costs are more than the price)
     const markup = (agreed / cost - 1) * 100;
-    await db.prepare('UPDATE cost_groups SET markup = ? WHERE project_id = ?').run(markup, projectId);
+    // a discount has no meaning under a settled price, so none is kept
+    await db.prepare('UPDATE cost_groups SET markup = ?, discount = 0 WHERE project_id = ?').run(markup, projectId);
     await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(markup, projectId);
     return;
   }
@@ -859,7 +866,7 @@ async function lockedPriceOf(projectId) {
   const p = await db.prepare('SELECT profit_margin, agreed_price FROM projects WHERE id = ?').get(projectId);
   if (p.agreed_price !== null) return p.agreed_price;
   const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
-  const groups = await db.prepare('SELECT id, name, markup FROM cost_groups WHERE project_id = ?').all(projectId);
+  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ?').all(projectId)).map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount }));
   const price = projectPrice(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), p.profit_margin, groups);
   // a job with no costs yet has no price to hold the quote to
   return price > 0 ? price : null;
