@@ -5,8 +5,9 @@ import { toJob } from '../../lib/job';
 import { lacksCategory } from './CategoryPrompt';
 import { useHeadingPrompt } from './HeadingPrompt';
 import {
-  categoryCost,
   categoryLabel,
+  conditionCost,
+  conditionItems,
   COST_CATEGORIES,
   fmt,
   marginToMarkup,
@@ -92,8 +93,8 @@ function CommitNumber({ value, onCommit, disabled, ...rest }: { value: number; o
   );
 }
 
-/** A job condition read off the cost items: whether anything is planned in a category, and how much. */
-function FromCategory({ label, hint, amount, saidYes, onAdd }: { label: string; hint: string; amount: number; saidYes: boolean; onAdd: () => void }) {
+/** A job condition read off the cost items: whether a row stands for it (by category or by name), and how much is planned. */
+function FromCategory({ label, hint, amount, listed, saidYes, onAdd }: { label: string; hint: string; amount: number; listed: boolean; saidYes: boolean; onAdd: () => void }) {
   return (
     <div className="flex items-center justify-between gap-4 py-3 border-b border-line last:border-0">
       <div>
@@ -102,6 +103,9 @@ function FromCategory({ label, hint, amount, saidYes, onAdd }: { label: string; 
       </div>
       {amount > 0 || saidYes ? (
         <span className="px-3 py-1.5 text-xs rounded-full bg-emerald-50 text-emerald-700 font-medium shrink-0 whitespace-nowrap">ใส่แล้ว{amount > 0 ? ` ฿${fmt(amount)}` : ''}</span>
+      ) : listed ? (
+        // the row is there but has no amount yet: adding another would only repeat it
+        <span className="px-3 py-1.5 text-xs rounded-full bg-rose-50 text-rose-600 font-medium shrink-0 whitespace-nowrap">ยังไม่ใส่ราคา</span>
       ) : (
         <button type="button" onClick={onAdd} className="px-3 py-1.5 rounded-full bg-rose-50 text-xs text-rose-600 font-medium hover:bg-rose-100 shrink-0 whitespace-nowrap">
           ยังไม่ใส่ · เพิ่มรายการ
@@ -317,8 +321,8 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
               </div>
             ))}
           </div>
-          <FromCategory label="ค่าแรงเจ้าของ" hint='นับจากรายการในหมวด "ค่าแรงเจ้าของ"' amount={categoryCost(job, 'owner_labor')} saidYes={draft.ownerLabor === true} onAdd={() => addUnderChosenHeading('owner_labor', 'ค่าแรงเจ้าของ')} />
-          <FromCategory label="ค่าเก็บงานและขนส่งกลับ" hint='นับจากรายการในหมวด "เก็บงาน/ขนส่งกลับ"' amount={categoryCost(job, 'teardown')} saidYes={draft.teardown === true} onAdd={() => addUnderChosenHeading('teardown', 'เก็บงานและขนส่งกลับ')} />
+          <FromCategory label="ค่าแรงเจ้าของ" hint='นับจากรายการในหมวดนี้ หรือที่ชื่อมีคำว่า "ค่าแรงเจ้าของ"' amount={conditionCost(job, 'owner_labor')} listed={conditionItems(job, 'owner_labor').length > 0} saidYes={draft.ownerLabor === true} onAdd={() => addUnderChosenHeading('owner_labor', 'ค่าแรงเจ้าของ')} />
+          <FromCategory label="ค่าเก็บงานและขนส่งกลับ" hint='นับจากรายการในหมวด "เก็บงาน/ขนส่งกลับ" หรือที่ชื่อมีคำว่า "เก็บงาน" / "ขนส่งกลับ"' amount={conditionCost(job, 'teardown')} listed={conditionItems(job, 'teardown').length > 0} saidYes={draft.teardown === true} onAdd={() => addUnderChosenHeading('teardown', 'เก็บงานและขนส่งกลับ')} />
         </div>
 
         {/* Pricing */}

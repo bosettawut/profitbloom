@@ -136,9 +136,20 @@ export function numbers(job: Job) {
 
 /** money planned under one category, e.g. the owner's own labour */
 export const categoryCost = (job: Job, c: CostCategory) => job.costItems.filter((i) => i.category === c).reduce((s, i) => s + estimate(i), 0);
-/** job conditions are read off the cost categories; a "yes" given before those categories existed still counts */
-export const hasOwnerLabor = (job: Job) => job.ownerLabor === true || categoryCost(job, 'owner_labor') > 0;
-export const hasTeardown = (job: Job) => job.teardown === true || categoryCost(job, 'teardown') > 0;
+/** a job condition that is read off the cost rows */
+export type Condition = 'owner_labor' | 'teardown';
+/** what a row can be called to stand for a condition, whatever category it was filed under (spaces in the name do not matter) */
+const NAMED: Record<Condition, (name: string) => boolean> = {
+  owner_labor: (name) => name.includes('ค่าแรงเจ้าของ'),
+  teardown: (name) => name.includes('เก็บงาน') || name.includes('ขนส่งกลับ'),
+};
+/** the rows that stand for a condition: filed under its category, or named after it */
+export const conditionItems = (job: Job, c: Condition) => job.costItems.filter((i) => i.category === c || NAMED[c](i.name.replace(/\s+/g, '')));
+/** money planned for a condition; a row counts once it has an amount */
+export const conditionCost = (job: Job, c: Condition) => conditionItems(job, c).reduce((s, i) => s + estimate(i), 0);
+/** a "yes" given before the conditions were read off the cost rows still counts */
+export const hasOwnerLabor = (job: Job) => job.ownerLabor === true || conditionCost(job, 'owner_labor') > 0;
+export const hasTeardown = (job: Job) => job.teardown === true || conditionCost(job, 'teardown') > 0;
 
 /**
  * Each heading's markup after moving the whole job to `price`: every heading keeps its share of the
@@ -197,12 +208,12 @@ export function risks(job: Job, rules: Rules): Risk[] {
   else if (n.price > 0 && n.margin < rules.minMargin)
     out.push({ id: 'margin-low', severity: 'medium', title: `Margin ${n.margin.toFixed(1)}% ต่ำกว่าเป้า ${rules.minMargin}%`, detail: `ขยับราคาเป็น ${fmt(priceForMargin(n.cost, rules.minMargin))} บาท จะได้ Margin ตามเป้า` });
   if (!hasOwnerLabor(job))
-    out.push({ id: 'owner-labor', severity: 'medium', title: 'ยังไม่ได้ใส่ค่าแรงเจ้าของ', detail: 'เวลาของคุณคือต้นทุน ถ้าไม่คิด กำไรที่เห็นจะสูงกว่าความจริง — เพิ่มรายการในหมวด "ค่าแรงเจ้าของ"' });
+    out.push({ id: 'owner-labor', severity: 'medium', title: 'ยังไม่ได้ใส่ค่าแรงเจ้าของ', detail: 'เวลาของคุณคือต้นทุน ถ้าไม่คิด กำไรที่เห็นจะสูงกว่าความจริง — เพิ่มรายการในหมวด "ค่าแรงเจ้าของ" หรือตั้งชื่อรายการว่า "ค่าแรงเจ้าของ" แล้วใส่ราคา' });
   if (!hasTeardown(job))
-    out.push({ id: 'teardown', severity: 'medium', title: 'ไม่มีค่าเก็บงานและขนส่งกลับ', detail: 'งานส่วนใหญ่ต้องรื้อถอนและขนของกลับหลังงาน — เพิ่มรายการในหมวด "เก็บงาน/ขนส่งกลับ"' });
+    out.push({ id: 'teardown', severity: 'medium', title: 'ไม่มีค่าเก็บงานและขนส่งกลับ', detail: 'งานส่วนใหญ่ต้องรื้อถอนและขนของกลับหลังงาน — เพิ่มรายการในหมวด "เก็บงาน/ขนส่งกลับ" หรือตั้งชื่อรายการให้มีคำว่า "เก็บงาน" หรือ "ขนส่งกลับ" แล้วใส่ราคา' });
   if (job.laborDays !== null && job.laborDays < timeline)
     out.push({ id: 'labor-days', severity: 'medium', title: `ค่าแรงคิด ${job.laborDays} วัน แต่ Timeline ${timeline} วัน`, detail: `รวมวันเซ็ตอัพ ${job.setupDays} วัน + วันงาน ${job.eventDays} วัน ค่าแรงควรครอบคลุมทุกวัน` });
-  if (!has('labor') && !has('owner_labor'))
+  if (!has('labor') && !(conditionCost(job, 'owner_labor') > 0))
     out.push({ id: 'no-labor', severity: 'medium', title: 'ยังไม่มีรายการค่าแรง', detail: 'ใส่ค่าแรงทีมงาน (และค่าแรงตัวเอง) เป็นต้นทุนของงาน' });
   if (!has('transport') && !has('teardown'))
     out.push({ id: 'no-transport', severity: 'low', title: 'ยังไม่มีค่าขนส่ง', detail: 'ค่ารถ ค่าน้ำมัน และค่าทางด่วน มักถูกลืมใส่' });
