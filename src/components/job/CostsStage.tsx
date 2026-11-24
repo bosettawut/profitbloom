@@ -23,6 +23,8 @@ interface Props {
   rules: Rules;
   h: ReturnType<typeof health>;
   lessons: ReturnType<typeof learnings>;
+  /** grey hints for the name box of particular rows (by item id), in place of the usual one */
+  nameHints?: Record<number, string>;
 }
 
 const input = 'pb-input pb-input-sm';
@@ -90,7 +92,7 @@ function FromCategory({ label, hint, amount, saidYes, onAdd }: { label: string; 
       {amount > 0 || saidYes ? (
         <span className="px-3 py-1.5 text-xs rounded-full bg-emerald-50 text-emerald-700 font-medium shrink-0 whitespace-nowrap">ใส่แล้ว{amount > 0 ? ` ฿${fmt(amount)}` : ''}</span>
       ) : (
-        <button type="button" onClick={onAdd} className="px-3 py-1.5 rounded-full bg-[#F1F0F5] text-xs text-ink hover:bg-[#E8E6EF] shrink-0 whitespace-nowrap">
+        <button type="button" onClick={onAdd} className="px-3 py-1.5 rounded-full bg-rose-50 text-xs text-rose-600 font-medium hover:bg-rose-100 shrink-0 whitespace-nowrap">
           ยังไม่ใส่ · เพิ่มรายการ
         </button>
       )}
@@ -98,7 +100,7 @@ function FromCategory({ label, hint, amount, saidYes, onAdd }: { label: string; 
   );
 }
 
-export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
+export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props) {
   const items = draft.costItems.filter((i) => !i.isExtra);
   const groups = draft.costGroups;
   const job = toJob(draft);
@@ -212,7 +214,7 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
                   {inside.length === 0 && <p className="text-sm text-ink-muted py-3 text-center">ยังไม่มีรายการในหัวข้อนี้</p>}
                   {inside.map((i) => (
                     <div key={i.id} className="grid grid-cols-2 sm:grid-cols-[1.5fr_0.8fr_1fr_0.8fr] xl:grid-cols-[1.6fr_1fr_0.6fr_0.9fr_0.9fr_auto] gap-2 xl:gap-3 items-center rounded-2xl xl:rounded-none bg-[#F7F6FA] xl:bg-transparent p-3 xl:p-0">
-                      <input className={`${input} col-span-2 sm:col-span-4 xl:col-span-1`} aria-label="ชื่อรายการ" value={i.name} placeholder="เช่น ดอกกุหลาบขาว" onChange={(e) => setItem(i.id, { name: e.target.value })} />
+                      <input className={`${input} col-span-2 sm:col-span-4 xl:col-span-1`} aria-label="ชื่อรายการ" value={i.name} placeholder={nameHints?.[i.id] ?? 'เช่น ดอกกุหลาบขาว'} onChange={(e) => setItem(i.id, { name: e.target.value })} />
                       <div>
                         <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
                         <select className={input} aria-label="หมวด" value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
@@ -289,14 +291,6 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
           <h3 className="text-base md:text-lg font-semibold text-ink mb-4">ราคาเสนอ</h3>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="pb-label">งบที่ลูกค้าเสนอ (บาท)</label>
-              <input className={input} type="number" min="0" inputMode="decimal" value={draft.budget || ''} placeholder="ไม่ทราบ" onChange={(e) => patch({ budget: num(e.target.value) })} />
-            </div>
-            <div>
-              <label className="pb-label">มัดจำ (%)</label>
-              <input className={input} type="number" min="0" max="100" inputMode="decimal" value={draft.depositPct} onChange={(e) => patch({ depositPct: num(e.target.value) })} />
-            </div>
-            <div>
               <label className="pb-label">Margin (%)</label>
               <CommitNumber min="0" max="95" step="0.1" aria-label="Margin" disabled={agreed !== null} value={Number(margin.toFixed(1))} onCommit={setMargin} />
             </div>
@@ -325,10 +319,23 @@ export function CostsStage({ draft, patch, rules, h, lessons }: Props) {
               </button>
             )}
           </div>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div>
+              <label className="pb-label">งบที่ลูกค้าเสนอ (บาท)</label>
+              <input className={input} type="number" min="0" inputMode="decimal" value={draft.budget || ''} placeholder="ไม่ทราบ" onChange={(e) => patch({ budget: num(e.target.value) })} />
+            </div>
+            <div>
+              <label className="pb-label">มัดจำ (%)</label>
+              <input className={input} type="number" min="0" max="100" inputMode="decimal" value={draft.depositPct} onChange={(e) => patch({ depositPct: num(e.target.value) })} />
+            </div>
+          </div>
           <div className="mt-5 pt-4 border-t border-line space-y-1.5 text-sm">
             <div className="flex justify-between"><span className="text-ink-muted">ต้นทุนรวม</span><span className="text-ink">฿{fmt(h.cost)}</span></div>
             <div className="flex justify-between"><span className="text-ink-muted">กำไร</span><span className={`font-medium ${h.profit < 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{h.profit < 0 ? '−' : ''}฿{fmt(Math.abs(h.profit))}</span></div>
             <div className="flex justify-between text-base"><span className="font-semibold text-ink">ราคาเสนอขาย</span><span className="font-semibold text-ink">฿{fmt(h.price)}</span></div>
+            {draft.depositPct > 0 && (
+              <div className="flex justify-between"><span className="text-ink-muted">มัดจำ ({draft.depositPct}%)</span><span className="text-ink">฿{fmt(h.deposit)}</span></div>
+            )}
           </div>
         </div>
       </div>
