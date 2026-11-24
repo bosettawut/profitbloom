@@ -85,7 +85,7 @@ export function QuickCheck({ user, onCreated }: Props) {
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-8">
-        <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">เช็คก่อนรับงาน</h1>
+        <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">เช็คก่อนรับงาน</h1>
         <p className="text-sm text-ink-muted mt-1">ใส่งบที่ลูกค้าเสนอ แล้วตอบคำถามสั้น ๆ 10 ข้อ — รู้ทันทีว่างานนี้ควรรับไหม</p>
       </div>
 

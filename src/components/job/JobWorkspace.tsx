@@ -134,7 +134,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <p className="text-sm text-ink-muted">{draft.code} · {draft.projectType}</p>
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight truncate">{draft.title}</h1>
+          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight truncate">{draft.title}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -167,7 +167,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           >
             <span className={`w-6 h-6 rounded-full text-xs font-semibold flex items-center justify-center ${stage === s.id ? 'bg-[#673AB7] text-white' : 'bg-[#F1F0F5]'}`}>{s.step}</span>
             <span className="text-sm font-medium whitespace-nowrap">{s.title}</span>
-            <span className="hidden xl:inline text-xs text-ink-muted">{s.hint}</span>
+            <span className="hidden 2xl:inline text-xs text-ink-muted whitespace-nowrap">{s.hint}</span>
           </button>
         ))}
       </nav>

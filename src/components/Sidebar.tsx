@@ -28,6 +28,7 @@ export function Sidebar({ activeNav, setActiveNav, user, onLogout }: SidebarProp
   const isActive = (id: string) =>
     activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav));
 
+  // On a short window (most laptops, at this text size) the spacing closes up so more of the list shows without scrolling.
   const item = ({ id, label, icon: Icon }: (typeof mainItems)[number], subtle = false) => {
     const active = isActive(id);
     return (
@@ -35,9 +36,9 @@ export function Sidebar({ activeNav, setActiveNav, user, onLogout }: SidebarProp
         <button
           onClick={() => setActiveNav(id)}
           aria-current={active ? 'page' : undefined}
-          className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-left transition-colors ${
+          className={`w-full flex items-center gap-3 px-3.5 py-2.5 [@media(max-height:940px)]:py-2 rounded-2xl text-left transition-colors ${
             active ? 'bg-white shadow-card text-ink font-medium' : 'text-white/75 hover:text-white hover:bg-white/10'
-          } ${subtle ? 'text-[13px]' : 'text-sm'}`}
+          } ${subtle ? 'text-xs' : 'text-sm'}`}
         >
           <Icon className={`w-[18px] h-[18px] ${active ? 'text-[#673AB7]' : ''}`} />
           {label}
@@ -47,12 +48,12 @@ export function Sidebar({ activeNav, setActiveNav, user, onLogout }: SidebarProp
   };
 
   return (
-    <div className="relative flex flex-col h-full w-full rounded-[28px] p-4 text-white overflow-hidden bg-gradient-to-b from-[#7C4DDB] via-[#673AB7] to-[#35235e] shadow-[0_1px_2px_rgba(53,35,94,0.25),0_20px_48px_-16px_rgba(103,58,183,0.55)]">
+    <div className="pb-sidebar relative flex flex-col h-full w-full rounded-[28px] p-4 text-white overflow-hidden bg-gradient-to-b from-[#7C4DDB] via-[#673AB7] to-[#35235e] shadow-[0_1px_2px_rgba(53,35,94,0.25),0_20px_48px_-16px_rgba(103,58,183,0.55)]">
       {/* soft light at the top edge for depth */}
       <div aria-hidden className="pointer-events-none absolute -top-24 -right-16 w-56 h-56 rounded-full bg-white/15 blur-3xl" />
       <div aria-hidden className="pointer-events-none absolute -bottom-20 -left-10 w-48 h-48 rounded-full bg-[#eab308]/15 blur-3xl" />
 
-      <div className="relative flex items-center gap-3 px-2 pt-2 mb-7">
+      <div className="relative flex items-center gap-3 px-2 pt-2 mb-7 [@media(max-height:940px)]:mb-4">
         <div className="w-10 h-10 rounded-xl bg-white/95 p-1 shadow-soft shrink-0">
           <img src={brandLogo(user)} alt="" className="w-full h-full object-contain" />
         </div>
@@ -67,15 +68,16 @@ export function Sidebar({ activeNav, setActiveNav, user, onLogout }: SidebarProp
 
       <button
         onClick={() => setActiveNav('new-project')}
-        className="relative w-full mb-6 inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold bg-[#eab308] text-[#35235e] hover:bg-[#f2c230] transition-colors shadow-[0_6px_16px_-6px_rgba(234,179,8,0.7)]"
+        className="relative w-full mb-6 [@media(max-height:940px)]:mb-3 inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold bg-[#eab308] text-[#35235e] hover:bg-[#f2c230] transition-colors shadow-[0_6px_16px_-6px_rgba(234,179,8,0.7)]"
       >
         <Plus className="w-4 h-4" />
         สร้างโปรเจ็กต์
       </button>
 
-      <nav className="relative flex-1">
+      {/* on a short window the list scrolls inside itself, so the account and sign-out row below is never pushed off the screen */}
+      <nav className="no-scrollbar relative flex-1 min-h-0 overflow-y-auto mb-3">
         <ul className="space-y-1">{mainItems.map((i) => item(i))}</ul>
-        <ul className="space-y-1 mt-6 pt-6 border-t border-white/15">{[...extraItems, ...(user.role === 'admin' ? [adminItem] : [])].map((i) => item(i, true))}</ul>
+        <ul className="space-y-1 mt-6 pt-6 [@media(max-height:940px)]:mt-3 [@media(max-height:940px)]:pt-3 border-t border-white/15">{[...extraItems, ...(user.role === 'admin' ? [adminItem] : [])].map((i) => item(i, true))}</ul>
       </nav>
 
       <div className="relative flex items-center gap-3 p-2 rounded-2xl bg-white/10">

@@ -75,7 +75,7 @@ export function AdminPage({ user }: AdminPageProps) {
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-8">
-        <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight flex items-center gap-2">
+        <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight flex items-center gap-2">
           <ShieldCheck className="w-7 h-7 text-[#673AB7]" />
           ผู้ดูแลระบบ
         </h1>
