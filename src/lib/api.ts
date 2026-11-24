@@ -57,6 +57,10 @@ export interface CostGroup {
   id: number;
   name: string;
   markup: number;
+  /** how the heading's discount is given; nothing (or 0) = no discount */
+  discountType?: 'percent' | 'baht';
+  /** taken off the price the markup gives: a share of it in %, or an amount in baht */
+  discount?: number;
 }
 
 export interface CostItem {

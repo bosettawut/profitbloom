@@ -61,12 +61,12 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
   const startRoundUp = lockedPrice === null || Number.isInteger(lockedPrice);
 
-  // it lists each cost item at its selling price (cost + its heading's margin) in whole baht; rounding each
+  // it lists each cost item at its selling price (cost + its heading's margin, less the heading's discount) in whole baht; rounding each
   // line can leave the sum a few baht off the job's price, so one line takes up the difference
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
     if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: true }];
     const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
-      const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin) / 100));
+      const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin, fromProject.costItems) / 100));
       return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0, roundUp: startRoundUp };
     });
     const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;

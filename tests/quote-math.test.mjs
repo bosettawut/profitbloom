@@ -1,7 +1,7 @@
 // Rounding on a quote: line by line, to the satang, or the old whole-baht rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bahtUp, fitToPrice, lineAmount, quoteTotals, toSatang, wholeBaht } from '../shared/quote-math.js';
+import { bahtUp, fitToPrice, headingDiscount, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht } from '../shared/quote-math.js';
 
 const lines = [{ quantity: 3, unitPrice: 33.33 }];
 
@@ -108,4 +108,33 @@ test('withholding keeps the satang, is whole baht on an old quote, and is nothin
   assert.deepEqual([old.total, old.withholding, old.payable], [107, 2, 105]);
   const off = quoteTotals({ items, taxRate: 7, rounding: 'line' });
   assert.deepEqual([off.whtRate, off.withholding, off.payable], [0, 0, off.total]);
+});
+
+test('a heading discount comes off the heading price, and a quote made from the job prices each item after it', () => {
+  const items = [{ quantity: 2, price: 3000, groupId: 1 }, { quantity: 1, price: 4000, groupId: 1 }, { quantity: 1, price: 1000, groupId: 2 }];
+  const groups = [{ id: 1, name: 'a', markup: 50, discountType: 'percent', discount: 20 }, { id: 2, name: 'b', markup: 100, discountType: 'baht', discount: 300 }];
+  const w = jobPricing(items, groups);
+  assert.deepEqual(w.headings.map((h) => [h.cost, h.listPrice, h.off, h.price]), [[10000, 15000, 3000, 12000], [1000, 2000, 300, 1700]]);
+  assert.equal(w.price, 13700);
+  assert.equal(projectPrice(items, 0, groups), 13700);
+
+  // what a discount takes: a share of the price, an amount, never more than the price
+  assert.equal(headingDiscount({ discountType: 'percent', discount: 20 }, 15000), 3000);
+  assert.equal(headingDiscount({ discountType: 'baht', discount: 300 }, 2000), 300);
+  assert.equal(headingDiscount({ discountType: 'baht', discount: 5000 }, 2000), 2000);
+  assert.equal(headingDiscount({ discountType: 'percent', discount: 150 }, 2000), 2000);
+  assert.equal(headingDiscount({ discount: 10 }, 2000), 200);
+  assert.equal(headingDiscount({ discountType: 'baht', discount: 0 }, 2000), 0);
+  assert.equal(headingDiscount(undefined, 2000), 0);
+
+  // an item's markup: the heading's own without the items, the heading's after its discount with them
+  assert.equal(markupOf(items[0], groups), 50);
+  assert.ok(Math.abs(markupOf(items[0], groups, 0, items) - 20) < 1e-9); // 12,000 on 10,000
+  assert.ok(Math.abs(markupOf(items[2], groups, 0, items) - 70) < 1e-9); // 1,700 on 1,000
+  // priced that way the items add up to the job's price
+  const sold = items.reduce((sum, i) => sum + i.quantity * i.price * (1 + markupOf(i, groups, 0, items) / 100), 0);
+  assert.ok(Math.abs(sold - 13700) < 1e-6);
+  // no discount, or no heading: as before
+  assert.equal(markupOf(items[0], [{ id: 1, name: 'a', markup: 50 }], 0, items), 50);
+  assert.equal(markupOf({ groupId: 9 }, groups, 33, items), 33);
 });

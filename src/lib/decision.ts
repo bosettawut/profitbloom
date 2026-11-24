@@ -12,7 +12,7 @@
  *   margin    profit ÷ price   (NOT profit ÷ cost — that is the markup)
  */
 
-import { jobPricing } from '../../shared/quote-math.js';
+import { headingDiscount, jobPricing } from '../../shared/quote-math.js';
 
 export type BuiltInCategory = 'material' | 'rental' | 'labor' | 'owner_labor' | 'transport' | 'teardown' | 'other';
 /** a built-in category, or one the shop added in its settings ('c12') */
@@ -75,11 +75,15 @@ export interface JobCost {
   isExtra?: boolean;
 }
 
-/** a heading of costs with its own markup on cost, in % */
+/** a heading of costs with its own markup on cost, in %, and maybe a discount off the price that gives */
 export interface JobGroup {
   id: number;
   name: string;
   markup: number;
+  /** how the discount is given; nothing (or 0) = no discount */
+  discountType?: 'percent' | 'baht';
+  /** a share of the heading's price in %, or an amount in baht */
+  discount?: number;
 }
 
 export interface Job {
@@ -124,13 +128,17 @@ export function numbers(job: Job) {
   const cost = worked.cost;
   // an agreed price stands whatever the costs are; each heading takes the share of it that its costs are of the total
   const price = agreed ?? worked.price;
-  const priced = agreed === null ? worked.headings : worked.headings.map((g) => ({ ...g, price: cost > 0 ? agreed * (g.cost / cost) : 0, markup: cost > 0 ? (agreed / cost - 1) * 100 : 0 }));
+  const priced = agreed === null ? worked.headings : worked.headings.map((g) => {
+    const share = cost > 0 ? agreed * (g.cost / cost) : 0;
+    return { ...g, listPrice: share, off: 0, price: share, markup: cost > 0 ? (agreed / cost - 1) * 100 : 0 };
+  });
   const profit = price - cost;
   const margin = price > 0 ? (profit / price) * 100 : 0;
   const deposit = price * (job.depositPct / 100);
   // what the shop has to find itself: every cost of the job, less the deposit the client pays up front
   const cashRequired = Math.max(0, cost - deposit);
-  const headings = priced.map((g) => ({ ...g, profit: g.price - g.cost, margin: markupToMargin(g.markup) }));
+  // `margin` is the heading's own setting (before any discount); `netMargin` is what it really earns after the discount
+  const headings = priced.map((g) => ({ ...g, profit: g.price - g.cost, margin: markupToMargin(g.markup), netMargin: g.price > 0 ? ((g.price - g.cost) / g.price) * 100 : 0 }));
   return { cost, price, profit, margin, cashRequired, deposit, headings };
 }
 
@@ -170,18 +178,41 @@ export function repriced(job: Job, price: number): { groups: JobGroup[]; profitM
   if (!(n.cost > 0) || !(n.price > 0)) return { groups, profitMargin };
   // what the headings have to add up to: all of the price, unless some items sit outside every heading
   const headTarget = target * (n.headings.reduce((s, h) => s + h.price, 0) / n.price);
+  // A heading's discount stays as it is set: its price after the discount is what keeps its share, and the
+  // markup is moved to whatever leaves that price once the discount is taken off.
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  /** the price before the discount that leaves `wanted` after it */
+  const listFor = (id: number, wanted: number) => {
+    const g = byId.get(id);
+    const d = Number(g?.discount) || 0;
+    if (!(d > 0)) return wanted;
+    return g?.discountType === 'baht' ? wanted + d : d < 100 ? wanted / (1 - d / 100) : wanted;
+  };
+  /** what a heading sells for with no markup at all: its cost, less its discount */
+  const floor = (h: { id: number; cost: number }) => h.cost - headingDiscount(byId.get(h.id), h.cost);
   const held = new Set<number>();
   let k = 1;
   for (;;) {
     const free = n.headings.filter((h) => !held.has(h.id));
     const freePrice = free.reduce((s, h) => s + h.price, 0);
-    const heldCost = n.headings.reduce((s, h) => s + (held.has(h.id) ? h.cost : 0), 0);
-    k = freePrice > 0 ? (headTarget - heldCost) / freePrice : 1;
-    const under = free.filter((h) => h.cost > 0 && h.price * k < h.cost * (1 - 1e-9));
+    const heldPrice = n.headings.reduce((s, h) => s + (held.has(h.id) ? floor(h) : 0), 0);
+    k = freePrice > 0 ? (headTarget - heldPrice) / freePrice : 1;
+    // no heading's markup goes below zero: the ones that would are held at their cost
+    const under = free.filter((h) => h.cost > 0 && h.price > 0 && listFor(h.id, h.price * k) < h.cost * (1 - 1e-9));
     if (under.length === 0) break;
     for (const h of under) held.add(h.id);
   }
-  return { groups: groups.map((g) => ({ ...g, markup: held.has(g.id) ? 0 : Math.max(0, (1 + g.markup / 100) * k * 100 - 100) })), profitMargin };
+  const worked = new Map(n.headings.map((h) => [h.id, h]));
+  return {
+    groups: groups.map((g) => {
+      if (held.has(g.id)) return { ...g, markup: 0 };
+      const h = worked.get(g.id);
+      // nothing costed under it (or its discount takes all of it): there is no price to keep a share of, so its markup just follows
+      if (!h || !(h.cost > 0) || !(h.price > 0)) return { ...g, markup: Math.max(0, (1 + g.markup / 100) * k * 100 - 100) };
+      return { ...g, markup: Math.max(0, (listFor(g.id, h.price * k) / h.cost - 1) * 100) };
+    }),
+    profitMargin,
+  };
 }
 
 /**
