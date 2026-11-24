@@ -5,7 +5,8 @@ import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
 import { statusPill } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
-import { categoryWarning, CostsStage } from './CostsStage';
+import { useCategoryPrompt } from './CategoryPrompt';
+import { CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
@@ -69,18 +70,22 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   };
 
   const contactPrompt = useCustomerContactPrompt();
+  const categoryPrompt = useCategoryPrompt();
 
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
-    // filled-in cost rows with no category are pointed out, but the job is saved all the same
-    const noCategory = categoryWarning(draft.costItems);
+    // filled-in cost rows with no category: a dialog asks whether to go back and choose (on the costs tab), or to save all the same
+    if (!(await categoryPrompt.ask(draft.costItems, 'บันทึกเลย'))) {
+      setStage('quote');
+      return false;
+    }
     const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
     const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
     if (updateCustomer === null) return false;
     setSaving(true);
     try {
       await onUpdate({ ...draft, ...override, updateCustomer });
-      flash(noCategory ? `บันทึกแล้ว · ${noCategory}` : 'บันทึกแล้ว');
+      flash('บันทึกแล้ว');
       return true;
     } catch (err) {
       flash((err as Error).message);
@@ -271,6 +276,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
       )}
 
       {contactPrompt.node}
+      {categoryPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );
