@@ -440,11 +440,22 @@ async function customerSummaries(userId) {
   const projects = await projectFinancials(userId);
   const quotes = await db.prepare('SELECT customer_id, COUNT(*) AS n FROM quotes WHERE user_id = ? AND customer_id IS NOT NULL GROUP BY customer_id').all(userId);
   const quoteCount = new Map(quotes.map((q) => [q.customer_id, q.n]));
+  // the address, tax id and branch written on each customer's latest quote that had any: a new quote starts from them
+  const written = await db
+    .prepare(`SELECT DISTINCT ON (customer_id) customer_id, client_address, client_tax_id, client_branch FROM quotes
+              WHERE user_id = ? AND customer_id IS NOT NULL AND (client_address <> '' OR client_tax_id <> '' OR client_branch <> '')
+              ORDER BY customer_id, id DESC`)
+    .all(userId);
+  const lastWritten = new Map(written.map((q) => [q.customer_id, q]));
   return customers.map((c) => {
     const mine = projects.filter((p) => p.customer_id === c.id);
     const sold = mine.filter((p) => p.sold);
+    const last = lastWritten.get(c.id);
     return {
       ...serializeCustomer(c),
+      quoteAddress: last?.client_address ?? '',
+      quoteTaxId: last?.client_tax_id ?? '',
+      quoteBranch: last?.client_branch ?? '',
       projectCount: mine.length,
       quoteCount: quoteCount.get(c.id) ?? 0,
       soldCount: sold.length,
@@ -782,7 +793,9 @@ const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', appro
 
 async function serializeQuote(q) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
-  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  // payment falls due so many days after the event
+  const dueDate = q.credit_days > 0 && q.event_date ? new Date(Date.parse(q.event_date + 'T00:00:00Z') + q.credit_days * 864e5).toISOString().slice(0, 10) : '';
   const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
   const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding, whtRate: q.wht_rate });
   const today = new Date().toISOString().slice(0, 10);
@@ -795,11 +808,21 @@ async function serializeQuote(q) {
     clientName: q.client_name,
     clientPhone: q.client_phone,
     clientEmail: q.client_email,
+    clientAddress: q.client_address,
+    clientTaxId: q.client_tax_id,
+    clientBranch: q.client_branch,
     projectTitle: q.project_title,
+    referenceNo: q.reference_no,
     eventDate: q.event_date || '',
     validUntil: q.valid_until || '',
     validUntilText: thaiDate(q.valid_until),
+    /** days the customer has to pay after the event (0 = not stated), and the day that comes to */
+    creditDays: q.credit_days,
+    dueDate,
+    dueDateText: thaiDate(dueDate),
     notes: q.notes,
+    /** for the shop only: never printed on the quote */
+    internalNote: q.internal_note,
     taxRate: q.tax_rate,
     discountRate: q.discount_rate,
     vatMode: q.vat_mode,
@@ -835,6 +858,12 @@ async function readQuoteBody(userId, body, existing) {
     client_name: str(body.clientName, 200),
     client_phone: phone(body.clientPhone, existing?.client_phone),
     client_email: contactEmail(body.clientEmail, existing?.client_email),
+    client_address: str(body.clientAddress, 500),
+    client_tax_id: str(body.clientTaxId, 20),
+    client_branch: str(body.clientBranch, 60),
+    reference_no: str(body.referenceNo, 60),
+    credit_days: Math.round(num(body.creditDays ?? 0, { min: 0, max: 365 })),
+    internal_note: str(body.internalNote, 2000),
     project_title: str(body.projectTitle, 200),
     event_date: date(body.eventDate),
     valid_until: date(body.validUntil),
@@ -846,7 +875,7 @@ async function readQuoteBody(userId, body, existing) {
     rounding: ROUNDINGS.includes(body.rounding) ? body.rounding : undefined,
     status: body.status && QUOTE_STATUS[body.status] && body.status !== 'expired' ? body.status : undefined,
     items: Array.isArray(body.items)
-      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit_price: num(i.unitPrice, { min: 0 }), round_up: i.roundUp === true ? 1 : 0 }))
+      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit: str(i.unit, 30), unit_price: num(i.unitPrice, { min: 0 }), round_up: i.roundUp === true ? 1 : 0 }))
       : null,
   };
 }
@@ -874,8 +903,8 @@ async function lockedPriceOf(projectId) {
 
 async function replaceQuoteItems(quoteId, items) {
   await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
-  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?)');
-  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit_price, i.round_up ? 1 : 0, idx);
+  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit ?? '', i.unit_price, i.round_up ? 1 : 0, idx);
 }
 
 async function syncProjectStatus(userId, projectId, quoteStatus) {
@@ -916,7 +945,7 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
     await replaceCosts(projectId, {
       profit_margin: 0,
       groups: [{ id: 1, name: 'รายการต้นทุน', markup: 0 }],
-      items: items.filter((i) => i.description).map((i) => ({ group: 1, name: i.description, category: 'material', quantity: i.quantity > 0 ? i.quantity : 1, price: 0, actual: null, is_extra: 0 })),
+      items: items.filter((i) => i.description).map((i) => ({ group: 1, name: i.description, category: 'material', quantity: i.quantity > 0 ? i.quantity : 1, unit: i.unit, price: 0, actual: null, is_extra: 0 })),
     });
     await db.prepare(`UPDATE quotes SET project_id = ?, locked_price = ?, updated_at = ${NOW} WHERE id = ?`).run(projectId, afterDiscount, quote.id);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่จากใบเสนอราคา ${quote.code} - ${title}`, 'เพิ่มแล้ว');
@@ -939,10 +968,12 @@ app.post('/api/quotes', route(async (req, res) => {
     const lockedPrice = await lockedPriceOf(d.project_id);
     checkLockedPrice(lockedPrice, d, d.items || []);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status,
+                                    client_address, client_tax_id, client_branch, reference_no, credit_days, internal_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate,
-        d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status);
+        d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status,
+        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
@@ -964,9 +995,11 @@ app.put('/api/quotes/:id', route(async (req) => {
     await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
     // only a change to the lines or the discount can break the lock; old quotes can still change status
     if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
-    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, wht_rate=?, vat_mode=?, rounding=?, status=?, updated_at=${NOW}
+    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, wht_rate=?, vat_mode=?, rounding=?, status=?,
+                                    client_address=?, client_tax_id=?, client_branch=?, reference_no=?, credit_days=?, internal_note=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status, existing.id, req.user.id);
+      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status,
+        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
     if (status !== existing.status) {
       await syncProjectStatus(req.user.id, d.project_id, status);

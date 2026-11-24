@@ -373,6 +373,18 @@ const MIGRATIONS = [
   ALTER TABLE cost_groups ADD COLUMN discount_type TEXT NOT NULL DEFAULT 'percent';
   ALTER TABLE cost_groups ADD COLUMN discount DOUBLE PRECISION NOT NULL DEFAULT 0;
   `,
+
+  // 13 — a quote can carry what a company needs on it (the customer's address, tax id and branch), a reference
+  //      number, the days of credit after the event, and a note for the shop's own eyes; each line can say its unit
+  `
+  ALTER TABLE quotes ADD COLUMN client_address TEXT NOT NULL DEFAULT '';
+  ALTER TABLE quotes ADD COLUMN client_tax_id TEXT NOT NULL DEFAULT '';
+  ALTER TABLE quotes ADD COLUMN client_branch TEXT NOT NULL DEFAULT '';
+  ALTER TABLE quotes ADD COLUMN reference_no TEXT NOT NULL DEFAULT '';
+  ALTER TABLE quotes ADD COLUMN credit_days INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE quotes ADD COLUMN internal_note TEXT NOT NULL DEFAULT '';
+  ALTER TABLE quote_items ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 async function schemaVersion(q) {

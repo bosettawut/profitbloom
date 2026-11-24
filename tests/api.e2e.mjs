@@ -782,6 +782,42 @@ ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
   ok('สร้างโปรเจ็กต์พร้อมกัน 10 งาน รหัสไม่ซ้ำกัน', made.every((m) => m.status === 201) && new Set(codes).size === 10, codes.join(','));
   for (const m of made) await A.call('DELETE', `/projects/${m.data.id}`);
 }
+// --- what else a quote can carry: the customer's address, tax id and branch, a reference number, credit days,
+//     a note for the shop only, and a unit on each line
+{
+  r = await A.call('POST', '/quotes', {
+    clientName: 'บริษัท มาลีอีเวนต์ จำกัด', clientAddress: '  99/1 ถ.สุขุมวิท กรุงเทพฯ 10110  ', clientTaxId: '0105551234567', clientBranch: 'สำนักงานใหญ่',
+    referenceNo: 'PO-2026-015', eventDate: '2026-12-20', creditDays: 30, internalNote: 'ลูกค้าขอส่วนลดเพิ่ม', vatMode: 'none',
+    items: [{ description: 'กุหลาบ', quantity: 200, unit: ' ดอก ', unitPrice: 25 }, { description: 'ทีม', quantity: 2, unitPrice: 1500 }],
+  });
+  const q = r.data;
+  ok('ใบเสนอราคาเก็บที่อยู่ เลขผู้เสียภาษี สาขา เลขที่อ้างอิง และโน้ตภายใน', r.status === 201 && q.clientAddress === '99/1 ถ.สุขุมวิท กรุงเทพฯ 10110' && q.clientTaxId === '0105551234567' && q.clientBranch === 'สำนักงานใหญ่' && q.referenceNo === 'PO-2026-015' && q.internalNote === 'ลูกค้าขอส่วนลดเพิ่ม', JSON.stringify(q).slice(0, 400));
+  ok('เครดิต 30 วันหลังวันจัดงาน 20 ธ.ค. 2026 → ครบกำหนด 19 ม.ค. 2027', q.creditDays === 30 && q.dueDate === '2027-01-19' && !!q.dueDateText, `${q.creditDays} ${q.dueDate} ${q.dueDateText}`);
+  ok('หน่วยของแต่ละรายการถูกเก็บ (ตัดช่องว่างหัวท้าย) รายการที่ไม่ส่งหน่วยมาเป็นว่าง และยอดเงินไม่เปลี่ยน', q.items[0].unit === 'ดอก' && q.items[1].unit === '' && q.totalAmount === 8000, JSON.stringify(q.items));
+  const plain = (await A.call('POST', '/quotes', { clientName: 'ลูกค้าธรรมดา', items: [{ description: 'x', quantity: 1, unitPrice: 100 }] })).data;
+  ok('ใบที่ไม่ได้ส่งช่องใหม่มา → ทุกช่องว่าง เครดิต 0 ไม่มีวันครบกำหนด', plain.clientAddress === '' && plain.clientTaxId === '' && plain.clientBranch === '' && plain.referenceNo === '' && plain.internalNote === '' && plain.creditDays === 0 && plain.dueDate === '' && plain.items[0].unit === '', JSON.stringify(plain).slice(0, 300));
+
+  r = await A.call('PUT', `/quotes/${q.id}`, { status: 'sent' });
+  ok('แก้แค่สถานะ → ช่องใหม่และหน่วยของรายการไม่หาย', r.status === 200 && r.data.clientAddress === q.clientAddress && r.data.clientTaxId === '0105551234567' && r.data.referenceNo === 'PO-2026-015' && r.data.creditDays === 30 && r.data.internalNote === 'ลูกค้าขอส่วนลดเพิ่ม' && r.data.items[0].unit === 'ดอก', JSON.stringify(r.data).slice(0, 300));
+  const cust = (await A.call('GET', '/customers')).data.find((c) => c.name === 'บริษัท มาลีอีเวนต์ จำกัด');
+  ok('รายชื่อลูกค้าบอกที่อยู่ เลขผู้เสียภาษี และสาขา จากใบเสนอราคาล่าสุดของลูกค้ารายนั้น', !!cust && cust.quoteAddress === '99/1 ถ.สุขุมวิท กรุงเทพฯ 10110' && cust.quoteTaxId === '0105551234567' && cust.quoteBranch === 'สำนักงานใหญ่', JSON.stringify(cust));
+  ok('ลูกค้าที่ใบเสนอราคาไม่เคยมีข้อมูลนี้ → ว่าง', (await A.call('GET', '/customers')).data.find((c) => c.name === 'ลูกค้าธรรมดา')?.quoteTaxId === '');
+  ok('ร้านอื่นไม่เห็นข้อมูลนี้', !(await B.call('GET', '/customers')).data.some((c) => c.quoteTaxId));
+
+  r = await A.call('PUT', `/quotes/${q.id}`, { status: 'approved' });
+  const made = await A.call('POST', `/quotes/${q.id}/project`);
+  ok('สร้างโปรเจ็กต์จากใบเสนอราคา → รายการต้นทุนได้หน่วยของแต่ละรายการมาด้วย', made.status === 201 && made.data.costItems.map((i) => `${i.name}:${i.unit}`).join() === 'กุหลาบ:ดอก,ทีม:', JSON.stringify(made.data.costItems));
+
+  r = await A.call('PUT', `/quotes/${plain.id}`, { creditDays: 999.6, clientTaxId: 'x'.repeat(40), clientBranch: 'b'.repeat(90), referenceNo: 'y'.repeat(100), clientAddress: 'z'.repeat(700), internalNote: 'n'.repeat(2500), items: [{ description: 'x', quantity: 1, unit: 'u'.repeat(50), unitPrice: 100 }] });
+  ok('ค่าที่ยาวหรือมากเกินถูกจำกัด (เครดิต 365 · เลขภาษี 20 · สาขา 60 · อ้างอิง 60 · ที่อยู่ 500 · โน้ต 2,000 · หน่วย 30)', r.status === 200 && r.data.creditDays === 365 && r.data.clientTaxId.length === 20 && r.data.clientBranch.length === 60 && r.data.referenceNo.length === 60 && r.data.clientAddress.length === 500 && r.data.internalNote.length === 2000 && r.data.items[0].unit.length === 30, JSON.stringify([r.data.creditDays, r.data.clientTaxId.length, r.data.clientBranch.length, r.data.referenceNo.length, r.data.clientAddress.length, r.data.internalNote.length, r.data.items[0].unit.length]));
+  ok('มีเครดิตแต่ไม่มีวันจัดงาน → ไม่มีวันครบกำหนด', r.data.dueDate === '' && r.data.dueDateText === '');
+  r = await A.call('PUT', `/quotes/${plain.id}`, { creditDays: -5 });
+  ok('เครดิตติดลบ → 0', r.data.creditDays === 0, r.data.creditDays);
+  await A.call('DELETE', `/projects/${made.data.id}`);
+  await A.call('DELETE', `/quotes/${q.id}`);
+  await A.call('DELETE', `/quotes/${plain.id}`);
+}
+
 r = await A.call('POST', '/auth/logout');
 r = await A.call('GET', '/auth/me');
 ok('logout แล้ว me = null', r.data.user === null);

@@ -92,8 +92,19 @@ export interface Customer {
   createdDate: string;
 }
 
+/** a customer as the picker hands one over: with what their latest quote carried, for a new quote to start from */
+export interface PickedCustomer extends Customer {
+  quoteAddress?: string;
+  quoteTaxId?: string;
+  quoteBranch?: string;
+}
+
 /** a customer with what they have bought; sales count jobs that are approved or completed */
 export interface CustomerSummary extends Customer {
+  /** the address, tax id and branch written on this customer's latest quote that had any ('' when none did) */
+  quoteAddress: string;
+  quoteTaxId: string;
+  quoteBranch: string;
   projectCount: number;
   quoteCount: number;
   soldCount: number;
@@ -145,6 +156,8 @@ export interface QuoteItem {
   id: number;
   description: string;
   quantity: number;
+  /** what the line is counted in (ดอก, กำ, คน); free text, not used in any sum */
+  unit: string;
   unitPrice: number;
   total: number;
   /** on a 'line' quote: this line's amount rounds up to a whole baht as soon as it has a fraction */
@@ -159,11 +172,23 @@ export interface Quote {
   clientName: string;
   clientPhone: string;
   clientEmail: string;
+  /** printed under the customer's name, for customers who need the quote for their own paperwork */
+  clientAddress: string;
+  clientTaxId: string;
+  clientBranch: string;
   projectTitle: string;
+  /** the customer's own reference, such as a purchase order number */
+  referenceNo: string;
   eventDate: string;
   validUntil: string;
   validUntilText: string;
+  /** days the customer has to pay after the event (0 = not stated), and the day that comes to ('' without an event date) */
+  creditDays: number;
+  dueDate: string;
+  dueDateText: string;
   notes: string;
+  /** for the shop only: never printed on the quote */
+  internalNote: string;
   taxRate: number;
   discountRate: number;
   vatMode: VatMode;
@@ -251,7 +276,7 @@ export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate 
   costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'unit' | 'groupId' | 'actual' | 'isExtra'>>>;
 };
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
-  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { roundUp?: boolean }>;
+  items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { unit?: string; roundUp?: boolean }>;
 };
 
 export class ApiError extends Error {
