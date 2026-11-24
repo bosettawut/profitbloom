@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import {
   canTakeJob,
   DEFAULT_RULES,
+  conditionCost,
+  conditionItems,
   hasOwnerLabor,
   hasTeardown,
   health,
@@ -213,6 +215,40 @@ test('Job conditions come from the cost categories', () => {
   // a zero-baht line does not count, and a "yes" saved before the categories existed still does
   assert.ok(ids({ ...base, costItems: [...base.costItems, item('ค่าแรงตัวเอง', 'owner_labor', 0)] }).includes('owner-labor'));
   assert.ok(!ids({ ...base, ownerLabor: true, teardown: true }).some((id) => id === 'owner-labor' || id === 'teardown'));
+});
+
+test('Job conditions are also recognised by what a row is called, whatever its category', () => {
+  const base = job({ ownerLabor: null, teardown: null, costItems: [item('ดอกไม้', 'material', 1000), item('ทีม', 'labor', 1000), item('รถ', 'transport', 500)] });
+  const ids = (j: any) => risks(j, DEFAULT_RULES).map((r) => r.id);
+  const withRows = (...rows: ReturnType<typeof item>[]) => ({ ...base, costItems: [...base.costItems, ...rows] });
+
+  // the owner's labour typed as an ordinary labour row
+  const owner = withRows(item('ค่าแรงเจ้าของ', 'labor', 3000));
+  assert.equal(hasOwnerLabor(owner), true);
+  assert.equal(conditionCost(owner, 'owner_labor'), 3000);
+  assert.ok(!ids(owner).includes('owner-labor') && ids(owner).includes('teardown'));
+  // spaces in the name, more words around it, and no category chosen at all
+  assert.equal(hasOwnerLabor(withRows(item('ค่าแรง เจ้าของ (2 วัน)', 'other', 1500))), true);
+  assert.equal(hasOwnerLabor(withRows(item('ค่าแรงเจ้าของ', 'other', 1500))), true);
+
+  // teardown by either of its words
+  assert.equal(hasTeardown(withRows(item('เก็บงานหลังเลิก', 'labor', 800))), true);
+  assert.equal(hasTeardown(withRows(item('รถขนส่งกลับร้าน', 'transport', 1200))), true);
+  assert.equal(conditionCost(withRows(item('เก็บงาน', 'labor', 800), item('ขนส่งกลับ', 'transport', 1200), item('รื้อถอน', 'teardown', 500)), 'teardown'), 2500);
+
+  // near misses do not count
+  assert.equal(hasOwnerLabor(withRows(item('ค่าแรงทีมงาน', 'labor', 3000))), false);
+  assert.equal(hasTeardown(withRows(item('ขนส่งไปงาน', 'transport', 1200))), false);
+
+  // a row that is named but has no amount is listed, yet the condition is not met
+  const empty = withRows(item('ค่าแรงเจ้าของ', 'labor', 0));
+  assert.equal(conditionItems(empty, 'owner_labor').length, 1);
+  assert.equal(hasOwnerLabor(empty), false);
+  assert.ok(ids(empty).includes('owner-labor'));
+
+  // an owner's-labour row under another category also answers "is there any labour at all"
+  const onlyOwner = job({ ownerLabor: null, teardown: null, costItems: [item('ดอกไม้', 'material', 1000), item('ค่าแรงเจ้าของ', 'other', 2000)] });
+  assert.ok(!ids(onlyOwner).includes('no-labor'));
 });
 
 test('RULE 3 (slide 10) + Post-Event Review (slide 9: expected 98,000 → actual 61,500, lost 36,500)', () => {
