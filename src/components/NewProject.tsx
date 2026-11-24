@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
-import { health, learnings, marginToMarkup } from '../lib/decision';
+import { health, learnings, marginToMarkup, type CostCategory } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
 import { emailError, phoneError } from '../../shared/contact.js';
 import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
@@ -20,6 +20,14 @@ const steps = [
   { id: 1, title: 'ข้อมูลงาน' },
   { id: 2, title: 'ต้นทุนและราคา' },
   { id: 3, title: 'เช็คสุขภาพงาน' },
+];
+
+/** A new job opens with two headings of these four empty rows; the name box of each shows a typical item in grey. */
+const STARTER_ROWS: Array<{ hint: string; category: CostCategory }> = [
+  { hint: 'เช่น โอเอซิส', category: 'material' },
+  { hint: 'เช่น ค่าแรง', category: 'labor' },
+  { hint: 'เช่น ค่าขนส่ง', category: 'transport' },
+  { hint: 'เช่น กุหลาบขาว', category: 'material' },
 ];
 
 /** The step the browser's current history entry stands for: "ถัดไป" adds an entry per step, so the browser's back button goes one step back. */
@@ -51,8 +59,20 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [history, setHistory] = useState<Project[]>([]);
+  const [starter] = useState(() => {
+    const markup = marginToMarkup(rules.goodMargin);
+    const costGroups = [blankGroup(markup), blankGroup(markup)];
+    const hints: Record<number, string> = {};
+    const costItems = costGroups.flatMap((g) =>
+      STARTER_ROWS.map((row) => {
+        const item = blankItem(row.category, g.id);
+        hints[item.id] = row.hint;
+        return item;
+      }),
+    );
+    return { costGroups, costItems, hints };
+  });
   const [draft, setDraft] = useState<Project>(() => {
-    const heading = blankGroup(marginToMarkup(rules.goodMargin), 'รายการต้นทุน');
     return {
     id: 'new',
     customerId: null,
@@ -79,12 +99,8 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     teardown: null,
     reviewApplied: false,
     reviewedAt: null,
-    costGroups: [heading],
-    costItems: [
-      { ...blankItem('material', heading.id), name: 'ดอกไม้และวัสดุ' },
-      { ...blankItem('labor', heading.id), name: 'ค่าแรงทีมงาน' },
-      { ...blankItem('transport', heading.id), name: 'ขนส่ง' },
-    ],
+    costGroups: starter.costGroups,
+    costItems: starter.costItems,
     };
   });
 
@@ -129,10 +145,13 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     setSaving(true);
     try {
       const { id, code, statusText, createdDate, ...body } = draft;
+      // rows left empty are not saved, and neither is a heading with no name and nothing in it
+      const costItems = draft.costItems.filter((i) => i.name.trim() || i.quantity * i.price > 0);
       const created = await api.createProject({
         ...body,
         updateCustomer,
-        costItems: draft.costItems.filter((i) => i.name.trim() || i.quantity * i.price > 0),
+        costGroups: draft.costGroups.filter((g) => g.name.trim() || costItems.some((i) => i.groupId === g.id)),
+        costItems,
       });
       onCreated(created);
     } catch (err) {
@@ -193,7 +212,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
           </div>
         </div>
       )}
-      {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} />}
+      {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} nameHints={starter.hints} />}
       {step === 3 && <HealthPanel h={h} budget={draft.budget} />}
 
       <div className="mt-6 flex flex-col-reverse md:flex-row md:justify-end gap-3">
