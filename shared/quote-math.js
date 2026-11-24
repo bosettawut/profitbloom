@@ -110,6 +110,22 @@ export function markupOf(item, groups, markupPct = 0, costItems) {
   return h && h.cost > 0 ? (h.price / h.cost - 1) * 100 : g.markup;
 }
 
+/**
+ * Whole-baht amounts for `prices` that add up to `total`: each price is rounded down, and the baht still missing go
+ * to the ones that lost the largest fraction, so a price that was whole to begin with is never moved. Returns null
+ * when `total` is not the prices' own sum to within their rounding (then it is not a matter of rounding at all).
+ */
+export function wholeBahtShares(prices, total) {
+  if (!Number.isInteger(total)) return null;
+  const floors = prices.map((p) => Math.floor(p + 1e-9));
+  const left = total - floors.reduce((s, n) => s + n, 0);
+  if (left < 0 || left > prices.length) return null;
+  const out = [...floors];
+  const byFraction = prices.map((p, i) => ({ i, lost: p - floors[i] })).sort((a, b) => b.lost - a.lost);
+  for (const { i } of byFraction.slice(0, left)) out[i] += 1;
+  return out;
+}
+
 /** a job's selling price in whole baht */
 export function projectPrice(costItems, markupPct, groups) {
   return wholeBaht(jobPricing(costItems, groups, markupPct).price);

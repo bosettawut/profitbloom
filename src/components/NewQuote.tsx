@@ -6,7 +6,7 @@ import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
-import { fitToPrice, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht } from '../../shared/quote-math.js';
+import { fitToPrice, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht, wholeBahtShares } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -69,14 +69,29 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
   const startRoundUp = lockedPrice === null || Number.isInteger(lockedPrice);
 
-  // it lists each cost item at its selling price (cost + its heading's margin, less the heading's discount) in whole baht; rounding each
-  // line can leave the sum a few baht off the job's price, so one line takes up the difference
+  // It lists the job heading by heading: one line per heading, named after it and priced at what the heading sells for
+  // (its costs with its margin, less its discount) in whole baht, so the customer sees the headings and not the items
+  // inside them. The headings' prices are rounded together so they add up to the job's price and a heading that was a
+  // whole number of baht stays as it is; should that not be possible, one line takes up the difference.
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
-    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: true }];
-    const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
-      const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin, fromProject.costItems) / 100));
-      return { id: idx + 1, description: item.name, quantity: item.quantity, unit: item.unit ?? '', unitPrice, total: 0, roundUp: startRoundUp };
-    });
+    const blank = [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: true }];
+    if (!fromProject) return blank;
+    const planned = fromProject.costItems.filter((i) => !i.isExtra);
+    const worked = jobPricing(fromProject.costItems, fromProject.costGroups, fromProject.profitMargin);
+    const used = worked.headings.map((h, n) => ({ ...h, place: n + 1 })).filter((h) => planned.some((i) => i.groupId === h.id));
+    // a heading with nothing costed under it is left out, unless that is true of every heading (then they all come, to be priced by hand)
+    const costed = used.filter((h) => h.cost > 0);
+    const chosen = costed.length ? costed : used;
+    const fromHeadings = chosen.map((h) => ({ description: h.name.trim() || `หัวข้อที่ ${h.place}`, quantity: 1, unit: '', unitPrice: wholeBaht(h.price) }));
+    // items outside every heading (none on a job saved by this app) still come one by one
+    const inHeading = new Set(worked.headings.map((h) => h.id));
+    const loose = planned
+      .filter((i) => !inHeading.has(i.groupId as number))
+      .map((item) => ({ description: item.name, quantity: item.quantity, unit: item.unit ?? '', unitPrice: wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin, fromProject.costItems) / 100)) }));
+    const shares = lockedPrice !== null && loose.length === 0 ? wholeBahtShares(chosen.map((h) => h.price), lockedPrice) : null;
+    if (shares) fromHeadings.forEach((line, n) => (line.unitPrice = shares[n]));
+    const lines = [...fromHeadings, ...loose].map((line, idx) => ({ ...line, id: idx + 1, total: 0, roundUp: startRoundUp }));
+    if (lines.length === 0) return blank;
     const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
     return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
   });
@@ -345,7 +360,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             {savedId ? <>ใบเสนอราคา <span className="text-[#673AB7]">{quoteCode}</span></> : 'สร้างใบเสนอราคาใหม่'}
           </h2>
           <p className="text-sm text-ink-muted">
-            {fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (ราคาต่อหน่วยรวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
+            {fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">

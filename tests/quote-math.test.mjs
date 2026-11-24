@@ -1,7 +1,7 @@
 // Rounding on a quote: line by line, to the satang, or the old whole-baht rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bahtUp, fitToPrice, headingDiscount, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht } from '../shared/quote-math.js';
+import { bahtUp, fitToPrice, headingDiscount, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht, wholeBahtShares } from '../shared/quote-math.js';
 
 const lines = [{ quantity: 3, unitPrice: 33.33 }];
 
@@ -137,4 +137,27 @@ test('a heading discount comes off the heading price, and a quote made from the 
   // no discount, or no heading: as before
   assert.equal(markupOf(items[0], [{ id: 1, name: 'a', markup: 50 }], 0, items), 50);
   assert.equal(markupOf({ groupId: 9 }, groups, 33, items), 33);
+});
+
+test('headings rounded together add up to the job price, and a whole-baht heading is never moved', () => {
+  // 100.5 and 199.5 would each round up (101 + 200) and overshoot 14,000 by one; rounded together only one of them goes up
+  assert.deepEqual(wholeBahtShares([12000, 1700, 100.5, 199.5], 14000), [12000, 1700, 101, 199]);
+  // the baht go to the largest fractions first
+  assert.deepEqual(wholeBahtShares([10.2, 10.7, 10.6], 32), [10, 11, 11]);
+  assert.deepEqual(wholeBahtShares([10.2, 10.7, 10.6], 31), [10, 11, 10]);
+  // already whole: nothing to do, and float noise around a whole number is not a fraction
+  assert.deepEqual(wholeBahtShares([12000, 1700], 13700), [12000, 1700]);
+  assert.deepEqual(wholeBahtShares([11999.999999999998, 1700.0000000000002], 13700), [12000, 1700]);
+  // a real job: the shares come to projectPrice
+  const items = [{ quantity: 1, price: 67, groupId: 1 }, { quantity: 1, price: 133, groupId: 2 }, { quantity: 3, price: 33.33, groupId: 3 }];
+  const groups = [{ id: 1, name: 'a', markup: 50 }, { id: 2, name: 'b', markup: 50 }, { id: 3, name: 'c', markup: 33.3 }];
+  const prices = jobPricing(items, groups).headings.map((h) => h.price);
+  const shares = wholeBahtShares(prices, projectPrice(items, 0, groups));
+  assert.equal(shares.reduce((s, n) => s + n, 0), projectPrice(items, 0, groups));
+  assert.ok(shares.every((n, i) => Number.isInteger(n) && Math.abs(n - prices[i]) < 1));
+  // not a matter of rounding: a target far from the sum, or one with satang
+  assert.equal(wholeBahtShares([100, 200], 45000), null);
+  assert.equal(wholeBahtShares([100, 200], 250), null);
+  assert.equal(wholeBahtShares([100.5, 200.25], 300.75), null);
+  assert.deepEqual(wholeBahtShares([], 0), []);
 });
