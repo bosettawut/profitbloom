@@ -4,7 +4,7 @@ import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup, type CostCategory } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
 import { emailError, phoneError } from '../../shared/contact.js';
-import { blankGroup, blankItem, CostsStage } from './job/CostsStage';
+import { blankGroup, blankItem, CostsStage, reserveTempIds } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt } from './CustomerContactPrompt';
@@ -36,44 +36,9 @@ const stepOfEntry = (): number => {
   return s === 2 || s === 3 ? s : 1;
 };
 
-/** New job: the same building blocks as the job workspace, so nothing has to be typed twice later. */
-export function NewProject({ user, onCreated }: NewProjectProps) {
-  const rules = useMemo(() => rulesOf(user), [user]);
-  const [step, setStep] = useState(1);
-
-  useEffect(() => {
-    // a refresh, or coming back from another page, lands on a later step's entry with an empty form: rewind to the first step
-    const stale = stepOfEntry();
-    if (stale > 1) {
-      window.history.replaceState({ ...window.history.state, wizardStep: 1 }, '');
-      window.history.go(1 - stale);
-    }
-    const onPop = () => {
-      // a number still being typed is kept on blur, so keep it before its box goes away
-      (document.activeElement as HTMLElement | null)?.blur?.();
-      setStep(stepOfEntry());
-    };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState('');
-  const [history, setHistory] = useState<Project[]>([]);
-  const [starter] = useState(() => {
-    const markup = marginToMarkup(rules.goodMargin);
-    const costGroups = [blankGroup(markup), blankGroup(markup)];
-    const hints: Record<number, string> = {};
-    const costItems = costGroups.flatMap((g) =>
-      STARTER_ROWS.map((row) => {
-        const item = blankItem(row.category, g.id);
-        hints[item.id] = row.hint;
-        return item;
-      }),
-    );
-    return { costGroups, costItems, hints };
-  });
-  const [draft, setDraft] = useState<Project>(() => {
-    return {
+/** an empty job, with the shop's usual margin and deposit */
+function blankDraft(rules: ReturnType<typeof rulesOf>, costGroups: Project['costGroups'], costItems: Project['costItems']): Project {
+  return {
     id: 'new',
     customerId: null,
     code: '',
@@ -99,10 +64,107 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     teardown: null,
     reviewApplied: false,
     reviewedAt: null,
-    costGroups: starter.costGroups,
-    costItems: starter.costItems,
-    };
+    costGroups,
+    costItems,
+  };
+}
+
+/**
+ * What has been typed is kept in this tab while the form is open, so a refresh brings it back.
+ * The copy belongs to the history entries of this visit to the form (they carry its id): opening the
+ * form again from the menu starts empty, and leaving the form, saving or signing out removes the copy.
+ */
+const DRAFT_KEY = 'pb:new-project-draft';
+const FORM_PATH = '/app/projects/new';
+interface SavedDraft {
+  v: 1;
+  id: string;
+  userId: number;
+  draft: Project;
+  hints: Record<number, string>;
+}
+
+function savedDraft(userId: number): SavedDraft | null {
+  try {
+    const saved = JSON.parse(window.sessionStorage.getItem(DRAFT_KEY) ?? 'null') as SavedDraft | null;
+    const mine = saved?.v === 1 && saved.userId === userId && !!saved.id && saved.id === window.history.state?.wizardDraft;
+    return mine && Array.isArray(saved.draft?.costGroups) && Array.isArray(saved.draft?.costItems) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+const forgetDraft = () => {
+  try {
+    window.sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // storage is switched off in this browser: nothing was kept
+  }
+};
+
+/** marks the browser's current history entry as part of this visit to the form, keeping its step */
+const tagEntry = (id: string) => {
+  if (window.location.pathname === FORM_PATH && window.history.state?.wizardDraft !== id) window.history.replaceState({ ...window.history.state, wizardDraft: id }, '');
+};
+
+/** New job: the same building blocks as the job workspace, so nothing has to be typed twice later. */
+export function NewProject({ user, onCreated }: NewProjectProps) {
+  const rules = useMemo(() => rulesOf(user), [user]);
+  const [initial] = useState(() => {
+    const saved = savedDraft(user.id);
+    if (saved) {
+      reserveTempIds([...saved.draft.costGroups.map((g) => g.id), ...saved.draft.costItems.map((i) => i.id)]);
+      return { id: saved.id, draft: saved.draft, hints: saved.hints ?? {}, restored: true };
+    }
+    forgetDraft();
+    const markup = marginToMarkup(rules.goodMargin);
+    const costGroups = [blankGroup(markup), blankGroup(markup)];
+    const hints: Record<number, string> = {};
+    const costItems = costGroups.flatMap((g) =>
+      STARTER_ROWS.map((row) => {
+        const item = blankItem(row.category, g.id);
+        hints[item.id] = row.hint;
+        return item;
+      }),
+    );
+    return { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, draft: blankDraft(rules, costGroups, costItems), hints, restored: false };
   });
+  const [step, setStep] = useState(() => (initial.restored ? stepOfEntry() : 1));
+
+  useEffect(() => {
+    // with nothing to bring back, a later step's entry (coming back from another page) would show an empty form: rewind to the first step
+    const stale = initial.restored ? 1 : stepOfEntry();
+    if (stale > 1) {
+      window.history.replaceState({ ...window.history.state, wizardStep: 1 }, '');
+      window.history.go(1 - stale);
+    } else {
+      tagEntry(initial.id);
+    }
+    const onPop = () => {
+      // a number still being typed is kept on blur, so keep it before its box goes away
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      setStep(stepOfEntry());
+      tagEntry(initial.id);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      // leaving the form inside the app (another screen, saved, signed out): the copy is not needed any more
+      forgetDraft();
+    };
+  }, []);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState('');
+  const [history, setHistory] = useState<Project[]>([]);
+  const [draft, setDraft] = useState<Project>(initial.draft);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ v: 1, id: initial.id, userId: user.id, draft, hints: initial.hints } satisfies SavedDraft));
+    } catch {
+      // storage is full or switched off: the form still works, it just won't survive a refresh
+    }
+  }, [draft]);
 
   useEffect(() => {
     api.projects().then(setHistory).catch(() => {});
@@ -127,7 +189,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const next = () => {
     const m = step === 1 ? missing() : '';
     if (m) return flash(m);
-    window.history.pushState({ wizardStep: step + 1 }, '');
+    window.history.pushState({ wizardStep: step + 1, wizardDraft: initial.id }, '');
     setStep(step + 1);
     window.scrollTo(0, 0);
   };
@@ -212,7 +274,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
           </div>
         </div>
       )}
-      {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} nameHints={starter.hints} />}
+      {step === 2 && <CostsStage draft={draft} patch={patch} rules={rules} h={h} lessons={lessons} nameHints={initial.hints} />}
       {step === 3 && <HealthPanel h={h} budget={draft.budget} />}
 
       <div className="mt-6 flex flex-col-reverse md:flex-row md:justify-end gap-3">

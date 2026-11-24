@@ -30,6 +30,11 @@ interface Props {
 const input = 'pb-input pb-input-sm';
 let tempId = -1;
 
+/** A draft brought back after a refresh carries temporary ids made before it: new ones must start below them. */
+export function reserveTempIds(ids: number[]) {
+  tempId = Math.min(tempId, ...ids.map((id) => id - 1));
+}
+
 /** a new heading; it gets a real id when the job is saved */
 export function blankGroup(markup: number, name = ''): CostGroup {
   return { id: tempId--, name, markup };
