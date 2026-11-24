@@ -182,9 +182,11 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     return phoneError(draft.phone) || emailError(draft.email);
   };
   const next = () => {
-    // a filled-in cost row needs its category before the health check can read it
-    const m = step === 1 ? missing() : step === 2 ? categoryWarning(draft.costItems) : '';
+    const m = step === 1 ? missing() : '';
     if (m) return flash(m);
+    // a filled-in cost row with no category is pointed out, but does not hold the form back
+    const noCategory = step === 2 ? categoryWarning(draft.costItems) : '';
+    if (noCategory) flash(noCategory);
     window.history.pushState({ wizardStep: step + 1, wizardDraft: initial.id }, '');
     setStep(step + 1);
     window.scrollTo(0, 0);
@@ -197,11 +199,6 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     if (m) {
       if (step > 1) back(step - 1);
       return flash(m);
-    }
-    const noCategory = categoryWarning(draft.costItems);
-    if (noCategory) {
-      if (step > 2) back(step - 2);
-      return flash(noCategory);
     }
     const updateCustomer = await contactPrompt.ask({ customerId: draft.customerId, name: draft.client, phone: draft.phone, email: draft.email });
     if (updateCustomer === null) return;

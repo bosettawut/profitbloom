@@ -672,12 +672,19 @@ html {
   }
 }
 
-/* toast: drops in from the top, centred */
+/* toast: drops in from the top. Its own classes centre it (left-1/2 -translate-x-1/2), so the animation only moves it
+   down; shifting it sideways here as well pushed it left of centre and, on a phone, against the edge at half width. */
 @keyframes toastIn {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.animate-toast { animation: toastIn 0.25s ease-out both; }
+.animate-toast {
+  animation: toastIn 0.25s ease-out both;
+  /* as wide as its text, up to the screen less a margin; longer text wraps and stays centred */
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  text-align: center;
+}
 
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }

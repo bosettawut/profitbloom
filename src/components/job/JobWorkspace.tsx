@@ -72,18 +72,15 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
+    // filled-in cost rows with no category are pointed out, but the job is saved all the same
     const noCategory = categoryWarning(draft.costItems);
-    if (noCategory) {
-      setStage('quote');
-      return flash(noCategory);
-    }
     const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
     const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
     if (updateCustomer === null) return false;
     setSaving(true);
     try {
       await onUpdate({ ...draft, ...override, updateCustomer });
-      flash('บันทึกแล้ว');
+      flash(noCategory ? `บันทึกแล้ว · ${noCategory}` : 'บันทึกแล้ว');
       return true;
     } catch (err) {
       flash((err as Error).message);
