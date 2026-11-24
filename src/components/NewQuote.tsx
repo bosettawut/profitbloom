@@ -12,6 +12,8 @@ interface QuoteItem {
   id: number;
   description: string;
   quantity: number;
+  /** what the line is counted in (ดอก, กำ, คน): free text, not used in any sum */
+  unit?: string;
   unitPrice: number;
   total: number;
   /** round this line's amount up to a whole baht as soon as it has a fraction */
@@ -44,10 +46,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     clientName: fromProject?.client ?? '',
     clientPhone: fromProject?.phone ?? '',
     clientEmail: fromProject?.email ?? '',
+    clientAddress: '',
+    clientTaxId: '',
+    clientBranch: '',
     projectTitle: fromProject?.title ?? '',
+    referenceNo: '',
     eventDate: fromProject?.eventDate ?? '',
     validUntil: isoDate(new Date(Date.now() + 30 * 864e5)),
-    notes: fromProject?.notes ?? ''
+    creditDays: 0,
+    notes: fromProject?.notes ?? '',
+    internalNote: '',
   });
 
   // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
@@ -64,10 +72,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   // it lists each cost item at its selling price (cost + its heading's margin, less the heading's discount) in whole baht; rounding each
   // line can leave the sum a few baht off the job's price, so one line takes up the difference
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
-    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: true }];
+    if (!fromProject || !fromProject.costItems.some((i) => !i.isExtra)) return [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: true }];
     const lines = fromProject.costItems.filter((i) => !i.isExtra).map((item, idx) => {
       const unitPrice = wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin, fromProject.costItems) / 100));
-      return { id: idx + 1, description: item.name, quantity: item.quantity, unitPrice, total: 0, roundUp: startRoundUp };
+      return { id: idx + 1, description: item.name, quantity: item.quantity, unit: item.unit ?? '', unitPrice, total: 0, roundUp: startRoundUp };
     });
     const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
     return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
@@ -99,12 +107,18 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           clientName: q.clientName,
           clientPhone: q.clientPhone,
           clientEmail: q.clientEmail,
+          clientAddress: q.clientAddress ?? '',
+          clientTaxId: q.clientTaxId ?? '',
+          clientBranch: q.clientBranch ?? '',
           projectTitle: q.projectTitle,
+          referenceNo: q.referenceNo ?? '',
           eventDate: q.eventDate,
           validUntil: q.validUntil,
-          notes: q.notes
+          creditDays: q.creditDays ?? 0,
+          notes: q.notes,
+          internalNote: q.internalNote ?? '',
         });
-        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
+        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
         setWhtRate(q.whtRate);
@@ -116,6 +130,25 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       .catch(err => showNotification(err.message))
       .finally(() => setLoading(false));
   }, [quoteId, startInPreview]);
+
+  useEffect(() => {
+    // a quote made from a job: the job holds no address or tax id, so they come from the customer's record and last quote
+    if (!fromProject?.customerId) return;
+    let stale = false;
+    api.customers()
+      .then((all) => {
+        const c = all.find((x) => x.id === fromProject.customerId);
+        if (!c || stale) return;
+        setQuoteData((d) => ({ ...d, clientAddress: d.clientAddress || c.address || c.quoteAddress || '', clientTaxId: d.clientTaxId || c.quoteTaxId || '', clientBranch: d.clientBranch || c.quoteBranch || '' }));
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [fromProject?.customerId]);
+
+  /** payment falls due so many days after the event */
+  const dueDate = quoteData.creditDays > 0 && quoteData.eventDate ? new Date(Date.parse(quoteData.eventDate + 'T00:00:00Z') + quoteData.creditDays * 864e5) : null;
 
   const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate, withholding, payable } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding, whtRate });
   // show the satang only when some amount on this quote has any, so a whole-baht quote stays clean
@@ -159,6 +192,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       id: newId,
       description: '',
       quantity: 1,
+      unit: '',
       unitPrice: 0,
       total: 0,
       roundUp: rounding === 'line',
@@ -203,7 +237,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         status: nextStatus === 'expired' ? undefined : nextStatus,
         items: quoteItems
           .filter(item => item.description.trim() || item.total > 0)
-          .map(({ description, quantity, unitPrice, roundUp }) => ({ description, quantity, unitPrice, roundUp: !!roundUp })),
+          .map(({ description, quantity, unit, unitPrice, roundUp }) => ({ description, quantity, unit: unit ?? '', unitPrice, roundUp: !!roundUp })),
       };
       const saved = savedId ? await api.updateQuote(savedId, body) : await api.createQuote(body);
       setSavedId(saved.id);
@@ -272,7 +306,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         `เรียน ${saved.clientName}`,
         '',
         `ขอส่งใบเสนอราคา ${saved.code}${saved.projectTitle ? ` สำหรับ ${saved.projectTitle}` : ''}`,
-        ...saved.items.map(i => `- ${i.description} x ${i.quantity} = ${money(i.total)}`),
+        ...saved.items.map(i => `- ${i.description} x ${i.quantity}${i.unit ? ` ${i.unit}` : ''} = ${money(i.total)}`),
         '',
         `ยอดรวมสุทธิ ${money(saved.totalAmount)}`,
         ...(saved.withholding > 0 ? [`หัก ณ ที่จ่าย ${saved.whtRate}% ${money(saved.withholding)}`, `ยอดชำระ ${money(saved.payableAmount)}`] : []),
@@ -341,7 +375,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 }}
                 onPick={(c) => {
                   setCustomerId(c.id);
-                  setQuoteData({ ...quoteData, clientName: c.name, clientPhone: c.phone, clientEmail: c.email });
+                  setQuoteData({
+                    ...quoteData,
+                    clientName: c.name,
+                    clientPhone: c.phone,
+                    clientEmail: c.email,
+                    // what the customer's record or last quote carried; what is already typed stays when they have none
+                    clientAddress: c.address || c.quoteAddress || quoteData.clientAddress,
+                    clientTaxId: c.quoteTaxId || quoteData.clientTaxId,
+                    clientBranch: c.quoteBranch || quoteData.clientBranch,
+                  });
                 }}
               />
             </div>
@@ -364,6 +407,42 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   onChange={(e) => setQuoteData({ ...quoteData, clientEmail: e.target.value })}
                   className="pb-input"
                   placeholder="เช่น customer@email.com"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="pb-label">ที่อยู่ลูกค้า</label>
+              <textarea
+                value={quoteData.clientAddress}
+                onChange={(e) => setQuoteData({ ...quoteData, clientAddress: e.target.value })}
+                className="pb-input"
+                rows={2}
+                maxLength={500}
+                placeholder="เช่น 99/1 ถ.สุขุมวิท แขวงคลองตัน เขตคลองเตย กรุงเทพฯ 10110"
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="pb-label">เลขประจำตัวผู้เสียภาษี</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={quoteData.clientTaxId}
+                  onChange={(e) => setQuoteData({ ...quoteData, clientTaxId: e.target.value })}
+                  className="pb-input"
+                  maxLength={20}
+                  placeholder="เช่น 0105551234567"
+                />
+              </div>
+              <div>
+                <label className="pb-label">สำนักงาน/สาขา</label>
+                <input
+                  type="text"
+                  value={quoteData.clientBranch}
+                  onChange={(e) => setQuoteData({ ...quoteData, clientBranch: e.target.value })}
+                  className="pb-input"
+                  maxLength={60}
+                  placeholder="เช่น สำนักงานใหญ่"
                 />
               </div>
             </div>
@@ -411,6 +490,24 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   className="pb-input pb-input-sm"
                 />
               </div>
+              <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
+                <label className="text-sm font-medium text-ink">เครดิต (วัน)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="365"
+                  inputMode="numeric"
+                  value={quoteData.creditDays || ''}
+                  placeholder="0"
+                  onChange={(e) => setQuoteData({ ...quoteData, creditDays: Math.min(365, Math.max(0, Math.round(parseFloat(e.target.value) || 0))) })}
+                  className="pb-input pb-input-sm"
+                />
+              </div>
+              {quoteData.creditDays > 0 && (
+                <p role="note" className="text-xs text-ink-muted text-right">
+                  {dueDate ? `ครบกำหนดชำระ ${dueDate.toLocaleDateString('th-TH')} (${quoteData.creditDays} วันหลังวันจัดงาน)` : 'ใส่วันที่จัดงาน ระบบจะคิดวันครบกำหนดชำระให้'}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -418,8 +515,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         <div className="border-t border-line my-6" />
 
         {/* what the quote is for, and whether its prices carry VAT */}
-        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-4">
-          <div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_minmax(0,18rem)] gap-4">
+          <div className="md:col-span-2 xl:col-span-1">
             <label className="pb-label">ชื่อโปรเจ็กต์</label>
             <input
               type="text"
@@ -427,6 +524,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               onChange={(e) => setQuoteData({ ...quoteData, projectTitle: e.target.value })}
               className="pb-input"
               placeholder="เช่น งานแต่งงาน"
+            />
+          </div>
+          <div>
+            <label className="pb-label">เลขที่อ้างอิง</label>
+            <input
+              type="text"
+              value={quoteData.referenceNo}
+              onChange={(e) => setQuoteData({ ...quoteData, referenceNo: e.target.value })}
+              className="pb-input"
+              maxLength={60}
+              placeholder="เช่น PO-2026-015"
             />
           </div>
           <div>
@@ -441,8 +549,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
         {/* Quote items */}
         <div role="group" aria-label="รายการใบเสนอราคา" className="mt-6">
-          {/* Mobile View - Cards */}
-          <div className="block md:hidden space-y-4">
+          {/* Cards: phones, tablets and small laptops */}
+          <div className="block xl:hidden space-y-4">
             {quoteItems.map((item, index) => (
               <div key={item.id} className="bg-gray-50 p-4 rounded-lg border">
                 <div className="space-y-3">
@@ -456,7 +564,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                       placeholder="รายละเอียดสินค้า/บริการ"
                     />
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-[2.6fr_3fr_3.6fr] gap-2">
                     <div>
                       <label className="pb-label">จำนวน</label>
                       <input
@@ -464,6 +572,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                         value={item.quantity}
                         onChange={(e) => updateQuoteItem(item.id, 'quantity', parseFloat(e.target.value) || 0)}
                         className="w-full px-3 py-2 border border-line rounded-lg text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="pb-label">หน่วย</label>
+                      <input
+                        type="text"
+                        value={item.unit ?? ''}
+                        maxLength={30}
+                        onChange={(e) => updateQuoteItem(item.id, 'unit', e.target.value)}
+                        className="w-full px-3 py-2 border border-line rounded-lg text-sm"
+                        placeholder="เช่น ดอก"
                       />
                     </div>
                     <div>
@@ -507,13 +626,14 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             ))}
           </div>
 
-          {/* Desktop View - Table */}
-          <div className="hidden md:block overflow-x-auto rounded-2xl border border-line">
-            <table className="w-full min-w-[36rem] table-fixed">
+          {/* Table: wide screens */}
+          <div className="hidden xl:block overflow-x-auto rounded-2xl border border-line">
+            <table className="w-full min-w-[44rem] table-fixed">
               <colgroup>
                 <col className="w-14" />
                 <col />
                 <col className="w-20" />
+                <col className="w-24" />
                 <col className="w-28" />
                 {rounding === 'line' && <col className="w-12" />}
                 <col className="w-32" />
@@ -524,6 +644,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   <th className="text-center px-1 py-3 font-medium">ลำดับ</th>
                   <th className="text-left px-3 py-3 font-medium">รายละเอียด</th>
                   <th className="text-right px-3 py-3 font-medium">จำนวน</th>
+                  <th className="text-left px-3 py-3 font-medium">หน่วย</th>
                   <th className="text-right px-3 py-3 font-medium whitespace-nowrap">ราคา/หน่วย</th>
                   {rounding === 'line' && <th className="text-center px-1 py-3 font-medium" title="ปัดยอดของรายการขึ้นเป็นบาทเต็มเมื่อมีเศษ">ปัด</th>}
                   <th className="text-right px-3 py-3 font-medium">รวม</th>
@@ -549,6 +670,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                         value={item.quantity}
                         onChange={(e) => updateQuoteItem(item.id, 'quantity', parseFloat(e.target.value) || 0)}
                         className="pb-input pb-input-sm text-right !px-2.5"
+                      />
+                    </td>
+                    <td className="px-2 py-3">
+                      <input
+                        type="text"
+                        value={item.unit ?? ''}
+                        maxLength={30}
+                        onChange={(e) => updateQuoteItem(item.id, 'unit', e.target.value)}
+                        aria-label="หน่วย"
+                        className="pb-input pb-input-sm !px-2.5"
+                        placeholder="เช่น ดอก"
                       />
                     </td>
                     <td className="px-2 py-3">
@@ -593,7 +725,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             </table>
           </div>
 
-          <button onClick={addQuoteItem} className="pb-btn-secondary !py-2 w-full md:w-auto mt-4">
+          <button onClick={addQuoteItem} className="pb-btn-secondary !py-2 w-full xl:w-auto mt-4">
             <Plus className="w-4 h-4" />
             เพิ่มรายการ
           </button>
@@ -609,15 +741,28 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
         {/* the note on the left; discount, VAT, the total and withholding on the right */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-6 lg:gap-12 mt-6">
-          <div>
-            <label className="pb-label">หมายเหตุ</label>
-            <textarea
-              value={quoteData.notes}
-              onChange={(e) => setQuoteData({ ...quoteData, notes: e.target.value })}
-              className="pb-input"
-              rows={4}
-              placeholder="เช่น ราคารวมค่าขนส่งและติดตั้ง"
-            />
+          <div className="space-y-4">
+            <div>
+              <label className="pb-label">หมายเหตุ</label>
+              <textarea
+                value={quoteData.notes}
+                onChange={(e) => setQuoteData({ ...quoteData, notes: e.target.value })}
+                className="pb-input"
+                rows={4}
+                placeholder="เช่น ราคารวมค่าขนส่งและติดตั้ง"
+              />
+            </div>
+            <div>
+              <label className="pb-label">โน้ตภายใน (ไม่แสดงในใบเสนอราคา)</label>
+              <textarea
+                value={quoteData.internalNote}
+                onChange={(e) => setQuoteData({ ...quoteData, internalNote: e.target.value })}
+                className="pb-input"
+                rows={2}
+                maxLength={2000}
+                placeholder="เช่น ลูกค้าขอส่วนลดเพิ่มถ้าจองภายในสิ้นเดือน"
+              />
+            </div>
           </div>
 
           <div role="group" aria-label="สรุปการเงิน" className="space-y-3 text-sm md:text-base">

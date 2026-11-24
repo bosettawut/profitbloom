@@ -10,8 +10,15 @@ export interface QuoteDocData {
   clientName: string;
   clientPhone: string;
   clientEmail: string;
+  clientAddress?: string;
+  clientTaxId?: string;
+  clientBranch?: string;
   projectTitle: string;
+  /** the customer's own reference, such as a purchase order number */
+  referenceNo?: string;
   eventDate: string;
+  /** days the customer has to pay after the event; 0 or missing = not stated */
+  creditDays?: number;
   notes: string;
   taxRate: number;
   discountRate: number;
@@ -19,7 +26,7 @@ export interface QuoteDocData {
   whtRate?: number;
   vatMode: VatMode;
   rounding?: Rounding;
-  items: Array<{ description: string; quantity: number; unitPrice: number; roundUp?: boolean }>;
+  items: Array<{ description: string; quantity: number; unit?: string; unitPrice: number; roundUp?: boolean }>;
 }
 
 interface QuoteDocumentProps {
@@ -43,6 +50,9 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
   const amounts = [subtotal, discount, vat, total, withholding, ...items.map((i) => lineAmount(i, quote.rounding))];
   const digits = amounts.some((n) => !Number.isInteger(n)) ? 2 : 0;
   const money = (n: number) => n.toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const creditDays = quote.creditDays && quote.creditDays > 0 ? quote.creditDays : 0;
+  /** payment falls due so many days after the event */
+  const dueDate = creditDays && quote.eventDate ? new Date(Date.parse(quote.eventDate + 'T00:00:00Z') + creditDays * 864e5).toISOString().slice(0, 10) : '';
 
   return (
     <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13 }}>
@@ -65,6 +75,9 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
               <tr><td className="pr-3 text-[#5B566D]">เลขที่</td><td style={{ fontWeight: 600 }}>{quote.code || 'ฉบับร่าง'}</td></tr>
               <tr><td className="pr-3 text-[#5B566D]">วันที่</td><td style={{ fontWeight: 600 }}>{quote.createdDate}</td></tr>
               <tr><td className="pr-3 text-[#5B566D]">ใช้ได้ถึง</td><td style={{ fontWeight: 600 }}>{thaiDate(quote.validUntil)}</td></tr>
+              {quote.referenceNo && <tr><td className="pr-3 text-[#5B566D]">อ้างอิง</td><td style={{ fontWeight: 600 }}>{quote.referenceNo}</td></tr>}
+              {creditDays > 0 && <tr><td className="pr-3 text-[#5B566D]">เครดิต</td><td style={{ fontWeight: 600 }}>{creditDays} วัน</td></tr>}
+              {dueDate && <tr><td className="pr-3 text-[#5B566D]">ครบกำหนด</td><td style={{ fontWeight: 600 }}>{thaiDate(dueDate)}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -75,6 +88,12 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
         <div>
           <p className="text-[#5B566D] mb-1" style={{ fontWeight: 600 }}>เสนอราคาให้</p>
           <p style={{ fontSize: 15, fontWeight: 700 }}>{quote.clientName || '-'}</p>
+          {quote.clientAddress && <p className="text-[#5B566D] leading-relaxed whitespace-pre-line">{quote.clientAddress}</p>}
+          {(quote.clientTaxId || quote.clientBranch) && (
+            <p className="text-[#5B566D]">
+              {quote.clientTaxId ? `เลขประจำตัวผู้เสียภาษี ${quote.clientTaxId}${quote.clientBranch ? ` (${quote.clientBranch})` : ''}` : quote.clientBranch}
+            </p>
+          )}
           {quote.clientPhone && <p className="text-[#5B566D]">โทร {quote.clientPhone}</p>}
           {quote.clientEmail && <p className="text-[#5B566D]">{quote.clientEmail}</p>}
         </div>
@@ -91,7 +110,7 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
           <tr style={{ background: '#F4F1FB', color: '#35235e' }}>
             <th className="text-center py-2.5 px-2" style={{ width: 40, fontWeight: 600 }}>#</th>
             <th className="text-left py-2.5 px-2" style={{ fontWeight: 600 }}>รายการ</th>
-            <th className="text-right py-2.5 px-2" style={{ width: 70, fontWeight: 600 }}>จำนวน</th>
+            <th className="text-right py-2.5 px-2" style={{ width: 96, fontWeight: 600 }}>จำนวน</th>
             <th className="text-right py-2.5 px-2" style={{ width: 110, fontWeight: 600 }}>ราคาต่อหน่วย</th>
             <th className="text-right py-2.5 px-2" style={{ width: 120, fontWeight: 600 }}>จำนวนเงิน</th>
           </tr>
@@ -104,7 +123,7 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
             <tr key={i} style={{ borderBottom: '1px solid #ECEAF2' }}>
               <td className="text-center py-2.5 px-2 text-[#5B566D]">{i + 1}</td>
               <td className="py-2.5 px-2">{item.description || '-'}</td>
-              <td className="text-right py-2.5 px-2">{item.quantity.toLocaleString('th-TH')}</td>
+              <td className="text-right py-2.5 px-2">{item.quantity.toLocaleString('th-TH')}{item.unit?.trim() ? ` ${item.unit.trim()}` : ''}</td>
               <td className="text-right py-2.5 px-2">{unitMoney(item.unitPrice)}</td>
               <td className="text-right py-2.5 px-2" style={{ fontWeight: 600 }}>{money(lineAmount(item, quote.rounding))}</td>
             </tr>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { api, type Customer } from '../lib/api';
+import { api, type PickedCustomer } from '../lib/api';
 import { CustomerForm } from './Customers';
 
 interface CustomerPickerProps {
@@ -9,7 +9,7 @@ interface CustomerPickerProps {
   /** typing a name by hand: the job is no longer tied to the customer picked before */
   onChange: (name: string) => void;
   /** a customer chosen from the list (or just added): fill in their contact details */
-  onPick: (customer: Customer) => void;
+  onPick: (customer: PickedCustomer) => void;
   placeholder?: string;
   className?: string;
 }
@@ -20,7 +20,7 @@ interface CustomerPickerProps {
  * A name typed without picking is still saved: the server matches it to a customer or creates one.
  */
 export function CustomerPicker({ value, onChange, onPick, placeholder = '', className = 'pb-input' }: CustomerPickerProps) {
-  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customers, setCustomers] = useState<PickedCustomer[]>([]);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [adding, setAdding] = useState(false);
@@ -47,7 +47,7 @@ export function CustomerPicker({ value, onChange, onPick, placeholder = '', clas
   const canAdd = !!term && !exact;
   const rows = matches.length + (canAdd ? 1 : 0);
 
-  const pick = (c: Customer) => {
+  const pick = (c: PickedCustomer) => {
     onPick(c);
     setOpen(false);
     setActive(-1);
