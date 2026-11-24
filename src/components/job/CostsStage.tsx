@@ -12,6 +12,7 @@ import {
   fmt,
   marginToMarkup,
   markupToMargin,
+  overBudget,
   remargined,
   repriced,
   type CostCategory,
@@ -169,6 +170,7 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
     patch({ profitMargin: r.profitMargin, costGroups: r.groups });
   };
   const num = (v: string) => (v === '' ? 0 : Number(v));
+  const budgetGap = overBudget(h.price, draft.budget);
 
   return (
     <div className="space-y-5">
@@ -362,6 +364,12 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
             <div>
               <label className="pb-label">งบที่ลูกค้าเสนอ (บาท)</label>
               <input className={input} type="number" min="0" inputMode="decimal" value={draft.budget || ''} placeholder="ไม่ทราบ" onChange={(e) => patch({ budget: num(e.target.value) })} />
+              {/* with a budget and a price to compare: says at once whether the price fits the client's budget */}
+              {budgetGap !== null && (
+                <p role="status" className={`mt-1.5 text-xs font-medium ${budgetGap > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  {budgetGap > 0 ? `เกินงบลูกค้า ฿${fmt(budgetGap)}` : budgetGap === 0 ? 'พอดีงบลูกค้า' : `อยู่ในงบลูกค้า เหลือ ฿${fmt(-budgetGap)}`}
+                </p>
+              )}
             </div>
             <div>
               <label className="pb-label">มัดจำ (%)</label>
