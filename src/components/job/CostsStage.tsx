@@ -3,6 +3,7 @@ import { Lightbulb, Plus, Trash2 } from 'lucide-react';
 import type { CostGroup, CostItem, Project } from '../../lib/api';
 import { toJob } from '../../lib/job';
 import { lacksCategory } from './CategoryPrompt';
+import { useHeadingPrompt } from './HeadingPrompt';
 import {
   categoryCost,
   categoryLabel,
@@ -137,6 +138,15 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
     patch({ costGroups: [...groups, g], costItems: [...draft.costItems, blankItem('', g.id)] });
   };
   const setGroup = (id: number, change: Partial<CostGroup>) => patch({ costGroups: groups.map((g) => (g.id === id ? { ...g, ...change } : g)) });
+  const headingPrompt = useHeadingPrompt();
+  /** a row the app adds for a known purpose (the owner's labour, teardown): the user says which heading it goes under, or names a new heading for it */
+  const addUnderChosenHeading = async (category: CostCategory, name: string) => {
+    const choice = await headingPrompt.ask(name, groups);
+    if (!choice) return;
+    if ('groupId' in choice) return addItem(choice.groupId, category, name);
+    const g = { ...newGroup(), name: choice.newName };
+    patch({ costGroups: [...groups, g], costItems: [...draft.costItems, { ...blankItem(category, g.id), name }] });
+  };
   const removeGroup = (g: CostGroup) => {
     const inside = items.filter((i) => i.groupId === g.id);
     if (inside.some((i) => i.name.trim() || i.quantity * i.price > 0) && !window.confirm(`ลบหัวข้อ "${g.name || 'ไม่มีชื่อ'}" พร้อมรายการข้างใน ${inside.length} รายการ ใช่หรือไม่?`)) return;
@@ -307,8 +317,8 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
               </div>
             ))}
           </div>
-          <FromCategory label="ค่าแรงเจ้าของ" hint='นับจากรายการในหมวด "ค่าแรงเจ้าของ"' amount={categoryCost(job, 'owner_labor')} saidYes={draft.ownerLabor === true} onAdd={() => addItem(null, 'owner_labor', 'ค่าแรงเจ้าของ')} />
-          <FromCategory label="ค่าเก็บงานและขนส่งกลับ" hint='นับจากรายการในหมวด "เก็บงาน/ขนส่งกลับ"' amount={categoryCost(job, 'teardown')} saidYes={draft.teardown === true} onAdd={() => addItem(null, 'teardown', 'เก็บงานและขนส่งกลับ')} />
+          <FromCategory label="ค่าแรงเจ้าของ" hint='นับจากรายการในหมวด "ค่าแรงเจ้าของ"' amount={categoryCost(job, 'owner_labor')} saidYes={draft.ownerLabor === true} onAdd={() => addUnderChosenHeading('owner_labor', 'ค่าแรงเจ้าของ')} />
+          <FromCategory label="ค่าเก็บงานและขนส่งกลับ" hint='นับจากรายการในหมวด "เก็บงาน/ขนส่งกลับ"' amount={categoryCost(job, 'teardown')} saidYes={draft.teardown === true} onAdd={() => addUnderChosenHeading('teardown', 'เก็บงานและขนส่งกลับ')} />
         </div>
 
         {/* Pricing */}
@@ -364,6 +374,7 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
           </div>
         </div>
       </div>
+      {headingPrompt.node}
     </div>
   );
 }
