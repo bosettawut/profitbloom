@@ -6,7 +6,8 @@ export function toJob(p: Project): Job {
   return {
     costItems: p.costItems.map((i) => ({
       name: i.name,
-      category: i.category,
+      // a row with no category chosen counts as "อื่น ๆ" in every check
+      category: i.category || 'other',
       quantity: i.quantity,
       price: i.price,
       groupId: i.groupId,

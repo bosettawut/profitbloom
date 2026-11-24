@@ -5,7 +5,7 @@ import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
 import { statusPill } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
-import { CostsStage } from './CostsStage';
+import { categoryWarning, CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
@@ -72,6 +72,11 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
+    const noCategory = categoryWarning(draft.costItems);
+    if (noCategory) {
+      setStage('quote');
+      return flash(noCategory);
+    }
     const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
     const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
     if (updateCustomer === null) return false;

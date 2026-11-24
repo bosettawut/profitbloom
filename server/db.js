@@ -362,6 +362,11 @@ const MIGRATIONS = [
   `
   ALTER TABLE quotes ADD COLUMN wht_rate DOUBLE PRECISION NOT NULL DEFAULT 0;
   `,
+
+  // 11 — a cost item can say what it is counted in (ดอก, กำ, คน, เที่ยว): free text, not used in any sum
+  `
+  ALTER TABLE cost_items ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 async function schemaVersion(q) {

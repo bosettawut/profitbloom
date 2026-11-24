@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
-import { health, learnings, marginToMarkup, type CostCategory } from '../lib/decision';
+import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
 import { emailError, phoneError } from '../../shared/contact.js';
-import { blankGroup, blankItem, CostsStage, reserveTempIds } from './job/CostsStage';
+import { blankGroup, blankItem, categoryWarning, CostsStage, reserveTempIds } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt } from './CustomerContactPrompt';
@@ -22,13 +22,8 @@ const steps = [
   { id: 3, title: 'เช็คสุขภาพงาน' },
 ];
 
-/** A new job opens with two headings of these four empty rows; the name box of each shows a typical item in grey. */
-const STARTER_ROWS: Array<{ hint: string; category: CostCategory }> = [
-  { hint: 'เช่น โอเอซิส', category: 'material' },
-  { hint: 'เช่น ค่าแรง', category: 'labor' },
-  { hint: 'เช่น ค่าขนส่ง', category: 'transport' },
-  { hint: 'เช่น กุหลาบขาว', category: 'material' },
-];
+/** A new job opens with two headings of four empty rows; the name box of each shows one of these typical items in grey. */
+const STARTER_HINTS = ['เช่น โอเอซิส', 'เช่น ค่าแรง', 'เช่น ค่าขนส่ง', 'เช่น กุหลาบขาว'];
 
 /** The step the browser's current history entry stands for: "ถัดไป" adds an entry per step, so the browser's back button goes one step back. */
 const stepOfEntry = (): number => {
@@ -121,9 +116,9 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     const costGroups = [blankGroup(markup), blankGroup(markup)];
     const hints: Record<number, string> = {};
     const costItems = costGroups.flatMap((g) =>
-      STARTER_ROWS.map((row) => {
-        const item = blankItem(row.category, g.id);
-        hints[item.id] = row.hint;
+      STARTER_HINTS.map((hint) => {
+        const item = blankItem('', g.id);
+        hints[item.id] = hint;
         return item;
       }),
     );
@@ -187,7 +182,8 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     return phoneError(draft.phone) || emailError(draft.email);
   };
   const next = () => {
-    const m = step === 1 ? missing() : '';
+    // a filled-in cost row needs its category before the health check can read it
+    const m = step === 1 ? missing() : step === 2 ? categoryWarning(draft.costItems) : '';
     if (m) return flash(m);
     window.history.pushState({ wizardStep: step + 1, wizardDraft: initial.id }, '');
     setStep(step + 1);
@@ -201,6 +197,11 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     if (m) {
       if (step > 1) back(step - 1);
       return flash(m);
+    }
+    const noCategory = categoryWarning(draft.costItems);
+    if (noCategory) {
+      if (step > 2) back(step - 2);
+      return flash(noCategory);
     }
     const updateCustomer = await contactPrompt.ask({ customerId: draft.customerId, name: draft.client, phone: draft.phone, email: draft.email });
     if (updateCustomer === null) return;
