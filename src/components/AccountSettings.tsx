@@ -188,7 +188,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
   return (
     <div>
       <div className="p-5 md:p-10 pb-28 md:pb-10">
-        <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">ตั้งค่า</h1>
+        <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">ตั้งค่า</h1>
         <p className="text-sm text-ink-muted mt-1 mb-8">ข้อมูลร้าน โลโก้ และบัญชีของคุณ</p>
 
         {/* on phones these pages aren't in the bottom bar, so reach them from here */}

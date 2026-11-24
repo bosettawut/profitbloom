@@ -144,7 +144,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div>
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">ลูกค้า</h1>
+          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">ลูกค้า</h1>
           <p className="text-sm text-ink-muted mt-1">รายชื่อลูกค้าของร้าน แตะที่ลูกค้าเพื่อดูโปรเจ็กต์และใบเสนอราคาของแต่ละคน</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
@@ -210,14 +210,14 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
               <tbody>
                 {paged.rows.map((c) => (
                   <tr key={c.id} onClick={() => onOpenCustomer(c.id)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
-                    <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{c.name}</span></td>
-                    <td className="px-3 py-3 text-ink whitespace-nowrap">{c.phone || '-'}</td>
-                    <td className="px-3 py-3 text-ink max-w-[9rem] truncate">{c.lineId || '-'}</td>
-                    <td className="px-3 py-3 text-ink max-w-[13rem] truncate">{c.email || '-'}</td>
-                    <td className="px-3 py-3 text-ink whitespace-nowrap">{c.lastEventDate ? formatDate(c.lastEventDate) : '-'}</td>
-                    <td className="px-3 py-3 text-right text-ink">{c.projectCount}</td>
-                    <td className="px-3 py-3 text-right text-ink">{c.quoteCount}</td>
-                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(c.totalSales)}</td>
+                    <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{c.name}</span></td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{c.phone || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[9rem] truncate">{c.lineId || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[10rem] 2xl:max-w-[13rem] truncate">{c.email || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{c.lastEventDate ? formatDate(c.lastEventDate) : '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-right text-ink">{c.projectCount}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-right text-ink">{c.quoteCount}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(c.totalSales)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -326,7 +326,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight break-words">{customer.name}</h1>
+          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight break-words">{customer.name}</h1>
           <p className="text-sm text-ink-muted mt-1">เพิ่มเมื่อ {customer.createdDate}</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">

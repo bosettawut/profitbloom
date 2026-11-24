@@ -196,7 +196,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
-        <div><h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะรายการเพื่อดูรายละเอียด</p></div>
+        <div><h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะรายการเพื่อดูรายละเอียด</p></div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button onClick={exportCsv} aria-label="ส่งออก CSV" className="pb-btn-secondary shrink-0">
             <Download className="w-4 h-4" />
@@ -318,7 +318,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-canvas/60 border-b border-line">
-                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} />
+                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="โปรเจ็กต์" sortKey="title" sort={sort} onSort={sortBy} />
                   <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
                   <SortHeader label="วันที่จัดงาน" sortKey="eventDate" sort={sort} onSort={sortBy} firstDir="desc" />
@@ -334,16 +334,19 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                   const h = healthOf.get(project.id)!;
                   return (
                     <tr key={project.id} onClick={() => handleProjectClick(project)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
-                      <td className="px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
-                      <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{project.title}</span></td>
-                      <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{project.client || '-'}</td>
-                      <td className="px-3 py-3 text-ink whitespace-nowrap">{formatEventDate(project.eventDate)}</td>
-                      <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{Math.round(h.price).toLocaleString('th-TH')}</td>
-                      <td className="px-3 py-3 text-right text-ink whitespace-nowrap">{h.margin.toFixed(0)}%</td>
-                      <td className="px-3 py-3">
+                      <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
+                      <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
+                        <span className="line-clamp-2">{project.title}</span>
+                        <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{project.code}</span>
+                      </td>
+                      <td className="px-2 2xl:px-3 py-3 text-ink max-w-[9rem] 2xl:max-w-[10rem] truncate">{project.client || '-'}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{formatEventDate(project.eventDate)}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{Math.round(h.price).toLocaleString('th-TH')}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-right text-ink whitespace-nowrap">{h.margin.toFixed(0)}%</td>
+                      <td className="px-2 2xl:px-3 py-3">
                         <span title="คะแนนสุขภาพกำไร" className={`inline-flex w-9 h-9 rounded-xl items-center justify-center text-xs font-bold ${LEVEL_STYLE[h.level].chip}`}>{h.score}</span>
                       </td>
-                      <td className="px-3 py-3">
+                      <td className="px-2 2xl:px-3 py-3">
                         <button
                           onClick={(e) => openStatusModal(project, e)}
                           title="เปลี่ยนสถานะ"

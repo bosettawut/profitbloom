@@ -22,7 +22,7 @@ export function Packages({ user }: PackagesProps) {
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-8">
-        <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">แพ็กเกจ</h1>
+        <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">แพ็กเกจ</h1>
         <p className="text-sm text-ink-muted mt-1">แพ็กเกจ ProfitBloom ที่ร้านของคุณใช้งานอยู่</p>
       </div>
 

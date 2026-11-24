@@ -33,7 +33,7 @@ interface Props {
 
 const input = 'pb-input pb-input-sm';
 /** below the wide table layout these boxes are narrow: less padding at the sides leaves room for the figures */
-const narrow = 'max-xl:!px-2.5';
+const narrow = 'max-xl:!px-2';
 let tempId = -1;
 
 /** A draft brought back after a refresh carries temporary ids made before it: new ones must start below them. */
@@ -253,40 +253,40 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
                   </button>
                 </div>
 
-                <div className="hidden xl:grid grid-cols-[1.5fr_1.2fr_0.55fr_0.6fr_0.85fr_0.9fr_auto] gap-3 px-1 pb-2 text-xs font-medium text-ink-muted">
+                <div className="hidden xl:grid grid-cols-[1.4fr_1.2fr_0.55fr_0.7fr_0.85fr_0.9fr_auto] gap-3 px-1 pb-2 text-xs font-medium text-ink-muted">
                   <span>รายการ</span><span>หมวด</span><span>จำนวน</span><span>หน่วย</span><span>ราคา/หน่วย</span><span className="text-right">รวม</span><span className="w-8" />
                 </div>
                 <div className="space-y-3 xl:space-y-2">
                   {inside.length === 0 && <p className="text-sm text-ink-muted py-3 text-center">ยังไม่มีรายการในหัวข้อนี้</p>}
                   {inside.map((i) => (
-                    <div key={i.id} className="grid grid-cols-2 sm:grid-cols-[1.6fr_0.6fr_0.7fr_0.9fr_1fr] xl:grid-cols-[1.5fr_1.2fr_0.55fr_0.6fr_0.85fr_0.9fr_auto] gap-2 xl:gap-3 items-center rounded-2xl xl:rounded-none bg-[#F7F6FA] xl:bg-transparent p-3 xl:p-0">
+                    <div key={i.id} className="grid grid-cols-2 sm:grid-cols-[1.6fr_0.6fr_0.7fr_0.9fr_1fr] xl:grid-cols-[1.4fr_1.2fr_0.55fr_0.7fr_0.85fr_0.9fr_auto] gap-2 xl:gap-3 items-center rounded-2xl xl:rounded-none bg-[#F7F6FA] xl:bg-transparent p-3 xl:p-0">
                       <input className={`${input} col-span-2 sm:col-span-5 xl:col-span-1`} aria-label="ชื่อรายการ" value={i.name} placeholder={nameHints?.[i.id] ?? 'เช่น ดอกกุหลาบขาว'} onChange={(e) => setItem(i.id, { name: e.target.value })} />
                       {/* on a phone the category sits under the three number boxes, beside the total */}
                       <div className="order-1 sm:order-none">
-                        <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
+                        <span className="xl:hidden block text-xs text-ink-muted mb-1">หมวด</span>
                         {/* nothing is chosen for the user; a row that holds something shows this in red until a category is picked (a reminder: a dialog asks about it, but it does not stop saving) */}
                         <select className={`${input} ${i.category ? '' : lacksCategory(i) ? '!border-rose-400 !text-rose-600' : '!text-[#8C879D]'}`} aria-label="หมวด" aria-invalid={lacksCategory(i) || undefined} value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
                           <option value="" disabled>เลือกหมวด</option>
                           {COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                         </select>
                       </div>
-                      <div className="col-span-2 grid grid-cols-[2.6fr_3fr_3.6fr] gap-2 sm:contents">
+                      <div className="col-span-2 grid grid-cols-[2.5fr_3.3fr_3.4fr] gap-2 sm:contents">
                         <div>
-                          <span className="xl:hidden block text-[11px] text-ink-muted mb-1">จำนวน</span>
+                          <span className="xl:hidden block text-xs text-ink-muted mb-1">จำนวน</span>
                           <input className={`${input} ${narrow}`} type="number" min="0" inputMode="decimal" aria-label="จำนวน" value={i.quantity} onChange={(e) => setItem(i.id, { quantity: num(e.target.value) })} />
                         </div>
                         <div>
-                          <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หน่วย</span>
+                          <span className="xl:hidden block text-xs text-ink-muted mb-1">หน่วย</span>
                           <input className={`${input} ${narrow}`} aria-label="หน่วย" maxLength={30} value={i.unit ?? ''} placeholder="เช่น ดอก" onChange={(e) => setItem(i.id, { unit: e.target.value })} />
                         </div>
                         <div>
-                          <span className="xl:hidden block text-[11px] text-ink-muted mb-1">ราคา/หน่วย</span>
+                          <span className="xl:hidden block text-xs text-ink-muted mb-1">ราคา/หน่วย</span>
                           <input className={`${input} ${narrow}`} type="number" min="0" inputMode="decimal" aria-label="ราคาต่อหน่วย" value={i.price} onChange={(e) => setItem(i.id, { price: num(e.target.value) })} />
                         </div>
                       </div>
                       {/* on small screens the total and the delete button share a cell */}
                       <div className="order-2 sm:order-none flex items-end justify-between gap-2 xl:contents">
-                        <div><span className="xl:hidden block text-[11px] text-ink-muted mb-1">รวม</span><p className="text-sm font-semibold text-ink xl:text-right py-2 xl:py-0">฿{fmt(i.quantity * i.price)}</p></div>
+                        <div><span className="xl:hidden block text-xs text-ink-muted mb-1">รวม</span><p className="text-sm font-semibold text-ink xl:text-right py-2 xl:py-0">฿{fmt(i.quantity * i.price)}</p></div>
                         <button type="button" onClick={() => removeItem(i.id)} aria-label="ลบรายการ" className="justify-self-end p-2 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
                           <Trash2 className="w-4 h-4" />
                         </button>

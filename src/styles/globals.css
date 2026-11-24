@@ -83,8 +83,8 @@
   --chart-5: #35235e;
   
   /* Typography Scale */
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
@@ -160,6 +160,16 @@
   --sidebar-ring: #facc15;
 }
 
+@theme {
+  /* the stock breakpoints, moved out in step with the larger root size (15→16px on phones and tablets, 16→18px on a
+     wide screen), so each layout still gets about the room it was drawn for */
+  --breakpoint-sm: 42.5rem;
+  --breakpoint-md: 51.25rem;
+  --breakpoint-lg: 72rem;
+  --breakpoint-xl: 90rem;
+  --breakpoint-2xl: 108rem;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -191,7 +201,7 @@
   --color-gold: #eab308;
   --shadow-card: var(--shadow-card);
   --shadow-sheet: var(--shadow-sheet);
-  --font-sans: 'IBM Plex Sans Thai Looped', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: 'Noto Sans Thai', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -555,26 +565,26 @@
   }
 }
 
+/*
+ * Everything in the app is sized from the root (text, boxes and spacing are in rem), so this one figure makes
+ * the whole of it larger. It is set generously: most of the people using the app are older and read it more
+ * easily at this size. 16px on a phone also keeps Safari from zooming in when a box is tapped.
+ * The breakpoints in the theme above are moved by the same proportion.
+ */
 html {
-  font-size: 15px;
+  font-size: 16px;
 }
 
-/* Media queries for responsive font sizing */
-@media (max-width: 640px) {
+/* a 1366-wide laptop has less room beside the menu than a 1440-wide one, so it steps up by half as much */
+@media (min-width: 72rem) {
   html {
-    font-size: 15px;
+    font-size: 17px;
   }
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 90rem) {
   html {
-    font-size: 16px;
-  }
-}
-
-@media (min-width: 1280px) {
-  html {
-    font-size: 16px;
+    font-size: 18px;
   }
 }
 /* ---------- Clean UI building blocks ---------- */
@@ -600,7 +610,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.9375rem;
     box-shadow: var(--shadow-purple);
     transition: background-color 0.15s ease;
   }
@@ -616,7 +626,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.9375rem;
     transition: background-color 0.15s ease;
   }
   .pb-btn-secondary:hover { background: #E8E6EF; }
@@ -627,7 +637,7 @@ html {
     border-radius: 14px;
     --pb-input-py: 0.7rem;
     padding: var(--pb-input-py) 0.95rem;
-    font-size: 0.95rem;
+    font-size: 1rem;
     font-weight: 500;
     line-height: 1.5;
     color: var(--ink);
@@ -665,7 +675,7 @@ html {
   }
   .pb-label {
     display: block;
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     font-weight: 600;
     color: var(--ink-muted);
     margin-bottom: 0.4rem;

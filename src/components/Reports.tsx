@@ -116,7 +116,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
     <div>
       <div className="p-5 md:p-10 pb-28 md:pb-10">
         <div className="mb-8">
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">รายงาน</h1>
+          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">รายงาน</h1>
           <p className="text-sm text-ink-muted mt-1">สรุปยอดขายและกำไรจากโปรเจ็กต์ที่อนุมัติ/เสร็จสิ้นแล้วทั้งหมด</p>
         </div>
 

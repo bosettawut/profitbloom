@@ -127,7 +127,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
         <div>
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">ใบเสนอราคา</h1>
+          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">ใบเสนอราคา</h1>
           <p className="text-sm text-ink-muted mt-1">จัดการใบเสนอราคาของคุณ</p>
         </div>
         <div className="flex gap-2 w-full lg:w-auto">
@@ -247,7 +247,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-canvas/60 border-b border-line">
-                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} />
+                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="งาน" sortKey="title" sort={sort} onSort={sortBy} />
                   <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
                   <SortHeader label="วันที่สร้าง" sortKey="date" sort={sort} onSort={sortBy} firstDir="desc" />
@@ -260,13 +260,16 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
               <tbody>
                 {paged.rows.map((quote) => (
                   <tr key={quote.id} onClick={() => onOpenQuote(quote.id, true)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
-                    <td className="px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
-                    <td className="px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{quote.projectTitle || '-'}</span></td>
-                    <td className="px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
-                    <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
-                    <td className="px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
-                    <td className="px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}</td>
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
+                    <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
+                      <span className="line-clamp-2">{quote.projectTitle || '-'}</span>
+                      <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{quote.code}</span>
+                    </td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}</td>
+                    <td className="px-2 2xl:px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <select
                         value={quote.status}
                         onChange={(e) => changeStatus(quote, e.target.value as QuoteStatus)}

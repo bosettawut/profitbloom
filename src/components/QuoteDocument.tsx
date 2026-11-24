@@ -55,7 +55,9 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
   const dueDate = creditDays && quote.eventDate ? new Date(Date.parse(quote.eventDate + 'T00:00:00Z') + creditDays * 864e5).toISOString().slice(0, 10) : '';
 
   return (
-    <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13 }}>
+    // The sheet is a fixed size, so nothing in it may follow the size of the app's text: spacing utilities and the
+    // base paragraph size are pinned here to what they are at a 16px root, whatever the screen it is made on.
+    <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13, '--spacing': '4px', '--text-base': '16px' } as React.CSSProperties}>
       {/* Seller + title */}
       <div className="flex justify-between items-start gap-8 pb-6 border-b-2 border-[#673AB7]">
         <div className="flex gap-4 items-start">

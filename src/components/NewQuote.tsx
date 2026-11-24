@@ -356,7 +356,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       {/* Header: what this is and its number on the left; close and save on the right. On a desktop it stays in view while the form scrolls. */}
       <div className="md:sticky md:top-0 z-20 md:-mt-4 md:pt-4 pb-3 mb-2 md:mb-3 bg-[var(--sheet)] flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">
+          <h2 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">
             {savedId ? <>ใบเสนอราคา <span className="text-[#673AB7]">{quoteCode}</span></> : 'สร้างใบเสนอราคาใหม่'}
           </h2>
           <p className="text-sm text-ink-muted">
@@ -579,14 +579,14 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                       placeholder="รายละเอียดสินค้า/บริการ"
                     />
                   </div>
-                  <div className="grid grid-cols-[2.6fr_3fr_3.6fr] gap-2">
+                  <div className="grid grid-cols-[2.5fr_3.3fr_3.4fr] gap-2">
                     <div>
                       <label className="pb-label">จำนวน</label>
                       <input
                         type="number"
                         value={item.quantity}
                         onChange={(e) => updateQuoteItem(item.id, 'quantity', parseFloat(e.target.value) || 0)}
-                        className="w-full px-3 py-2 border border-line rounded-lg text-sm"
+                        className="w-full px-2 py-2 border border-line rounded-lg text-sm"
                       />
                     </div>
                     <div>
@@ -596,7 +596,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                         value={item.unit ?? ''}
                         maxLength={30}
                         onChange={(e) => updateQuoteItem(item.id, 'unit', e.target.value)}
-                        className="w-full px-3 py-2 border border-line rounded-lg text-sm"
+                        className="w-full px-2 py-2 border border-line rounded-lg text-sm"
                         placeholder="เช่น ดอก"
                       />
                     </div>
@@ -607,7 +607,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                         step="0.01"
                         value={item.unitPrice}
                         onChange={(e) => updateQuoteItem(item.id, 'unitPrice', parseFloat(e.target.value) || 0)}
-                        className="w-full px-3 py-2 border border-line rounded-lg text-sm"
+                        className="w-full px-2 py-2 border border-line rounded-lg text-sm"
                       />
                     </div>
                   </div>

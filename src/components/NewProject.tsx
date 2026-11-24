@@ -234,15 +234,16 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-6 md:mb-8">
-        <h2 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
+        <h2 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
         <p className="text-sm text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
       </div>
 
-      <div className="mb-6 md:mb-8 px-1 flex items-center">
+      {/* on a phone the three steps share the width equally, each name under its number, so the bar fits any screen */}
+      <div className="mb-6 md:mb-8 px-1 flex items-start sm:items-center">
         {steps.map((s, index) => (
-          <div key={s.id} className={`flex items-center ${index < steps.length - 1 ? 'flex-1' : ''}`}>
+          <div key={s.id} className={`flex flex-col sm:flex-row items-center gap-1.5 sm:gap-0 flex-1 min-w-0 ${index < steps.length - 1 ? '' : 'sm:flex-none'}`}>
             <div className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-sm font-medium ${step >= s.id ? 'bg-[#673AB7] text-white' : 'bg-[#F1F0F5] text-ink-muted'}`}>{s.id}</div>
-            <span className={`ml-2.5 text-sm font-medium whitespace-nowrap ${step >= s.id ? 'text-ink' : 'text-ink-muted'}`}>{s.title}</span>
+            <span className={`sm:ml-2.5 text-xs sm:text-sm font-medium text-center sm:whitespace-nowrap ${step >= s.id ? 'text-ink' : 'text-ink-muted'}`}>{s.title}</span>
             {index < steps.length - 1 && <div className={`hidden sm:block flex-1 h-px mx-3 ${step > s.id ? 'bg-[#673AB7]' : 'bg-line'}`} />}
           </div>
         ))}

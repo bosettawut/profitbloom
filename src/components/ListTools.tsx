@@ -30,14 +30,16 @@ interface SortHeaderProps {
   align?: 'left' | 'right';
   /** numbers and dates read best biggest/newest first */
   firstDir?: Sort['dir'];
+  /** extra classes for the heading cell, e.g. to show the column on wide screens only */
+  className?: string;
 }
 
 /** A table heading that sorts by its column when clicked. */
-export function SortHeader({ label, sortKey, sort, onSort, align = 'left', firstDir = 'asc' }: SortHeaderProps) {
+export function SortHeader({ label, sortKey, sort, onSort, align = 'left', firstDir = 'asc', className = '' }: SortHeaderProps) {
   const active = sort.key === sortKey;
   const Icon = !active ? ChevronsUpDown : sort.dir === 'asc' ? ArrowUp : ArrowDown;
   return (
-    <th className={`px-3 py-3 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+    <th className={`px-2 2xl:px-3 py-3 font-medium whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
       <button
         type="button"
         onClick={() => onSort(sortKey, firstDir)}
