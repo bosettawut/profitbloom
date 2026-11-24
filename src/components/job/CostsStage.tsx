@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Lightbulb, Plus, Trash2 } from 'lucide-react';
 import type { CostGroup, CostItem, Project } from '../../lib/api';
 import { toJob } from '../../lib/job';
+import { lacksCategory } from './CategoryPrompt';
 import {
   categoryCost,
   categoryLabel,
@@ -56,17 +57,6 @@ export function blankItem(category: CostCategory | '' = '', groupId: number | nu
     actual: null,
     isExtra: false,
   };
-}
-
-/** a planned row that holds something (a name or an amount) but has no category chosen */
-const lacksCategory = (i: CostItem) => !i.isExtra && !i.category && (i.name.trim() !== '' || i.quantity * i.price > 0);
-
-/** What to tell the user when filled-in rows still have no category; '' when every one has. */
-export function categoryWarning(items: CostItem[]): string {
-  const missing = items.filter(lacksCategory);
-  if (missing.length === 0) return '';
-  const first = missing[0].name.trim();
-  return `ยังไม่ได้เลือกหมวดของ${first ? `รายการ "${first}"` : 'รายการที่กรอกราคาไว้'}${missing.length > 1 ? ` และอีก ${missing.length - 1} รายการ` : ''}`;
 }
 
 /** A number field for derived values (price ↔ margin): keeps what the user types and commits on blur / Enter. */
@@ -238,7 +228,7 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
                       {/* on a phone the category sits under the three number boxes, beside the total */}
                       <div className="order-1 sm:order-none">
                         <span className="xl:hidden block text-[11px] text-ink-muted mb-1">หมวด</span>
-                        {/* nothing is chosen for the user; a row that holds something shows this in red until a category is picked (a reminder: it does not stop saving) */}
+                        {/* nothing is chosen for the user; a row that holds something shows this in red until a category is picked (a reminder: a dialog asks about it, but it does not stop saving) */}
                         <select className={`${input} ${i.category ? '' : lacksCategory(i) ? '!border-rose-400 !text-rose-600' : '!text-[#8C879D]'}`} aria-label="หมวด" aria-invalid={lacksCategory(i) || undefined} value={i.category} onChange={(e) => setItem(i.id, { category: e.target.value as CostCategory })}>
                           <option value="" disabled>เลือกหมวด</option>
                           {COST_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}

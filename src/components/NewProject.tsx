@@ -4,7 +4,8 @@ import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
 import { emailError, phoneError } from '../../shared/contact.js';
-import { blankGroup, blankItem, categoryWarning, CostsStage, reserveTempIds } from './job/CostsStage';
+import { useCategoryPrompt } from './job/CategoryPrompt';
+import { blankGroup, blankItem, CostsStage, reserveTempIds } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt } from './CustomerContactPrompt';
@@ -175,18 +176,20 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   };
 
   const contactPrompt = useCustomerContactPrompt();
+  const categoryPrompt = useCategoryPrompt();
 
   const missing = () => {
     if (!draft.title.trim()) return 'กรุณากรอกชื่องาน';
     if (!draft.eventDate) return 'กรุณาเลือกวันที่จัดงาน';
     return phoneError(draft.phone) || emailError(draft.email);
   };
-  const next = () => {
+  const next = async () => {
     const m = step === 1 ? missing() : '';
     if (m) return flash(m);
-    // a filled-in cost row with no category is pointed out, but does not hold the form back
-    const noCategory = step === 2 ? categoryWarning(draft.costItems) : '';
-    if (noCategory) flash(noCategory);
+    // filled-in cost rows with no category: a dialog asks whether to go back and choose, or to carry on
+    if (step === 2 && !(await categoryPrompt.ask(draft.costItems))) return;
+    // the browser's back button was used while the dialog was open: this is no longer the step that was left
+    if (stepOfEntry() !== step) return;
     window.history.pushState({ wizardStep: step + 1, wizardDraft: initial.id }, '');
     setStep(step + 1);
     window.scrollTo(0, 0);
@@ -293,6 +296,7 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
       </div>
 
       {contactPrompt.node}
+      {categoryPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );
