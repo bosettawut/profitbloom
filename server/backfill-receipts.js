@@ -5,7 +5,8 @@
 // Which quotes: approved, with no receipt in force, and either written on their own or the quote their job's page
 // opens. An older copy of a job's quote is left alone: a receipt for it would count the job's money twice.
 //
-// The day paid: the event date on the quote, or the day the quote was last saved when it has none. How: transfer.
+// The day paid: the event date on the quote, or the day the quote was last saved when it has none; but never later
+// than today (in Thailand), so an event still to come is paid today. How: transfer.
 //
 //   node --env-file=.env server/backfill-receipts.js            lists what it would issue, writes nothing
 //   node --env-file=.env server/backfill-receipts.js --apply    issues them
@@ -22,6 +23,7 @@ const host = (() => {
     return '?';
   }
 })();
+const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 const money = (n) => n.toLocaleString('th-TH', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 });
 
 await ready();
@@ -45,7 +47,8 @@ for (const q of quotes) {
     skipped.push(`${q.code} ยังไม่มียอดเงิน`);
     continue;
   }
-  const paidDate = q.event_date || q.updated_at.slice(0, 10);
+  const day = q.event_date || q.updated_at.slice(0, 10);
+  const paidDate = day > today ? today : day;
   plan.push({ q, job, totals, paidDate });
 }
 
