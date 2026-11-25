@@ -332,6 +332,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             fromProject={view.fromProjectId ? selectedProject : null}
             startInPreview={!!view.preview}
             onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
+            onOpenProject={(p) => handleProjectSelect(p)}
             // the job held here is the copy from before the quote was saved: read it again, so going back to it shows its quote
             onProjectChanged={(id) => { api.project(id).then((p) => setSelectedProject((held) => (held?.id === id ? p : held))).catch(() => {}); }}
             onDone={() => navigate('quotes-all')}
