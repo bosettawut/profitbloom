@@ -608,7 +608,8 @@ async function serializeProject(p) {
   const quote = await jobQuote(p);
   return {
     /** the quote the job's page opens (null until there is one): see jobQuote */
-    quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status } : null,
+    // `follows`: the quote is tied to the job (its lines change when the job is saved), not one the job was made from
+    quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status, follows: !!quote.follows_project } : null,
     id: String(p.id),
     code: p.code,
     title: p.title,
@@ -817,6 +818,8 @@ app.put('/api/projects/:id', route(async (req) => {
       const after = await jobQuoteLines(existing.id);
       if (before.price !== after.price || !sameLines(before.lines, after.lines)) quoteUpdated = await syncFollowingQuote(existing.id, req.body.confirmQuoteChange === true);
     }
+    // the customer turned the quote down and the job's prices have now been changed: it is a new offer, not yet sent
+    if (quoteUpdated && existing.status === 'rejected' && nextStatus === 'rejected') await reviseRejected(req.user.id, existing.id);
     if (d.status && d.status !== existing.status) {
       // the job's quote takes the status that goes with the job's (a finished job leaves it as it is)
       const quoteStatus = PROJECT_TO_QUOTE_STATUS[d.status];
@@ -1053,6 +1056,19 @@ async function jobOfQuote(userId, quoteId, projectId) {
   return quote && Number(quote.id) === Number(quoteId) ? p : null;
 }
 
+/**
+ * A job the customer turned down whose quote has just been changed to new prices: the job goes back to "quote made"
+ * and its quote to the draft, ready to be sent again (sending it moves both on as usual).
+ */
+async function reviseRejected(userId, projectId) {
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+  const quote = p && p.status === 'rejected' ? await jobQuote(p) : null;
+  if (!quote) return;
+  await db.prepare(`UPDATE projects SET status = 'quote_created', updated_at = ${NOW} WHERE id = ?`).run(p.id);
+  await db.prepare(`UPDATE quotes SET status = 'draft', updated_at = ${NOW} WHERE id = ?`).run(quote.id);
+  await logActivity(userId, 'quote_draft', `ใบเสนอราคา ${quote.code}`, 'แก้ราคาหลังลูกค้าปฏิเสธ รอส่งใหม่');
+}
+
 /** puts the job of a quote in the status that goes with the quote's; a finished job is left as it is */
 async function syncProjectStatus(userId, quoteId, projectId, quoteStatus) {
   const target = QUOTE_TO_PROJECT_STATUS[quoteStatus];
@@ -1188,7 +1204,9 @@ app.put('/api/quotes/:id', route(async (req) => {
 app.post('/api/quotes/:id/sync', route(async (req) => {
   const quote = await getQuote(req.user.id, req.params.id);
   if (!quote.follows_project || !quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้ไม่ได้ผูกกับโปรเจ็กต์');
-  await transaction(() => syncFollowingQuote(quote.project_id, req.body?.confirmQuoteChange === true));
+  await transaction(async () => {
+    if (await syncFollowingQuote(quote.project_id, req.body?.confirmQuoteChange === true) && quote.status === 'rejected') await reviseRejected(req.user.id, quote.project_id);
+  });
   return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
 }));
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ChevronDown, FileText, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, FileText, Save, Trash2, X } from 'lucide-react';
 import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
@@ -60,6 +60,8 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const h = useMemo(() => health(job, rules), [job, rules]);
   const lessons = useMemo(() => learnings(history.filter((p) => p.reviewApplied && p.id !== draft.id).map(toJob)), [history, draft.id]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(project);
+  /** what the save buttons say: a quote tied to the job changes with it, so the button says so */
+  const saveLabel = project.quote?.follows ? 'บันทึกและอัปเดตใบเสนอราคา' : 'บันทึกการเปลี่ยนแปลง';
 
   const patch = (p: Partial<Project>) => setDraft((d) => ({ ...d, ...p }));
   const flash = (t: string) => {
@@ -96,7 +98,13 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
         setSaving(true);
         saved = await send(true);
       }
-      flash(saved.quoteUpdated && saved.quote ? `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามแล้ว` : 'บันทึกแล้ว');
+      flash(
+        saved.quoteUpdated && saved.quote
+          ? project.status === 'rejected' && saved.status === 'quote_created'
+            ? `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามราคาใหม่ สถานะกลับเป็น "สร้างใบเสนอราคาแล้ว" รอส่งใหม่`
+            : `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามแล้ว`
+          : 'บันทึกแล้ว',
+      );
       return true;
     } catch (err) {
       flash((err as Error).message);
@@ -169,12 +177,23 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             {PROJECT_STATUS_OPTIONS.find((o) => o.id === draft.status)?.name ?? draft.statusText}
             <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />
           </button>
+          {/* while something is unsaved, saving it is the main thing to do here, beside the quote */}
+          {dirty && (
+            <>
+              <button onClick={() => setDraft(project)} disabled={saving} className="pb-btn-secondary !py-2 disabled:opacity-60">
+                <X className="w-4 h-4" /> ยกเลิกการแก้ไข
+              </button>
+              <button onClick={() => save()} disabled={saving} className="pb-btn-primary !py-2 disabled:opacity-60">
+                <Save className="w-4 h-4" /> {saving ? 'กำลังบันทึก...' : saveLabel}
+              </button>
+            </>
+          )}
           {project.quote ? (
-            <button onClick={openQuote} disabled={saving} title={`${project.quote.code} · ${project.quote.statusText}`} className="pb-btn-primary !py-2 disabled:opacity-60">
+            <button onClick={openQuote} disabled={saving} title={`${project.quote.code} · ${project.quote.statusText}`} className={`${dirty ? 'pb-btn-secondary' : 'pb-btn-primary'} !py-2 disabled:opacity-60`}>
               <FileText className="w-4 h-4" /> เปิดใบเสนอราคา
             </button>
           ) : (
-            <button onClick={startQuote} className="pb-btn-primary !py-2">
+            <button onClick={startQuote} className={`${dirty ? 'pb-btn-secondary' : 'pb-btn-primary'} !py-2`}>
               <FileText className="w-4 h-4" /> สร้างใบเสนอราคา
             </button>
           )}
@@ -256,11 +275,17 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
       {/* Unsaved changes bar */}
       {dirty && (
-        <div className="fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 md:left-[calc(50%+var(--content-shift,8rem))] z-40 flex items-center gap-3 bg-ink text-white rounded-full pl-5 pr-2 py-2 shadow-soft-xl">
-          <span className="text-sm whitespace-nowrap">มีการแก้ไขที่ยังไม่บันทึก</span>
-          <button onClick={() => setDraft(project)} className="px-3 py-1.5 text-sm text-white/70 hover:text-white">ยกเลิก</button>
-          <button onClick={() => save()} disabled={saving} className="px-4 py-1.5 rounded-full bg-white text-ink text-sm font-semibold disabled:opacity-60">
-            {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+        // on a phone the bar spans the screen and the save button takes the room left; on wider screens (sm and up) it sits centred under the page
+        <div role="status" aria-label="มีการแก้ไขที่ยังไม่บันทึก" className="fixed bottom-24 md:bottom-6 left-3 right-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:left-[calc(50%+var(--content-shift,8rem))] z-40 flex items-center gap-1 sm:gap-2 md:gap-3 bg-ink text-white rounded-full pl-2 sm:pl-4 md:pl-6 pr-2 py-2 shadow-soft-xl">
+          <span className="hidden sm:inline text-base font-medium whitespace-nowrap">มีการแก้ไขที่ยังไม่บันทึก</span>
+          <button onClick={() => setDraft(project)} disabled={saving} aria-label="ยกเลิกการแก้ไข" className="shrink-0 px-3 py-2 text-sm text-white/75 hover:text-white whitespace-nowrap disabled:opacity-60">
+            <span className="sm:hidden">ยกเลิก</span>
+            <span className="hidden sm:inline">ยกเลิกการแก้ไข</span>
+          </button>
+          <button onClick={() => save()} disabled={saving} className="flex-1 sm:flex-none min-w-0 inline-flex items-center justify-center gap-2 px-3 min-[360px]:px-4 sm:px-5 py-2.5 rounded-full bg-[#673AB7] hover:bg-[#5b32a3] text-white text-sm sm:text-base font-semibold leading-tight text-center sm:whitespace-nowrap shadow-[0_6px_16px_-6px_rgba(103,58,183,0.8)] disabled:opacity-60">
+            {/* below 360px the icon makes way, so the label stays on one line */}
+            <Save className="hidden min-[360px]:block w-4 h-4 shrink-0" />
+            {saving ? 'กำลังบันทึก...' : saveLabel}
           </button>
         </div>
       )}
