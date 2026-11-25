@@ -141,6 +141,11 @@ export interface Project {
   profitMargin: number;
   /** set when the job was made from an accepted quote: its price is fixed at this amount */
   agreedPrice: number | null;
+  /**
+   * The quote tied to this job (null until one is made). Its lines and price are the job's: they are changed here,
+   * in the job, and the quote follows when the job is saved. A job made from a quote has none.
+   */
+  quote?: { id: string; code: string; status: QuoteStatus; statusText: string } | null;
   depositPct: number;
   setupDays: number;
   eventDays: number;
@@ -196,6 +201,10 @@ export interface Quote {
   rounding: Rounding;
   /** the job's price when the quote was made; the lines must come to this after the discount */
   lockedPrice: number | null;
+  /** tied to its job: its lines and price are the job's, are changed there, and follow the job when it is saved */
+  followsProject?: boolean;
+  /** on a quote read by itself: the job it follows, the job's price now, and whether the quote still holds what the job gives it */
+  job?: { id: string; code: string; title: string; price: number | null; inStep: boolean };
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
@@ -274,16 +283,35 @@ interface CustomerUpdate {
 }
 export type ProjectInput = Partial<Omit<Project, 'costItems'>> & CustomerUpdate & {
   costItems?: Array<Pick<CostItem, 'name' | 'quantity' | 'price'> & Partial<Pick<CostItem, 'category' | 'unit' | 'groupId' | 'actual' | 'isExtra'>>>;
+  /** the job's quote is already sent or approved and this save would change it: the user has said to go ahead */
+  confirmQuoteChange?: boolean;
 };
+/** a saved job, and whether the save changed the quote tied to it */
+export type SavedProject = Project & { quoteUpdated?: boolean };
+/** what a refused save says about the quote it would have changed (status 409, `code: 'quote_change'`) */
+export interface QuoteChange {
+  id: string;
+  code: string;
+  status: QuoteStatus;
+  statusText: string;
+  /** the quote's price before VAT as it stands, and what the save would make it */
+  price: number;
+  newPrice: number;
+}
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
   items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { unit?: string; roundUp?: boolean }>;
 };
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  /** `data`: whatever else the server sent with the refusal, for the caller to act on */
+  constructor(public status: number, message: string, public data: Record<string, unknown> = {}) {
     super(message);
   }
 }
+
+/** the quote a refused job save would have changed, when that is why it was refused */
+export const quoteChangeOf = (err: unknown): QuoteChange | null =>
+  err instanceof ApiError && err.status === 409 && err.data.code === 'quote_change' ? (err.data.quote as QuoteChange) : null;
 
 /** Fired when any request comes back 401 so the app can drop back to the login screen. */
 export const UNAUTHORIZED_EVENT = 'pb:unauthorized';
@@ -298,7 +326,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401 && !url.startsWith('/auth/')) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    throw new ApiError(res.status, data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่');
+    throw new ApiError(res.status, data.error || 'เกิดข้อผิดพลาด กรุณาลองใหม่', data);
   }
   return data as T;
 }
@@ -322,7 +350,7 @@ export const api = {
   projects: () => request<Project[]>('GET', '/projects'),
   project: (id: string) => request<Project>('GET', `/projects/${id}`),
   createProject: (body: ProjectInput) => request<Project>('POST', '/projects', body),
-  updateProject: (id: string, body: ProjectInput) => request<Project>('PUT', `/projects/${id}`, body),
+  updateProject: (id: string, body: ProjectInput) => request<SavedProject>('PUT', `/projects/${id}`, body),
   deleteProject: (id: string) => request<{ ok: true }>('DELETE', `/projects/${id}`),
 
   customers: () => request<CustomerSummary[]>('GET', '/customers'),
@@ -345,6 +373,8 @@ export const api = {
   createProjectFromQuote: (quoteId: string) => request<Project>('POST', `/quotes/${quoteId}/project`),
   createQuote: (body: QuoteInput) => request<Quote>('POST', '/quotes', body),
   updateQuote: (id: string, body: QuoteInput) => request<Quote>('PUT', `/quotes/${id}`, body),
+  /** brings a quote tied to a job into line with the job as it stands (for one made before the two were tied) */
+  syncQuote: (id: string, confirmQuoteChange = false) => request<Quote>('POST', `/quotes/${id}/sync`, { confirmQuoteChange }),
   deleteQuote: (id: string) => request<{ ok: true }>('DELETE', `/quotes/${id}`),
 };
 

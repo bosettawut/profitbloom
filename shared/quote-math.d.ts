@@ -65,4 +65,11 @@ export function headingDiscount(group: { discountType?: 'percent' | 'baht'; disc
 export function projectPrice(costItems: PricedItem[], markupPct: number, groups?: PricedGroup[] | null): number;
 /** whole-baht amounts for `prices` that add up to `total`; null when `total` is not their sum to within rounding */
 export function wholeBahtShares(prices: number[], total: number): number[] | null;
+/** the lines of the quote that follows a job (one per heading, at the heading's selling price) and the price they come to; `price` is null for a job with no price yet */
+export function quoteLinesFromJob(
+  costItems: Array<PricedItem & { name?: string; unit?: string }>,
+  groups?: PricedGroup[] | null,
+  markupPct?: number,
+  agreedPrice?: number | null,
+): { price: number | null; lines: Array<{ description: string; quantity: number; unit: string; unitPrice: number; roundUp: boolean }> };
 export function fitToPrice<T extends { quantity: number; unitPrice: number; roundUp?: boolean }>(items: T[], target: number, discountRate?: number, rounding?: Rounding): T[] | null;

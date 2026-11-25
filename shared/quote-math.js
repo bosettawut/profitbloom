@@ -132,6 +132,36 @@ export function projectPrice(costItems, markupPct, groups) {
 }
 
 /**
+ * The lines of the quote that follows a job, and the price they come to.
+ * One line per heading, named after it and priced at what the heading sells for (its costs with its markup, less its
+ * discount), so the customer sees the headings and not the costs inside them. A heading with nothing costed under it
+ * is left out, unless that is true of every heading. The headings' prices are rounded to whole baht together, so they
+ * add up to the job's price and a heading that was already a whole number of baht stays as it is; should that not be
+ * possible, one line takes up the difference. `price` is null for a job with no price yet.
+ */
+export function quoteLinesFromJob(costItems, groups, markupPct = 0, agreedPrice = null) {
+  const planned = costItems.filter((i) => !i.isExtra);
+  const worked = jobPricing(costItems, groups, markupPct);
+  const whole = agreedPrice ?? wholeBaht(worked.price);
+  const price = whole > 0 ? whole : null;
+  const used = worked.headings.map((h, n) => ({ ...h, place: n + 1 })).filter((h) => planned.some((i) => i.groupId === h.id));
+  const costed = used.filter((h) => h.cost > 0);
+  const chosen = costed.length ? costed : used;
+  const fromHeadings = chosen.map((h) => ({ description: (h.name || '').trim() || `หัวข้อที่ ${h.place}`, quantity: 1, unit: '', unitPrice: wholeBaht(h.price) }));
+  // items outside every heading (none on a job saved by this app) still come one by one
+  const inHeading = new Set(worked.headings.map((h) => h.id));
+  const loose = planned
+    .filter((i) => !inHeading.has(i.groupId))
+    .map((item) => ({ description: item.name ?? '', quantity: item.quantity, unit: item.unit ?? '', unitPrice: wholeBaht(item.price * (1 + markupOf(item, groups, markupPct, costItems) / 100)) }));
+  const shares = price !== null && loose.length === 0 ? wholeBahtShares(chosen.map((h) => h.price), price) : null;
+  if (shares) fromHeadings.forEach((line, n) => (line.unitPrice = shares[n]));
+  // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
+  const roundUp = price === null || Number.isInteger(price);
+  const lines = [...fromHeadings, ...loose].map((line) => ({ ...line, roundUp }));
+  return { price, lines: (price !== null && fitToPrice(lines, price, 0, 'line')) || lines };
+}
+
+/**
  * Changes one line so the quote comes to `target` after the discount. Prefers a line whose unit price
  * stays a clean number (largest first); otherwise the largest line takes the difference.
  * Returns the new items, or null when no subtotal gives exactly `target` (an awkward discount %).

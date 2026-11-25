@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Save, Eye, Download, Send, X, Lock, FolderPlus } from 'lucide-react';
-import { api, baht, Project, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
+import { ArrowLeft, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderPlus } from 'lucide-react';
+import { api, baht, quoteChangeOf, Project, Quote, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
-import { fitToPrice, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht, wholeBahtShares } from '../../shared/quote-math.js';
+import { useQuoteChangePrompt } from './job/QuoteChangePrompt';
+import { fitToPrice, lineAmount, quoteLinesFromJob, quoteTotals, toSatang } from '../../shared/quote-math.js';
 
 interface QuoteItem {
   id: number;
@@ -27,12 +28,14 @@ interface NewQuoteProps {
   startInPreview: boolean;
   /** opens a job on its cost step */
   onOpenProjectCosts: (project: Project) => void;
+  /** a save here changed something about the job (its status, or which quote is tied to it) */
+  onProjectChanged?: (projectId: string) => void;
   onDone: () => void;
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
-export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onDone }: NewQuoteProps) {
+export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onProjectChanged, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
@@ -58,42 +61,27 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     internalNote: '',
   });
 
-  // a quote made from a job is held to the job's price, so the profit worked out for the job stays true
-  const [lockedPrice, setLockedPrice] = useState<number | null>(() => {
-    const price = fromProject ? fromProject.agreedPrice ?? projectPrice(fromProject.costItems, fromProject.profitMargin, fromProject.costGroups) : 0;
-    return price > 0 ? price : null;
-  });
+  // A quote made for a job is tied to it: what it lists and what it comes to are the job's, are changed in the job,
+  // and follow it when the job is saved; here they are only shown. A job that was itself made from a quote is the
+  // other way round: its price is settled, and a quote for it is only held to that price (`lockedPrice`).
+  const [follows, setFollows] = useState(!!fromProject && fromProject.agreedPrice == null);
+  /** the job a saved quote follows, and whether the quote still holds what the job gives it */
+  const [job, setJob] = useState<Quote['job'] | null>(null);
+  /** something on the form was typed or chosen since it was opened or last saved */
+  const touched = useRef(false);
+
+  // One line per heading of the job, named after it and priced at what the heading sells for in whole baht, adding up
+  // to the job's price: the customer sees the headings and not the costs inside them (see quoteLinesFromJob).
+  const [fromJob] = useState(() => (fromProject ? quoteLinesFromJob(fromProject.costItems, fromProject.costGroups, fromProject.profitMargin, fromProject.agreedPrice) : null));
+  const [lockedPrice, setLockedPrice] = useState<number | null>(fromJob?.price ?? null);
   // each line chooses whether its amount rounds up to a whole baht ('line'); a quote made before that
   // choice existed opens on the old rule ('baht') until the user switches it
   const [rounding, setRounding] = useState<Rounding>('line');
-  // lines round up unless the job's price itself has satang, which whole-baht lines could never add up to
-  const startRoundUp = lockedPrice === null || Number.isInteger(lockedPrice);
-
-  // It lists the job heading by heading: one line per heading, named after it and priced at what the heading sells for
-  // (its costs with its margin, less its discount) in whole baht, so the customer sees the headings and not the items
-  // inside them. The headings' prices are rounded together so they add up to the job's price and a heading that was a
-  // whole number of baht stays as it is; should that not be possible, one line takes up the difference.
   const [quoteItems, setQuoteItems] = useState<QuoteItem[]>(() => {
-    const blank = [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: true }];
-    if (!fromProject) return blank;
-    const planned = fromProject.costItems.filter((i) => !i.isExtra);
-    const worked = jobPricing(fromProject.costItems, fromProject.costGroups, fromProject.profitMargin);
-    const used = worked.headings.map((h, n) => ({ ...h, place: n + 1 })).filter((h) => planned.some((i) => i.groupId === h.id));
-    // a heading with nothing costed under it is left out, unless that is true of every heading (then they all come, to be priced by hand)
-    const costed = used.filter((h) => h.cost > 0);
-    const chosen = costed.length ? costed : used;
-    const fromHeadings = chosen.map((h) => ({ description: h.name.trim() || `หัวข้อที่ ${h.place}`, quantity: 1, unit: '', unitPrice: wholeBaht(h.price) }));
-    // items outside every heading (none on a job saved by this app) still come one by one
-    const inHeading = new Set(worked.headings.map((h) => h.id));
-    const loose = planned
-      .filter((i) => !inHeading.has(i.groupId as number))
-      .map((item) => ({ description: item.name, quantity: item.quantity, unit: item.unit ?? '', unitPrice: wholeBaht(item.price * (1 + markupOf(item, fromProject.costGroups, fromProject.profitMargin, fromProject.costItems) / 100)) }));
-    const shares = lockedPrice !== null && loose.length === 0 ? wholeBahtShares(chosen.map((h) => h.price), lockedPrice) : null;
-    if (shares) fromHeadings.forEach((line, n) => (line.unitPrice = shares[n]));
-    const lines = [...fromHeadings, ...loose].map((line, idx) => ({ ...line, id: idx + 1, total: 0, roundUp: startRoundUp }));
-    if (lines.length === 0) return blank;
-    const fitted = (lockedPrice !== null && fitToPrice(lines, lockedPrice, 0, rounding)) || lines;
-    return fitted.map((i) => ({ ...i, total: lineAmount(i, rounding) }));
+    const lines = (fromJob?.lines ?? []).map((line, idx) => ({ ...line, id: idx + 1, total: lineAmount(line, 'line') }));
+    // a job with no costs yet gives its quote no lines; any other quote starts with one empty line to fill in
+    if (lines.length || follows) return lines;
+    return [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: true }];
   });
 
   const [taxRate, setTaxRate] = useState(7);
@@ -103,15 +91,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const [whtRate, setWhtRate] = useState(0);
   const [notification, setNotification] = useState('');
   const contactPrompt = useCustomerContactPrompt();
+  const quoteChangePrompt = useQuoteChangePrompt();
   /** the contact details this quote started with (from its project, or as last saved): unchanged, they are not asked about */
   const startContact = useRef<TypedContact | undefined>(
     fromProject ? { customerId: fromProject.customerId, name: fromProject.client, phone: fromProject.phone, email: fromProject.email } : undefined,
   );
 
-  useEffect(() => {
-    if (!quoteId) return;
-    api.quote(quoteId)
+  /** fills the form from a saved quote */
+  const load = (id: string) =>
+    api.quote(id)
       .then(q => {
+        setSavedId(q.id);
         setQuoteCode(q.code);
         setStatus(q.status);
         setProjectId(q.projectId);
@@ -133,18 +123,42 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           notes: q.notes,
           internalNote: q.internalNote ?? '',
         });
-        setQuoteItems(q.items.length ? q.items : [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
+        setQuoteItems(q.items.length || q.followsProject ? q.items : [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
+        setFollows(!!q.followsProject);
+        setJob(q.job ?? null);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
         setWhtRate(q.whtRate);
         setVatMode(q.vatMode);
         setRounding(q.rounding === 'baht' ? 'baht' : 'line');
         setLockedPrice(q.lockedPrice);
-        if (startInPreview) setShowPreview(true);
       })
       .catch(err => showNotification(err.message))
       .finally(() => setLoading(false));
+
+  useEffect(() => {
+    if (!quoteId) return;
+    load(quoteId).then(() => {
+      if (startInPreview) setShowPreview(true);
+    });
   }, [quoteId, startInPreview]);
+
+  useEffect(() => {
+    // A job has one quote tied to it. When this form is opened for a job that already has its quote (reached again
+    // with the browser's back button, say), that quote is what opens, not the start of a second one.
+    if (quoteId || !fromProject || fromProject.agreedPrice != null) return;
+    let stale = false;
+    api.project(fromProject.id)
+      .then((p) => {
+        if (stale || !p.quote) return;
+        setLoading(true);
+        return load(p.quote.id);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, []);
 
   useEffect(() => {
     // a quote made from a job: the job holds no address or tax id, so they come from the customer's record and last quote
@@ -170,7 +184,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, withholding, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
   const money = (n: number) => baht(n, showSatang ? 2 : 0);
   /** how far the lines are from the locked job price (0 = they match) */
-  const lockGap = lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
+  const lockGap = follows || lockedPrice === null ? 0 : toSatang(afterDiscount - lockedPrice);
 
   const fitToLock = () => {
     if (lockedPrice === null) return;
@@ -245,14 +259,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         customerId,
         updateCustomer,
         taxRate,
-        discountRate,
         whtRate,
         vatMode,
-        rounding,
         status: nextStatus === 'expired' ? undefined : nextStatus,
-        items: quoteItems
-          .filter(item => item.description.trim() || item.total > 0)
-          .map(({ description, quantity, unit, unitPrice, roundUp }) => ({ description, quantity, unit: unit ?? '', unitPrice, roundUp: !!roundUp })),
+        // the lines, the discount and the rounding of a quote tied to a job are the job's: the server fills them in
+        ...(follows ? {} : {
+          discountRate,
+          rounding,
+          items: quoteItems
+            .filter(item => item.description.trim() || item.total > 0)
+            .map(({ description, quantity, unit, unitPrice, roundUp }) => ({ description, quantity, unit: unit ?? '', unitPrice, roundUp: !!roundUp })),
+        }),
       };
       const saved = savedId ? await api.updateQuote(savedId, body) : await api.createQuote(body);
       setSavedId(saved.id);
@@ -260,6 +277,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       setQuoteCode(saved.code);
       setStatus(saved.status);
       setLockedPrice(saved.lockedPrice);
+      setFollows(!!saved.followsProject);
+      setJob(saved.job ?? null);
+      if (saved.followsProject) setQuoteItems(saved.items);
+      touched.current = false;
+      if (saved.projectId) onProjectChanged?.(saved.projectId);
       return saved;
     } catch (err) {
       showNotification((err as Error).message);
@@ -307,6 +329,47 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       onOpenProjectCosts(await api.createProjectFromQuote(saved.id));
     } catch (err) {
       showNotification((err as Error).message);
+    }
+  };
+
+  /** the job is where a tied quote's lines and prices are changed: opens it on its costs */
+  const backToProject = async () => {
+    if (touched.current && !window.confirm('มีการแก้ไขที่ยังไม่บันทึก ออกจากหน้านี้เลยหรือไม่?')) return;
+    try {
+      // read again, not the copy this form was opened with: saving the quote has changed the job (its quote, its status)
+      const target = projectId ? await api.project(projectId) : fromProject;
+      if (target) onOpenProjectCosts(target);
+    } catch (err) {
+      showNotification((err as Error).message);
+    }
+  };
+  const jobCode = job?.code ?? (follows ? fromProject?.code : undefined);
+
+  /**
+   * A quote from before jobs and quotes were tied can still hold its old lines. This brings it into line with its job,
+   * asking first when the customer already has it. Only the lines and the price change; what else is on the form stays.
+   */
+  const syncWithJob = async () => {
+    if (!savedId) return;
+    const apply = (q: Quote) => {
+      setQuoteItems(q.items);
+      setDiscountRate(q.discountRate);
+      setRounding(q.rounding === 'baht' ? 'baht' : 'line');
+      setLockedPrice(q.lockedPrice);
+      setJob(q.job ?? null);
+      showNotification('อัปเดตใบเสนอราคาตามโปรเจ็กต์แล้ว');
+    };
+    try {
+      apply(await api.syncQuote(savedId));
+    } catch (err) {
+      const change = quoteChangeOf(err);
+      if (!change) return showNotification((err as Error).message);
+      if (!(await quoteChangePrompt.ask(change, 'quote'))) return;
+      try {
+        apply(await api.syncQuote(savedId, true));
+      } catch (again) {
+        showNotification((again as Error).message);
+      }
     }
   };
 
@@ -360,7 +423,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             {savedId ? <>ใบเสนอราคา <span className="text-[#673AB7]">{quoteCode}</span></> : 'สร้างใบเสนอราคาใหม่'}
           </h2>
           <p className="text-sm text-ink-muted">
-            {fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
+            {follows
+              ? `ผูกกับโปรเจ็กต์${jobCode ? ` ${jobCode}` : ''} · หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว`
+              : fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -375,7 +440,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </div>
       </div>
 
-      <div className="pb-card p-4 md:p-6 xl:p-8">
+      <div className="pb-card p-4 md:p-6 xl:p-8" onChange={() => { touched.current = true; }}>
         {/* the customer on the left; the total, what can be done with the quote and its dates on the right */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-6 lg:gap-12">
           <div role="group" aria-label="ข้อมูลลูกค้า" className="space-y-4">
@@ -564,6 +629,85 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
         {/* Quote items */}
         <div role="group" aria-label="รายการใบเสนอราคา" className="mt-6">
+          {follows ? (
+            <>
+              <div role="note" aria-label="รายการมาจากโปรเจ็กต์" className="rounded-2xl bg-[#F7F6FA] px-4 py-3 mb-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="flex items-center gap-2 text-sm font-medium text-ink">
+                    <Link2 className="w-4 h-4 text-[#673AB7] shrink-0" />
+                    รายการและราคามาจากโปรเจ็กต์{jobCode ? ` ${jobCode}` : ''}
+                  </p>
+                  <p className="text-xs text-ink-muted mt-1">แก้ชื่อรายการ ราคา หรือส่วนลดได้ที่โปรเจ็กต์ บันทึกโปรเจ็กต์แล้วใบนี้จะเปลี่ยนตาม</p>
+                  {job && !job.inStep && (
+                    <p className="text-xs text-rose-600 mt-1">ใบนี้สร้างไว้ก่อนผูกกับโปรเจ็กต์ รายการจึงยังไม่ตรงกัน (ราคาโปรเจ็กต์ตอนนี้ {money(job.price ?? 0)}) และจะเปลี่ยนตามเมื่อแก้ราคาในโปรเจ็กต์ หรือกด "อัปเดตใบนี้ตามโปรเจ็กต์"</p>
+                  )}
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                  {job && !job.inStep && (
+                    <button type="button" onClick={syncWithJob} className="pb-btn-secondary !py-2 !bg-white">อัปเดตใบนี้ตามโปรเจ็กต์</button>
+                  )}
+                  <button type="button" onClick={backToProject} className="pb-btn-secondary !py-2 !bg-white">
+                    <ArrowLeft className="w-4 h-4" />
+                    กลับไปแก้โปรเจ็กต์
+                  </button>
+                </div>
+              </div>
+              {quoteItems.length === 0 ? (
+                <p className="rounded-2xl border border-dashed border-line px-4 py-6 text-sm text-ink-muted text-center">โปรเจ็กต์นี้ยังไม่ได้ใส่ต้นทุน ใบนี้จึงยังไม่มีรายการ</p>
+              ) : (
+                <>
+                  {/* Cards: phones, tablets and small laptops */}
+                  <div className="block xl:hidden space-y-3">
+                    {quoteItems.map((item, index) => (
+                      <div key={item.id} className="bg-gray-50 p-4 rounded-lg border flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-ink break-words">{index + 1}. {item.description}</p>
+                          <p className="text-xs text-ink-muted mt-1">{item.quantity}{item.unit ? ` ${item.unit}` : ''} × {money(item.unitPrice)}</p>
+                        </div>
+                        <span className="font-medium text-ink whitespace-nowrap">{money(item.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Table: wide screens */}
+                  <div className="hidden xl:block overflow-x-auto rounded-2xl border border-line">
+                    <table className="w-full min-w-[44rem] table-fixed">
+                      <colgroup>
+                        <col className="w-14" />
+                        <col />
+                        <col className="w-20" />
+                        <col className="w-24" />
+                        <col className="w-32" />
+                        <col className="w-36" />
+                      </colgroup>
+                      <thead>
+                        <tr className="bg-[#673AB7] text-white text-sm">
+                          <th className="text-center px-1 py-3 font-medium">ลำดับ</th>
+                          <th className="text-left px-3 py-3 font-medium">รายละเอียด</th>
+                          <th className="text-right px-3 py-3 font-medium">จำนวน</th>
+                          <th className="text-left px-3 py-3 font-medium">หน่วย</th>
+                          <th className="text-right px-3 py-3 font-medium whitespace-nowrap">ราคา/หน่วย</th>
+                          <th className="text-right px-3 py-3 font-medium">รวม</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {quoteItems.map((item, index) => (
+                          <tr key={item.id} className="border-t border-line">
+                            <td className="px-1 py-4 text-center text-ink-muted">{index + 1}</td>
+                            <td className="px-3 py-4 text-ink font-medium break-words">{item.description}</td>
+                            <td className="px-3 py-4 text-right text-ink">{item.quantity}</td>
+                            <td className="px-3 py-4 text-ink">{item.unit}</td>
+                            <td className="px-3 py-4 text-right text-ink whitespace-nowrap">{money(item.unitPrice)}</td>
+                            <td className="px-3 py-4 text-right text-ink font-medium whitespace-nowrap">{money(item.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          ) : (
+            <>
           {/* Cards: phones, tablets and small laptops */}
           <div className="block xl:hidden space-y-4">
             {quoteItems.map((item, index) => (
@@ -752,6 +896,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               <button type="button" onClick={chooseByLine} className="pb-btn-secondary !py-2 text-sm">เลือกปัดทีละรายการ</button>
             </div>
           )}
+            </>
+          )}
         </div>
 
         {/* the note on the left; discount, VAT, the total and withholding on the right */}
@@ -783,6 +929,13 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           <div role="group" aria-label="สรุปการเงิน" className="space-y-3 text-sm md:text-base">
             {sumRow('ยอดรวม', money(subtotal))}
 
+            {follows ? (discount > 0 && (
+              <>
+                {sumRow(`ส่วนลด ${discountRate}%`, `-${money(discount)}`, 'text-red-600')}
+                {sumRow('ยอดหลังหักส่วนลด', money(afterDiscount))}
+              </>
+            )) : (
+              <>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <label className="text-ink-muted">ส่วนลด (%)</label>
@@ -800,6 +953,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             </div>
 
             {sumRow('ยอดหลังหักส่วนลด', money(afterDiscount))}
+              </>
+            )}
             {vatRate > 0 && vatMode === 'inclusive' && sumRow('มูลค่าก่อน VAT', money(beforeVat))}
 
             {vatMode !== 'none' && (
@@ -851,10 +1006,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
             <div>
               <p className="text-xs text-ink-muted">หัก ณ ที่จ่าย: ใส่ 0 ถ้าลูกค้าไม่หัก ค่าบริการทั่วไปหัก 3% คิดจากยอดก่อน VAT</p>
-              {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-1">ส่วนลด VAT และหัก ณ ที่จ่าย คิดถึงสตางค์ ไม่ปัดเศษ</p>}
+              {rounding !== 'baht' && <p className="text-xs text-ink-muted mt-1">{follows ? '' : 'ส่วนลด '}VAT และหัก ณ ที่จ่าย คิดถึงสตางค์ ไม่ปัดเศษ</p>}
             </div>
 
-            {lockedPrice !== null && (
+            {lockedPrice !== null && !follows && (
               <div className="rounded-xl bg-[#F7F6FA] px-3 py-3">
                 <p className="flex items-center gap-2 text-sm font-medium text-ink">
                   <Lock className="w-4 h-4 text-[#673AB7] shrink-0" />
@@ -886,6 +1041,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
       {/* Notification */}
       {contactPrompt.node}
+      {quoteChangePrompt.node}
       {notification && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">
           {notification}

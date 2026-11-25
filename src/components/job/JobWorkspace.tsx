@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, FileText, Trash2, X } from 'lucide-react';
-import { api, type Project, type ProjectStatus, type User } from '../../lib/api';
+import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
 import { statusPill } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
 import { useCategoryPrompt } from './CategoryPrompt';
+import { useQuoteChangePrompt } from './QuoteChangePrompt';
 import { CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
@@ -38,13 +39,15 @@ interface Props {
   project: Project;
   user: User;
   onBack: () => void;
-  onUpdate: (p: Project & { updateCustomer?: boolean }) => Promise<Project>;
+  onUpdate: (p: Project & { updateCustomer?: boolean; confirmQuoteChange?: boolean }) => Promise<SavedProject>;
   onDelete: (id: string) => Promise<void>;
   onCreateQuote: (p: Project) => void;
+  /** opens the quote tied to this job */
+  onOpenQuote: (quoteId: string) => void;
   startStage?: Stage;
 }
 
-export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCreateQuote, startStage }: Props) {
+export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCreateQuote, onOpenQuote, startStage }: Props) {
   const [draft, setDraft] = useState<Project>(project);
   const [stage, setStage] = useState<Stage>(startStage ?? (['approved', 'completed'].includes(project.status) ? 'deliver' : 'check'));
   const [saving, setSaving] = useState(false);
@@ -71,6 +74,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
   const contactPrompt = useCustomerContactPrompt();
   const categoryPrompt = useCategoryPrompt();
+  const quoteChangePrompt = useQuoteChangePrompt();
 
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
@@ -82,10 +86,22 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
     const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
     const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
     if (updateCustomer === null) return false;
+    const send = (confirmQuoteChange = false) => onUpdate({ ...draft, ...override, updateCustomer, ...(confirmQuoteChange ? { confirmQuoteChange } : {}) });
     setSaving(true);
     try {
-      await onUpdate({ ...draft, ...override, updateCustomer });
-      flash('บันทึกแล้ว');
+      let saved: SavedProject;
+      try {
+        saved = await send();
+      } catch (err) {
+        // the job's quote is already with the customer and this save would change it: nothing was saved, and the user decides
+        const change = quoteChangeOf(err);
+        if (!change) throw err;
+        setSaving(false);
+        if (!(await quoteChangePrompt.ask(change))) return false;
+        setSaving(true);
+        saved = await send(true);
+      }
+      flash(saved.quoteUpdated && saved.quote ? `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามแล้ว` : 'บันทึกแล้ว');
       return true;
     } catch (err) {
       flash((err as Error).message);
@@ -112,6 +128,12 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
   /** Quote Health Check runs before every quote. */
   const startQuote = () => setQuoteCheck(true);
+  /** the job already has its quote: unsaved changes are saved first, so the quote that opens is up to date */
+  const openQuote = async () => {
+    if (!project.quote) return;
+    if (dirty && !(await save())) return;
+    onOpenQuote(project.quote.id);
+  };
   const continueToQuote = async () => {
     if (dirty && !(await save())) return;
     setQuoteCheck(false);
@@ -145,9 +167,15 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           >
             {STATUSES.map(([id, t]) => <option key={id} value={id}>{t}</option>)}
           </select>
-          <button onClick={startQuote} className="pb-btn-primary !py-2">
-            <FileText className="w-4 h-4" /> สร้างใบเสนอราคา
-          </button>
+          {project.quote ? (
+            <button onClick={openQuote} disabled={saving} title={`${project.quote.code} · ${project.quote.statusText}`} className="pb-btn-primary !py-2 disabled:opacity-60">
+              <FileText className="w-4 h-4" /> เปิดใบเสนอราคา
+            </button>
+          ) : (
+            <button onClick={startQuote} className="pb-btn-primary !py-2">
+              <FileText className="w-4 h-4" /> สร้างใบเสนอราคา
+            </button>
+          )}
           <button onClick={remove} aria-label="ลบงาน" title="ลบงาน" className="p-2.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
             <Trash2 className="w-4 h-4" />
           </button>
@@ -276,6 +304,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
       )}
 
       {contactPrompt.node}
+      {quoteChangePrompt.node}
       {categoryPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>

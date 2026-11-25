@@ -1,11 +1,22 @@
 // End-to-end API checks for ProfitBloom. Run with `npm test` (starts its own server on a throwaway database).
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import pg from 'pg';
 
 const BASE = process.env.BASE;
 const PROJECT_DIR = process.env.PROJECT_DIR;
 const results = [];
 const ok = (name, cond, extra = '') => results.push({ name, pass: !!cond, extra });
+/** straight into the test database, for a state no request can produce (rows as an older version left them) */
+const sql = async (text, params = []) => {
+  const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await db.connect();
+  try {
+    return (await db.query(text, params)).rows;
+  } finally {
+    await db.end();
+  }
+};
 
 function client() {
   let cookie = '';
@@ -138,21 +149,24 @@ ok('สถานะที่ไม่มีอยู่จริงไม่ถ�
 // --- quotes
 r = await A.call('POST', '/quotes', { clientName: '' });
 ok('ใบเสนอราคาไม่มีชื่อลูกค้า ถูกปฏิเสธ', r.status === 400);
+// a quote made for a job follows the job: what it lists and what it comes to are the job's, not the caller's
 r = await A.call('POST', '/quotes', {
   projectId: p1.id, clientName: 'ลูกค้า1', projectTitle: 'งานแต่ง 1', validUntil: iso(new Date(Date.now() + 10 * 864e5)),
   taxRate: 7, discountRate: 10, items: [{ description: 'แพ็กดอกไม้', quantity: 2, unitPrice: 1000 }],
 });
-ok('ใบเสนอราคาจากโปรเจ็กต์ที่ยอดไม่เท่าราคาโปรเจ็กต์ (1,800 ≠ 2,500) ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('2,500'), JSON.stringify(r.data));
-r = await A.call('POST', '/quotes', {
-  projectId: p1.id, clientName: 'ลูกค้า1', projectTitle: 'งานแต่ง 1', validUntil: iso(new Date(Date.now() + 10 * 864e5)),
-  taxRate: 7, items: [{ description: 'แพ็กดอกไม้', quantity: 2, unitPrice: 1250 }],
-});
 const q1 = r.data;
-ok('ใบเสนอราคาจากโปรเจ็กต์ ล็อกราคาโปรเจ็กต์ไว้ (2,000 + 25% = 2,500)', q1.lockedPrice === 2500, q1.lockedPrice);
+ok('ใบเสนอราคาของโปรเจ็กต์ตามโปรเจ็กต์: ได้หัวข้อละบรรทัดในราคาโปรเจ็กต์ (2,000 + 25% = 2,500) รายการและส่วนลดที่ส่งมาไม่ถูกใช้',
+  r.status === 201 && q1.followsProject === true && q1.lockedPrice === 2500 && q1.discountRate === 0 && q1.items.length === 1 && q1.items[0].description === 'รายการต้นทุน' && q1.items[0].unitPrice === 2500,
+  JSON.stringify([r.status, q1.followsProject, q1.lockedPrice, q1.discountRate, q1.items]));
 ok('สร้างใบเสนอราคา + รหัส QT', r.status === 201 && /^QT-\d{4}-001$/.test(q1.code), q1?.code);
 ok('ยอดรวม: 2,500 + VAT 7% = 2,675', q1.totalAmount === 2675 && q1.vatMode === 'exclusive', q1.totalAmount);
+ok('ใบบอกว่าตามโปรเจ็กต์ไหน และตรงกับโปรเจ็กต์อยู่', q1.job?.id === p1.id && q1.job.code === p1.code && q1.job.price === 2500 && q1.job.inStep === true, JSON.stringify(q1.job));
+r = await A.call('POST', '/quotes', { projectId: p1.id, clientName: 'ลูกค้า1', items: [{ description: 'อีกใบ', quantity: 1, unitPrice: 2500 }] });
+ok('โปรเจ็กต์หนึ่งมีใบเสนอราคาที่ผูกไว้ใบเดียว: สร้างใบที่สองถูกปฏิเสธ และบอกรหัสใบเดิม', r.status === 400 && r.data.error.includes(q1.code), JSON.stringify(r.data));
 r = await A.call('GET', `/projects/${p1.id}`);
-ok('สร้างใบเสนอราคา → โปรเจ็กต์เป็น "สร้างใบเสนอราคาแล้ว"', r.data.status === 'quote_created', r.data.status);
+ok('สร้างใบเสนอราคา → โปรเจ็กต์เป็น "สร้างใบเสนอราคาแล้ว" และบอกใบที่ผูกไว้', r.data.status === 'quote_created' && r.data.quote?.id === q1.id && r.data.quote.code === q1.code && r.data.quote.status === 'draft', JSON.stringify([r.data.status, r.data.quote]));
+r = await A.call('GET', '/projects');
+ok('รายการโปรเจ็กต์บอกใบที่ผูกไว้ด้วย', r.data.find((x) => x.id === p1.id)?.quote?.code === q1.code);
 r = await A.call('PUT', `/quotes/${q1.id}`, { status: 'sent' });
 r = await A.call('GET', `/projects/${p1.id}`);
 ok('ส่งใบเสนอราคา → โปรเจ็กต์ "รอการอนุมัติ"', r.data.status === 'pending', r.data.status);
@@ -199,16 +213,130 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ค่าเริ่มต้น VAT ที่ไม่รู้จัก ถูกเมิน', r.data.user.vatMode === 'inclusive');
   await A.call('PUT', '/account', { name: 'ร้านเอ', vatMode: 'exclusive' });
 
-  // locked price: project costs 3 × 333.33 + extra (not in the price), markup 50% → 1,499.985 → 1,500
+  // --- a job and its quote are tied together
+  // costs 3 × 333.33 + an extra (not in the price), markup 50% → 1,499.985 → 1,500
   r = await A.call('POST', '/projects', {
-    title: 'งานล็อกราคา', projectType: 'อื่นๆ', profitMargin: 50,
+    title: 'งานผูกใบเสนอราคา', projectType: 'อื่นๆ', profitMargin: 50,
     costItems: [{ name: 'ดอกไม้', quantity: 3, price: 333.33 }, { name: 'งอก', quantity: 1, price: 0, isExtra: true, actual: 500 }],
   });
   const lp = r.data;
+  ok('โปรเจ็กต์ที่ยังไม่มีใบเสนอราคา: quote เป็น null', lp.quote === null, JSON.stringify(lp.quote));
   const line = (unitPrice, quantity = 1) => [{ description: 'ดอกไม้', quantity, unitPrice }];
-  r = await make({ projectId: lp.id, items: line(1500) });
+  r = await make({ projectId: lp.id, items: line(900) });
+  const fq = r.data;
+  ok('ใบของโปรเจ็กต์: ราคาเป็นบาทเต็ม (1,500) ไม่รวมรายการงอก ไม่ใช้รายการที่ส่งมา', r.status === 201 && fq.followsProject === true && fq.lockedPrice === 1500 && fq.items.length === 1 && fq.items[0].unitPrice === 1500 && fq.items[0].roundUp === true && fq.rounding === 'line' && fq.totalAmount === 1605, JSON.stringify(r.data));
+  r = await A.call('PUT', `/quotes/${fq.id}`, { discountRate: 10, rounding: 'satang', items: [{ description: 'แก้เอง', quantity: 1, unitPrice: 1 }], notes: 'โน้ตใหม่', whtRate: 3 });
+  ok('แก้ใบที่ผูกโปรเจ็กต์: รายการ ส่วนลด และการปัด ไม่เปลี่ยน (ต้องแก้ที่โปรเจ็กต์) ช่องอื่นของใบแก้ได้',
+    r.status === 200 && r.data.items.length === 1 && r.data.items[0].description === 'รายการต้นทุน' && r.data.items[0].unitPrice === 1500 && r.data.discountRate === 0 && r.data.rounding === 'line' && r.data.notes === 'โน้ตใหม่' && r.data.withholding === 45,
+    JSON.stringify([r.status, r.data.items, r.data.discountRate, r.data.rounding, r.data.notes, r.data.withholding]));
+  r = await A.call('PUT', `/quotes/${fq.id}`, { whtRate: 0, vatMode: 'inclusive' });
+  ok('เปลี่ยนเป็นถอด VAT: ลูกค้าจ่ายเท่าราคาโปรเจ็กต์', r.status === 200 && r.data.totalAmount === 1500, r.data.totalAmount);
+  const other = (await A.call('POST', '/projects', { title: 'อีกงาน', projectType: 'อื่นๆ' })).data;
+  r = await A.call('PUT', `/quotes/${fq.id}`, { projectId: other.id });
+  ok('ใบที่ผูกโปรเจ็กต์ย้ายไปผูกโปรเจ็กต์อื่นไม่ได้', r.status === 200 && r.data.projectId === lp.id, r.data.projectId);
+  await A.call('DELETE', `/projects/${other.id}`);
+
+  r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
+  ok('แก้ราคาโปรเจ็กต์ตอนใบยังเป็นร่าง → บันทึกได้เลย และบอกว่าใบเสนอราคาเปลี่ยนตาม', r.status === 200 && r.data.quoteUpdated === true, JSON.stringify([r.status, r.data.quoteUpdated]));
+  r = await A.call('GET', `/quotes/${fq.id}`);
+  ok('ใบเสนอราคาเปลี่ยนตามโปรเจ็กต์: 3 × 333.33 × 2 = 1,999.98 → 2,000', r.data.lockedPrice === 2000 && r.data.items[0].unitPrice === 2000 && r.data.totalAmount === 2000 && r.data.job.inStep === true && r.data.notes === 'โน้ตใหม่', JSON.stringify([r.data.lockedPrice, r.data.items, r.data.totalAmount, r.data.job]));
+  r = await A.call('PUT', `/projects/${lp.id}`, { notes: 'โน้ตงาน' });
+  ok('บันทึกโปรเจ็กต์โดยไม่แตะต้นทุนหรือราคา → ใบเสนอราคาไม่ถูกแตะ', r.status === 200 && r.data.quoteUpdated === false, r.data.quoteUpdated);
+
+  // the customer already has the quote: the shop is asked before a save changes it
+  await A.call('PUT', `/quotes/${fq.id}`, { status: 'sent' });
+  r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 50 });
+  ok('ใบส่งแล้ว: แก้ราคาโปรเจ็กต์โดยยังไม่ยืนยัน ถูกปฏิเสธ (409) พร้อมบอกใบ สถานะ ราคาเดิมและราคาใหม่',
+    r.status === 409 && r.data.code === 'quote_change' && r.data.quote.id === fq.id && r.data.quote.code === fq.code && r.data.quote.status === 'sent' && r.data.quote.price === 2000 && r.data.quote.newPrice === 1500 && r.data.error.includes(fq.code),
+    JSON.stringify(r.data));
+  r = await A.call('GET', `/projects/${lp.id}`);
+  let now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('ถูกปฏิเสธแล้วไม่มีอะไรถูกบันทึก: ทั้งโปรเจ็กต์และใบเสนอราคาคงเดิม', Math.round(r.data.profitMargin) === 100 && now.lockedPrice === 2000 && now.items[0].unitPrice === 2000 && now.status === 'sent', JSON.stringify([r.data.profitMargin, now.lockedPrice, now.status]));
+  r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 50, confirmQuoteChange: true });
+  now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('ยืนยันแล้ว → บันทึกได้ ใบที่ส่งแล้วเปลี่ยนตามโปรเจ็กต์ (1,500) สถานะคงเดิม', r.status === 200 && r.data.quoteUpdated === true && now.lockedPrice === 1500 && now.items[0].unitPrice === 1500 && now.status === 'sent', JSON.stringify([r.status, r.data.quoteUpdated, now.lockedPrice, now.status]));
+
+  await A.call('PUT', `/quotes/${fq.id}`, { status: 'approved' });
+  let job = (await A.call('GET', `/projects/${lp.id}`)).data;
+  ok('โปรเจ็กต์บอกสถานะของใบที่ผูกไว้', job.quote.status === 'approved' && job.quote.statusText === 'อนุมัติแล้ว', JSON.stringify(job.quote));
+  r = await A.call('PUT', `/projects/${lp.id}`, { notes: 'โน้ตหลังอนุมัติ' });
+  const sameCosts = await A.call('PUT', `/projects/${lp.id}`, { costGroups: job.costGroups, costItems: job.costItems });
+  // what the job actually cost is filled in after the customer has agreed; it is not on the quote
+  const withActual = await A.call('PUT', `/projects/${lp.id}`, { costGroups: job.costGroups, costItems: job.costItems.map((i) => (i.isExtra ? { ...i, actual: 650 } : { ...i, actual: 1100 })) });
+  ok('ใบอนุมัติแล้ว: บันทึกโปรเจ็กต์ที่ไม่เปลี่ยนสิ่งที่อยู่ในใบ (โน้ต · ต้นทุนเท่าเดิม · ต้นทุนจริง) ไม่ต้องยืนยัน',
+    r.status === 200 && sameCosts.status === 200 && sameCosts.data.quoteUpdated === false && withActual.status === 200 && withActual.data.quoteUpdated === false && withActual.data.costItems[0].actual === 1100,
+    JSON.stringify([r.status, sameCosts.status, sameCosts.data.quoteUpdated, withActual.status, withActual.data.quoteUpdated]));
+  job = withActual.data;
+  const renamed = { costGroups: job.costGroups.map((g) => ({ ...g, name: 'ซุ้มดอกไม้' })), costItems: job.costItems };
+  r = await A.call('PUT', `/projects/${lp.id}`, renamed);
+  ok('ใบอนุมัติแล้ว: เปลี่ยนชื่อหัวข้อ (คือชื่อบรรทัดในใบ) ก็ต้องยืนยันก่อน แม้ราคาเท่าเดิม', r.status === 409 && r.data.quote.status === 'approved' && r.data.quote.price === 1500 && r.data.quote.newPrice === 1500, JSON.stringify(r.data));
+  r = await A.call('PUT', `/projects/${lp.id}`, { ...renamed, confirmQuoteChange: true });
+  now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('ยืนยันแล้ว → ชื่อบรรทัดในใบเปลี่ยนตามชื่อหัวข้อ ใบยังเป็น "อนุมัติแล้ว"', r.status === 200 && now.items[0].description === 'ซุ้มดอกไม้' && now.status === 'approved' && now.lockedPrice === 1500, JSON.stringify([r.status, now.items, now.status]));
+  r = await A.call('PUT', `/projects/${lp.id}`, { status: 'completed' });
+  ok('เปลี่ยนสถานะโปรเจ็กต์อย่างเดียว ไม่ถามยืนยัน', r.status === 200 && r.data.status === 'completed', r.status);
+  await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
+  r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
+  ok('ใบที่ลูกค้าปฏิเสธ: แก้โปรเจ็กต์แล้วใบเปลี่ยนตามโดยไม่ต้องยืนยัน', r.status === 200 && r.data.quoteUpdated === true, JSON.stringify([r.status, r.data.quoteUpdated]));
+
+  r = await A.call('POST', '/projects', { title: 'งานยังไม่มีต้นทุน', projectType: 'อื่นๆ' });
+  const empty = r.data;
+  r = await make({ projectId: empty.id, items: line(900) });
+  const eq = r.data;
+  ok('โปรเจ็กต์ที่ยังไม่มีต้นทุน: ใบยังไม่มีรายการและยังไม่มีราคา', r.status === 201 && eq.followsProject === true && eq.lockedPrice === null && eq.items.length === 0 && eq.totalAmount === 0, JSON.stringify([r.status, eq.lockedPrice, eq.items]));
+  r = await A.call('PUT', `/projects/${empty.id}`, { profitMargin: 25, costGroups: [{ id: 1, name: 'ดอกไม้สด', markup: 25 }, { id: 2, name: '', markup: 100 }], costItems: [{ name: 'กุหลาบ', quantity: 1, price: 800, groupId: 1 }, { name: 'ค่าแรง', quantity: 2, price: 250, groupId: 2 }] });
+  now = (await A.call('GET', `/quotes/${eq.id}`)).data;
+  ok('ใส่ต้นทุนในโปรเจ็กต์ทีหลัง → ใบได้หัวข้อละบรรทัดและราคาตาม (1,000 + 1,000) หัวข้อไม่มีชื่อเป็น "หัวข้อที่ 2"',
+    r.status === 200 && r.data.quoteUpdated === true && now.lockedPrice === 2000 && JSON.stringify(now.items.map((i) => [i.description, i.unitPrice])) === JSON.stringify([['ดอกไม้สด', 1000], ['หัวข้อที่ 2', 1000]]),
+    JSON.stringify([r.status, r.data.quoteUpdated, now.lockedPrice, now.items]));
+  await A.call('DELETE', `/quotes/${eq.id}`);
+  r = await A.call('GET', `/projects/${empty.id}`);
+  const again = await make({ projectId: empty.id });
+  ok('ลบใบที่ผูกไว้ → โปรเจ็กต์ไม่มีใบแล้ว และสร้างใบใหม่ให้โปรเจ็กต์ได้', r.data.quote === null && again.status === 201 && again.data.followsProject === true && again.data.lockedPrice === 2000, JSON.stringify([r.data.quote, again.status, again.data.lockedPrice]));
+  await A.call('DELETE', `/projects/${empty.id}`);
+  now = (await A.call('GET', `/quotes/${again.data.id}`)).data;
+  r = await A.call('PUT', `/quotes/${again.data.id}`, { items: line(777) });
+  ok('ลบโปรเจ็กต์ → ใบยังอยู่พร้อมรายการเดิม ไม่ผูกโปรเจ็กต์แล้ว และกลับมาแก้รายการในใบได้', now.projectId === null && now.followsProject === false && now.items.length === 2 && r.status === 200 && r.data.items.length === 1 && r.data.items[0].unitPrice === 777, JSON.stringify([now.projectId, now.followsProject, now.items.length, r.status, r.data.items]));
+
+  // --- a quote from before jobs and quotes were tied: it keeps its own lines until the job's price changes, or the shop asks
+  r = await A.call('POST', '/projects', { title: 'งานของใบเก่า', projectType: 'อื่นๆ', profitMargin: 50, costItems: [{ name: 'ดอกไม้', quantity: 1, price: 1000 }] });
+  const oldJob = r.data;
+  const oq = (await make({ projectId: oldJob.id })).data;
+  const leaveBehind = async (status) => {
+    await sql(`UPDATE quote_items SET description = 'รายการที่พิมพ์เองสมัยก่อน', unit_price = 1400 WHERE quote_id = $1`, [oq.id]);
+    await sql(`UPDATE quotes SET locked_price = NULL, status = $2 WHERE id = $1`, [oq.id, status]);
+  };
+  await leaveBehind('approved');
+  now = (await A.call('GET', `/quotes/${oq.id}`)).data;
+  ok('ใบเก่าที่ยังไม่ตรงกับงาน: ใบบอกว่ายังไม่ตรง พร้อมราคางานตอนนี้ (1,500) โดยรายการเดิมยังอยู่', now.followsProject === true && now.job.inStep === false && now.job.price === 1500 && now.items[0].unitPrice === 1400 && now.items[0].description === 'รายการที่พิมพ์เองสมัยก่อน', JSON.stringify([now.job, now.items]));
+  job = (await A.call('GET', `/projects/${oldJob.id}`)).data;
+  r = await A.call('PUT', `/projects/${oldJob.id}`, { costGroups: job.costGroups, costItems: job.costItems.map((i) => ({ ...i, actual: 900 })), notes: 'กรอกต้นทุนจริง' });
+  now = (await A.call('GET', `/quotes/${oq.id}`)).data;
+  ok('งานของใบเก่า: บันทึกต้นทุนจริง (ราคางานไม่เปลี่ยน) → ไม่ถามยืนยัน และใบเก่าที่อนุมัติแล้วไม่ถูกแตะ', r.status === 200 && r.data.quoteUpdated === false && r.data.costItems[0].actual === 900 && now.items[0].unitPrice === 1400 && now.status === 'approved', JSON.stringify([r.status, r.data.quoteUpdated, now.items]));
+  r = await A.call('POST', `/quotes/${oq.id}/sync`);
+  ok('สั่งอัปเดตใบเก่าที่อนุมัติแล้วตามโปรเจ็กต์โดยยังไม่ยืนยัน → ถูกปฏิเสธ (409) พร้อมราคาเดิม 1,400 และราคาใหม่ 1,500', r.status === 409 && r.data.code === 'quote_change' && r.data.quote.price === 1400 && r.data.quote.newPrice === 1500, JSON.stringify(r.data));
+  r = await A.call('POST', `/quotes/${oq.id}/sync`, { confirmQuoteChange: true });
+  ok('ยืนยันแล้ว → ใบเก่าได้รายการและราคาตามโปรเจ็กต์ สถานะคงเดิม', r.status === 200 && r.data.job.inStep === true && r.data.items.length === 1 && r.data.items[0].description === 'รายการต้นทุน' && r.data.items[0].unitPrice === 1500 && r.data.lockedPrice === 1500 && r.data.status === 'approved', JSON.stringify([r.status, r.data.job, r.data.items]));
+  await leaveBehind('draft');
+  r = await A.call('POST', `/quotes/${oq.id}/sync`);
+  ok('ใบเก่าที่ยังเป็นร่าง: สั่งอัปเดตตามโปรเจ็กต์ได้เลย', r.status === 200 && r.data.job.inStep === true && r.data.items[0].unitPrice === 1500, JSON.stringify([r.status, r.data.items]));
+  await leaveBehind('sent');
+  r = await A.call('PUT', `/projects/${oldJob.id}`, { profitMargin: 100 });
+  const confirmed = await A.call('PUT', `/projects/${oldJob.id}`, { profitMargin: 100, confirmQuoteChange: true });
+  now = (await A.call('GET', `/quotes/${oq.id}`)).data;
+  ok('ใบเก่าที่ส่งแล้ว: แก้ราคางานจริง → ถามยืนยันเหมือนใบอื่น (ราคาในใบ 1,400 → 2,000) ยืนยันแล้วใบเปลี่ยนตาม', r.status === 409 && r.data.quote.price === 1400 && r.data.quote.newPrice === 2000 && confirmed.status === 200 && confirmed.data.quoteUpdated === true && now.items[0].unitPrice === 2000 && now.job.inStep === true, JSON.stringify([r.status, r.data.quote, confirmed.status, now.items]));
+  r = await B.call('POST', `/quotes/${oq.id}/sync`, { confirmQuoteChange: true });
+  ok('ร้าน B สั่งอัปเดตใบเสนอราคาของ A ไม่ได้', r.status === 404, r.status);
+  await A.call('DELETE', `/projects/${oldJob.id}`);
+
+  // --- a job made from a quote is the other way round: its price is settled, and a quote for it is only held to that price
+  r = await make({ taxRate: 7, status: 'approved', items: line(1500) });
+  r = await A.call('POST', `/quotes/${r.data.id}/project`);
+  const settled = r.data;
+  r = await make({ projectId: settled.id, items: line(1500) });
   const lq = r.data;
-  ok('ล็อกราคาเป็นบาทเต็ม (1,500) และไม่รวมรายการงอก', r.status === 201 && lq.lockedPrice === 1500, JSON.stringify(r.data));
+  ok('ใบที่ไม่ได้ผูกกับโปรเจ็กต์ สั่งอัปเดตตามโปรเจ็กต์ไม่ได้ (400)', (await A.call('POST', `/quotes/${lq.id}/sync`)).status === 400);
+  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: ใบของโปรเจ็กต์นี้ไม่ตามโปรเจ็กต์ แค่ล็อกราคาที่ตกลงไว้ (1,500)', r.status === 201 && lq.followsProject === false && lq.lockedPrice === 1500 && settled.agreedPrice === 1500 && settled.quote === null, JSON.stringify([r.status, lq.followsProject, lq.lockedPrice, settled.agreedPrice, settled.quote]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 1, unitPrice: 1000 }, { description: 'ค่าแรง', quantity: 2, unitPrice: 250 }] });
   ok('แก้รายการได้ ถ้ายอดรวมยังเท่าราคาที่ล็อก', r.status === 200 && r.data.items.length === 2 && r.data.totalAmount === 1605, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: line(1400) });
@@ -219,13 +347,9 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ส่วนลดได้ ถ้ายอดหลังหักส่วนลดเท่าราคาที่ล็อก (2,000 -25%)', r.status === 200 && r.data.totalAmount === 1605, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { vatMode: 'inclusive' });
   ok('เปลี่ยนเป็นถอด VAT: ลูกค้าจ่ายเท่าราคาที่ล็อก', r.status === 200 && r.data.totalAmount === 1500, r.data.totalAmount);
-  await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
+  await A.call('PUT', `/projects/${settled.id}`, { profitMargin: 100 });
   r = await A.call('PUT', `/quotes/${lq.id}`, { notes: 'x', status: 'sent' });
   ok('ราคาโปรเจ็กต์เปลี่ยนทีหลัง ราคาที่ล็อกในใบเสนอราคาไม่เปลี่ยน', r.status === 200 && r.data.lockedPrice === 1500, r.data.lockedPrice);
-  r = await A.call('POST', '/projects', { title: 'งานยังไม่มีต้นทุน', projectType: 'อื่นๆ' });
-  const empty = r.data;
-  r = await make({ projectId: empty.id, items: line(900) });
-  ok('โปรเจ็กต์ที่ยังไม่มีต้นทุน ไม่ล็อกราคา', r.status === 201 && r.data.lockedPrice === null);
   // rounding: each line chooses to round up; discount and VAT keep the satang
   const cents = [{ description: 'a', quantity: 3, unitPrice: 33.33 }];
   const mixed = [{ description: 'ปัด', quantity: 3, unitPrice: 33.33, roundUp: true }, { description: 'ไม่ปัด', quantity: 1, unitPrice: 10.25 }];
@@ -292,7 +416,7 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ตั้งกลับเป็น 0 = ไม่หัก', r.status === 200 && r.data.withholding === 0 && r.data.payableAmount === r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { whtRate: 3 });
   ok('หัก ณ ที่จ่ายไม่กระทบราคาที่ล็อก: ยังบันทึกได้ และหัก 3% ของ 1,500 = 45', r.status === 200 && r.data.withholding === 45 && r.data.payableAmount === 1560, JSON.stringify([r.status, r.data.withholding, r.data.payableAmount]));
-  for (const id of [lp.id, empty.id]) await A.call('DELETE', `/projects/${id}`);
+  for (const id of [lp.id, settled.id]) await A.call('DELETE', `/projects/${id}`);
   for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
 }
 
