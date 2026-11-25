@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, FileText, Trash2, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, FileText, Trash2, X } from 'lucide-react';
 import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
@@ -14,6 +14,7 @@ import { ReviewStage } from './ReviewStage';
 import { CustomerPicker } from '../CustomerPicker';
 import { useCustomerContactPrompt } from '../CustomerContactPrompt';
 import { DateField } from '../DateField';
+import { PROJECT_STATUS_OPTIONS, projectStatusBlock, StatusDialog } from '../StatusDialog';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -25,14 +26,6 @@ const STAGES: Array<{ id: Stage; step: string; title: string; hint: string }> = 
   { id: 'review', step: '5', title: 'สรุปหลังงาน', hint: 'Review' },
 ];
 
-const STATUSES: Array<[ProjectStatus, string]> = [
-  ['draft', 'ร่าง'],
-  ['quote_created', 'สร้างใบเสนอราคาแล้ว'],
-  ['pending', 'รอการอนุมัติ'],
-  ['approved', 'อนุมัติแล้ว'],
-  ['completed', 'เสร็จสิ้น'],
-  ['cancelled', 'ยกเลิก'],
-];
 
 const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
@@ -54,6 +47,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [quoteCheck, setQuoteCheck] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [history, setHistory] = useState<Project[]>([]);
 
   useEffect(() => setDraft(project), [project]);
@@ -164,14 +158,17 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight truncate">{draft.title}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={draft.status}
-            onChange={(e) => patch({ status: e.target.value as ProjectStatus })}
+          {/* the status is chosen in the same dialog as on the projects list; it is saved with the rest of the page */}
+          <button
+            type="button"
+            onClick={() => setStatusOpen(true)}
             aria-label="สถานะงาน"
-            className={`self-stretch rounded-full px-3 py-1.5 text-sm font-medium outline-none ${statusPill(draft.status)}`}
+            title="เปลี่ยนสถานะ"
+            className={`self-stretch inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ${statusPill(draft.status)}`}
           >
-            {STATUSES.map(([id, t]) => <option key={id} value={id}>{t}</option>)}
-          </select>
+            {PROJECT_STATUS_OPTIONS.find((o) => o.id === draft.status)?.name ?? draft.statusText}
+            <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />
+          </button>
           {project.quote ? (
             <button onClick={openQuote} disabled={saving} title={`${project.quote.code} · ${project.quote.statusText}`} className="pb-btn-primary !py-2 disabled:opacity-60">
               <FileText className="w-4 h-4" /> เปิดใบเสนอราคา
@@ -251,7 +248,8 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           applied={draft.reviewApplied}
           onCheckFirst={() => setStage('deliver')}
           onApply={async () => {
-            if (await save({ reviewApplied: true, status: 'completed' })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
+            // the job is closed as finished only once the customer has approved it; the lessons are kept either way
+            if (await save({ reviewApplied: true, ...(['approved', 'completed'].includes(project.status) ? { status: 'completed' as ProjectStatus } : {}) })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
           }}
         />
       )}
@@ -310,6 +308,22 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
       {contactPrompt.node}
       {quoteChangePrompt.node}
+      {statusOpen && (
+        <StatusDialog
+          title="เปลี่ยนสถานะโปรเจ็กต์"
+          subject={draft.title}
+          options={PROJECT_STATUS_OPTIONS}
+          current={draft.status}
+          // what can be chosen depends on the job as saved (its quote, its status), as the server decides on save
+          blocked={(id) => (id === project.status ? null : projectStatusBlock(project)(id))}
+          note={project.quote ? `ใบเสนอราคา ${project.quote.code} จะเปลี่ยนสถานะตามเมื่อบันทึก` : undefined}
+          onPick={(id) => {
+            patch({ status: id as ProjectStatus });
+            setStatusOpen(false);
+          }}
+          onClose={() => setStatusOpen(false)}
+        />
+      )}
       {categoryPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>

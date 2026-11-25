@@ -70,6 +70,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const [follows, setFollows] = useState(!!fromProject && fromProject.agreedPrice == null);
   /** the job a saved quote follows, and whether the quote still holds what the job gives it */
   const [job, setJob] = useState<Quote['job'] | null>(null);
+  /** the number of the job this quote belonged to, when that job was deleted */
+  const [deletedJob, setDeletedJob] = useState<string | null>(null);
   /** something on the form was typed or chosen since it was opened or last saved */
   const touched = useRef(false);
   /** the next render holds the quote as saved (just loaded, or just saved) */
@@ -133,6 +135,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setQuoteItems(q.items.length || q.followsProject ? q.items : [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setFollows(!!q.followsProject);
         setJob(q.job ?? null);
+        setDeletedJob(q.deletedProjectCode ?? null);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
         setWhtRate(q.whtRate);
@@ -470,6 +473,12 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </div>
       </div>
 
+      {deletedJob && (
+        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 text-rose-700">
+          <p className="font-semibold">โปรเจ็กต์ {deletedJob} ของใบเสนอราคานี้ถูกลบแล้ว</p>
+          <p className="text-sm mt-0.5">ใบเสนอราคานี้จึงถูกยกเลิก รายการและราคาที่เห็นคือของล่าสุดก่อนโปรเจ็กต์ถูกลบ</p>
+        </div>
+      )}
       <div className="pb-card p-4 md:p-6 xl:p-8" onChange={() => { touched.current = true; }}>
         {/* the customer on the left; the total, what can be done with the quote and its dates on the right */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-6 lg:gap-12">

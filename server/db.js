@@ -420,6 +420,11 @@ const MIGRATIONS = [
   );
   ALTER TABLE doc_counters ENABLE ROW LEVEL SECURITY;
   `,
+
+  // 16 — a quote whose job was deleted remembers the job's number, so it can say so (it is cancelled with the job)
+  `
+  ALTER TABLE quotes ADD COLUMN deleted_project_code TEXT NOT NULL DEFAULT '';
+  `,
 ];
 
 async function schemaVersion(q) {
