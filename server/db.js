@@ -532,6 +532,18 @@ const MIGRATIONS = [
   ALTER TABLE receipts ENABLE ROW LEVEL SECURITY;
   ALTER TABLE receipt_items ENABLE ROW LEVEL SECURITY;
   `,
+
+  // 20 — a job has a note for the shop's own eyes, shared with the internal note of the quote its page opens (never
+  //      printed); a job starts with the note its quote already has
+  `
+  ALTER TABLE projects ADD COLUMN internal_note TEXT NOT NULL DEFAULT '';
+  UPDATE projects p SET internal_note = q.internal_note
+    FROM quotes q
+   WHERE q.project_id = p.id AND q.internal_note <> '' AND p.internal_note = ''
+     AND q.id = CASE WHEN p.agreed_price IS NULL
+                     THEN (SELECT f.id FROM quotes f WHERE f.project_id = p.id AND f.follows_project = 1)
+                     ELSE (SELECT n.id FROM quotes n WHERE n.project_id = p.id ORDER BY n.created_at DESC, n.id DESC LIMIT 1) END;
+  `,
 ];
 
 async function schemaVersion(q) {

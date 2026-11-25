@@ -65,7 +65,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     validUntil: isoDate(new Date(Date.now() + 30 * 864e5)),
     creditDays: 0,
     notes: fromProject?.notes ?? '',
-    internalNote: '',
+    internalNote: fromProject?.internalNote ?? '',
   });
 
   // A quote made for a job is tied to it: what it lists and what it comes to are the job's, are changed in the job,
@@ -288,6 +288,22 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   };
 
   const persist = async (nextStatus: QuoteStatus = status) => {
+    if (locked && savedId) {
+      // a quote with its receipt in force: only the note for the shop can change (it is never printed)
+      setSaving(true);
+      try {
+        const saved = await api.updateQuoteNote(savedId, quoteData.internalNote);
+        touched.current = false;
+        takeBaseline.current = true;
+        if (saved.projectId) onProjectChanged?.(saved.projectId);
+        return saved;
+      } catch (err) {
+        showNotification((err as Error).message);
+        return null;
+      } finally {
+        setSaving(false);
+      }
+    }
     if (!quoteData.clientName.trim()) {
       setShowPreview(false);
       showNotification('กรุณากรอกชื่อลูกค้า');
@@ -544,7 +560,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         <div role="note" aria-label="ออกใบเสร็จแล้ว" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="min-w-0 text-emerald-800">
             <p className="font-semibold">ออกใบเสร็จ {receipt.code} แล้ว</p>
-            <p className="text-sm mt-0.5">ใบเสนอราคานี้แก้ไม่ได้ ถ้าจะแก้ ให้ยกเลิกใบเสร็จก่อน (ใบเสนอราคาจะถูกยกเลิกด้วย แล้วสร้างใบใหม่ที่โปรเจ็กต์)</p>
+            <p className="text-sm mt-0.5">ใบเสนอราคานี้แก้ไม่ได้ (ยกเว้นโน้ตภายใน) ถ้าจะแก้ ให้ยกเลิกใบเสร็จก่อน (ใบเสนอราคาจะถูกยกเลิกด้วย แล้วสร้างใบใหม่ที่โปรเจ็กต์)</p>
           </div>
           {onOpenReceipt && (
             <button type="button" onClick={() => onOpenReceipt(receipt.id)} className="pb-btn-secondary !py-2 !bg-white shrink-0">
@@ -1055,9 +1071,9 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </div></fieldset>
 
         {/* the note on the left; discount, VAT, the total and withholding on the right */}
-        <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-6 lg:gap-12 mt-6">
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-6 lg:gap-12 mt-6">
           <div className="space-y-4">
-            <div>
+            <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div>
               <label className="pb-label">หมายเหตุ</label>
               <textarea
                 value={quoteData.notes}
@@ -1066,21 +1082,23 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 rows={4}
                 placeholder="เช่น ราคารวมค่าขนส่งและติดตั้ง"
               />
-            </div>
+            </div></fieldset>
             <div>
               <label className="pb-label">โน้ตภายใน (ไม่แสดงในใบเสนอราคา)</label>
               <textarea
                 value={quoteData.internalNote}
                 onChange={(e) => setQuoteData({ ...quoteData, internalNote: e.target.value })}
                 className="pb-input"
+                aria-label="โน้ตภายใน"
                 rows={2}
                 maxLength={2000}
                 placeholder="เช่น ลูกค้าขอส่วนลดเพิ่มถ้าจองภายในสิ้นเดือน"
               />
+              {linkedJob && <p className="text-xs text-ink-muted mt-1">ใช้ร่วมกับโน้ตภายในบริษัทของโปรเจ็กต์ {linkedJob.code} อีกฝั่งเปลี่ยนตามเมื่อบันทึก{locked ? ' · แก้ได้แม้ออกใบเสร็จแล้ว' : ''}</p>}
             </div>
           </div>
 
-          <div role="group" aria-label="สรุปการเงิน" className="space-y-3 text-sm md:text-base">
+          <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div role="group" aria-label="สรุปการเงิน" className="space-y-3 text-sm md:text-base">
             {sumRow('ยอดรวม', money(subtotal))}
 
             {follows ? (discount > 0 && (
@@ -1183,8 +1201,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 )}
               </div>
             )}
-          </div>
-        </div></fieldset>
+          </div></fieldset>
+        </div>
       </div>
 
       {/* on a phone the save button sits at the end of the form, where the thumb is */}
