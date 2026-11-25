@@ -533,7 +533,8 @@ ok('Dashboard: โปรเจ็กต์ดำเนินการ 3', r.data
 r = await A.call('GET', '/dashboard?range=12');
 ok('Dashboard: กราฟ 12 เดือน', r.data.chart.length === 12);
 r = await A.call('GET', '/reports');
-ok('Reports: ยอดรวม 2,500 กำไร 500 ต้นทุน 2,000', r.data.totals.sales === 2500 && r.data.totals.profit === 500 && r.data.totals.cost === 2000, JSON.stringify(r.data.totals));
+// the report page counts receipts only (the dashboard still counts approved jobs): none is issued yet
+ok('Reports: นับจากใบเสร็จ ยังไม่มีใบเสร็จ → ยอด 0 · จำนวนโปรเจ็กต์ยังนับจากโปรเจ็กต์ (3)', r.data.totals.sales === 0 && r.data.totals.profit === 0 && r.data.totals.projects === 3, JSON.stringify(r.data.totals));
 r = await B.call('GET', '/reports');
 ok('Reports ของ B ไม่รวมข้อมูล A', r.data.totals.projects === 0);
 
@@ -654,7 +655,7 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('สร้างซ้ำจากใบเดิมไม่ได้', (await A.call('POST', `/quotes/${q.id}/project`)).status === 400);
 
   let rep = await report();
-  ok('ยังไม่ใส่ต้นทุน: ไม่นับในรายงานยอดขาย แต่แจ้งว่ามี 1 งาน ราคา 45,000 รออยู่', rep.sales.totals.jobs === 0 && rep.uncosted.count >= 1 && rep.uncosted.sales >= 45000, JSON.stringify([rep.sales.totals, rep.uncosted]));
+  ok('อนุมัติแล้วแต่ยังไม่ออกใบเสร็จ: รายงาน (นับจากใบเสร็จ) ยังไม่มียอด', rep.sales.totals.jobs === 0 && rep.uncosted.count === 0, JSON.stringify([rep.sales.totals, rep.uncosted]));
   ok('ยังไม่ใส่ต้นทุน: ไม่นับในยอดซื้อรวมของลูกค้า', (await A.call('GET', `/customers/${c.id}`)).data.totalSales === 0);
 
   // costs go in: the price stays, the margin follows
@@ -663,15 +664,20 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   const price = (x) => x.costItems.reduce((s, i) => s + i.quantity * i.price * (1 + x.costGroups.find((g) => g.id === i.groupId).markup / 100), 0);
   ok('ใส่ต้นทุน 30,000 → ราคายังเป็น 45,000 (Margin 33.3%)', r.status === 200 && r.data.agreedPrice === 45000 && Math.abs(price(r.data) - 45000) < 0.01 && Math.abs(r.data.profitMargin - 50) < 1e-6, JSON.stringify([price(r.data), r.data.profitMargin]));
   rep = await report();
-  ok('ใส่ต้นทุนแล้ว: รายงานนับ ยอดขาย 45,000 ต้นทุน 30,000 กำไร 15,000', rep.sales.totals.jobs === 1 && rep.sales.totals.sales === 45000 && rep.sales.totals.cost === 30000 && rep.sales.totals.profit === 15000, JSON.stringify(rep.sales.totals));
+  ok('ใส่ต้นทุนแล้ว แต่ยังไม่ออกใบเสร็จ: รายงานยังไม่นับ', rep.sales.totals.jobs === 0, JSON.stringify(rep.sales.totals));
   ok('ใส่ต้นทุนแล้ว: ยอดซื้อรวมของลูกค้า 45,000', (await A.call('GET', `/customers/${c.id}`)).data.totalSales === 45000);
   r = await A.call('PUT', `/projects/${p.id}`, { costGroups: r.data.costGroups.map((g) => ({ ...g, markup: 500 })), costItems: withCosts([12000, 6000]).map((i) => ({ ...i, groupId: r.data.costGroups[0].id })) });
   ok('ส่ง Margin ของหัวข้อมาเอง → ราคายังเป็น 45,000', Math.abs(price(r.data) - 45000) < 0.01, price(r.data));
   r = await A.call('PUT', `/projects/${p.id}`, { costGroups: r.data.costGroups, costItems: withCosts([20000, 10000]).map((i) => ({ ...i, groupId: r.data.costGroups[0].id })) });
-  ok('ต้นทุน 50,000 เกินราคาที่ตกลง → ราคายัง 45,000 และรายงานแสดงขาดทุน 5,000', Math.abs(price(r.data) - 45000) < 0.01 && (await report()).sales.totals.profit === -5000, JSON.stringify([price(r.data), (await report()).sales.totals]));
+  ok('ต้นทุน 50,000 เกินราคาที่ตกลง → ราคายัง 45,000', Math.abs(price(r.data) - 45000) < 0.01, JSON.stringify([price(r.data)]));
 
   r = await A.call('PUT', `/quotes/${q.id}`, { items: [{ description: 'ซุ้มดอกไม้', quantity: 2, unitPrice: 30000 }] });
-  ok('แก้ใบเสนอราคา (60,000 ลด 10% = 54,000) → ราคาโปรเจ็กต์เปลี่ยนตาม กำไรคิดใหม่จากต้นทุน 50,000', r.status === 200 && r.data.jobUpdated === true && (await A.call('GET', `/projects/${p.id}`)).data.agreedPrice === 54000 && (await report()).sales.totals.profit === 4000, JSON.stringify([r.status, r.data.jobUpdated, (await report()).sales.totals]));
+  ok('แก้ใบเสนอราคา (60,000 ลด 10% = 54,000) → ราคาโปรเจ็กต์เปลี่ยนตาม', r.status === 200 && r.data.jobUpdated === true && (await A.call('GET', `/projects/${p.id}`)).data.agreedPrice === 54000, JSON.stringify([r.status, r.data.jobUpdated]));
+  const paidUp = (await A.call('POST', `/quotes/${q.id}/receipt`, { paidDate: '2031-03-20' })).data;
+  rep = await report();
+  ok('ออกใบเสร็จ → รายงานนับยอดจากใบเสร็จ: ขาย 54,000 (ก่อน VAT) ต้นทุน 50,000 กำไร 4,000 ในเดือนที่รับเงิน', rep.sales.totals.jobs === 1 && rep.sales.totals.sales === 54000 && rep.sales.totals.cost === 50000 && rep.sales.totals.profit === 4000 && rep.sales.byMonth[0]?.key === '2031-03', JSON.stringify([rep.sales.totals, rep.sales.byMonth]));
+  await A.call('POST', `/receipts/${paidUp.id}/cancel`);
+  ok('ยกเลิกใบเสร็จ → รายงานไม่นับแล้ว', (await report()).sales.totals.jobs === 0);
   r = await A.call('POST', '/quotes', { clientName: 'คุณว่าง', status: 'approved', items: [] });
   ok('ใบเสนอราคาที่ยังไม่มียอดเงิน → สร้างโปรเจ็กต์ไม่ได้', (await A.call('POST', `/quotes/${r.data.id}/project`)).status === 400);
   await A.call('DELETE', `/quotes/${r.data.id}`);
@@ -877,42 +883,58 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('เดารหัสผ่านปัจจุบันในหน้าตั้งค่าหลายครั้ง ถูกจำกัด (429)', r.status === 429, r.status);
 }
 
-// --- sales report: by month, by customer, date range
+// --- sales report: from the receipts in force, by the day paid; by month, by customer, date range
 {
   const R = client();
   await R.call('POST', '/auth/register', { name: 'ร้านรายงาน', email: 'report@x.test', password: 'password123' });
-  // a job is finished by its receipt; here a finished one is made directly in the database
-  const job = async (title, client, eventDate, price, status = 'approved') => {
-    const made = await R.call('POST', '/projects', { title, projectType: 'อื่นๆ', client, eventDate, profitMargin: 50, status: status === 'completed' ? 'approved' : status, costItems: [{ name: 'x', quantity: 1, price }] });
-    if (status === 'completed') await sql(`UPDATE projects SET status = 'completed' WHERE id = $1`, [made.data.id]);
-    return made;
+  /** a job at 50% on its cost, with its quote approved and (unless told not to) its receipt paid on `paidDate` */
+  const sell = async (title, client, cost, { eventDate = '2025-12-01', paidDate, vatMode = 'exclusive', receipt = true, cancel = false } = {}) => {
+    const p = (await R.call('POST', '/projects', { title, projectType: 'อื่นๆ', client, eventDate, profitMargin: 50, costItems: [{ name: 'x', quantity: 1, price: cost }] })).data;
+    const q = (await R.call('POST', '/quotes', { projectId: p.id, clientName: client, projectTitle: title, vatMode, taxRate: 7 })).data;
+    await R.call('PUT', `/quotes/${q.id}`, { status: 'approved' });
+    if (receipt) {
+      const rc = (await R.call('POST', `/quotes/${q.id}/receipt`, { paidDate })).data;
+      if (cancel) await R.call('POST', `/receipts/${rc.id}/cancel`);
+    }
+    return p;
   };
-  await job('ม.ค. 1', 'คุณเอ', '2026-01-10', 1000);
-  await job('ม.ค. 2', 'คุณบี', '2026-01-20', 2000, 'completed');
-  await job('มี.ค.', 'คุณเอ', '2026-03-05', 4000);
-  await job('ยังไม่ขาย', 'คุณเอ', '2026-03-06', 9000, 'draft');
-  await job('ยกเลิก', 'คุณบี', '2026-03-07', 9000, 'cancelled');
-  await job('ไม่มีชื่อลูกค้า', '', '2026-03-08', 100);
+  // the event is in December 2025; the money comes in in January: the report goes by the day paid
+  await sell('ม.ค. 1', 'คุณเอ', 1000, { paidDate: '2026-01-10' });
+  await sell('ม.ค. 2', 'คุณบี', 2000, { paidDate: '2026-01-20' });
+  await sell('มี.ค.', 'คุณเอ', 4000, { paidDate: '2026-03-05' });
+  await sell('ยังไม่ขาย', 'คุณเอ', 9000, { receipt: false });
+  await sell('ยกเลิกใบเสร็จ', 'คุณบี', 9000, { paidDate: '2026-03-07', cancel: true });
+  // a receipt with no job: no cost to set against it, so it is counted apart
+  const loose = (await R.call('POST', '/quotes', { clientName: 'คุณซี', projectTitle: 'ไม่มีโปรเจ็กต์', status: 'approved', vatMode: 'exclusive', items: [{ description: 'x', quantity: 1, unitPrice: 150 }] })).data;
+  await R.call('POST', `/quotes/${loose.id}/receipt`, { paidDate: '2026-03-08' });
   r = await R.call('GET', '/reports?from=2026-01-01&to=2026-12-31');
   const s = r.data.sales;
-  ok('รายงานยอดขาย: รวมเฉพาะงานที่อนุมัติ/เสร็จสิ้น (ขาย 10,650 ต้นทุน 7,100 กำไร 3,550)', s.totals.jobs === 4 && s.totals.sales === 10650 && s.totals.cost === 7100 && s.totals.profit === 3550, JSON.stringify(s.totals));
-  ok('รายเดือน: ม.ค. 2 งาน 4,500 และ มี.ค. 2 งาน 6,150 เรียงตามเวลา', s.byMonth.length === 2 && s.byMonth[0].key === '2026-01' && s.byMonth[0].sales === 4500 && s.byMonth[0].jobs === 2 && s.byMonth[1].sales === 6150 && s.byMonth[0].month === 'ม.ค. 2569', JSON.stringify(s.byMonth));
-  ok('รายลูกค้า: เรียงจากยอดขายมากสุด (คุณเอ 7,500 · คุณบี 3,000 · ไม่ระบุ 150)', s.byCustomer.map((c) => `${c.name}:${c.sales}`).join() === 'คุณเอ:7500,คุณบี:3000,:150', JSON.stringify(s.byCustomer));
+  ok('รายงานยอดขาย: นับจากใบเสร็จที่ใช้อยู่เท่านั้น (ขาย 10,500 ต้นทุน 7,000 กำไร 3,500) ไม่นับงานที่ยังไม่ออกใบเสร็จและใบเสร็จที่ยกเลิก', s.totals.jobs === 3 && s.totals.sales === 10500 && s.totals.cost === 7000 && s.totals.profit === 3500, JSON.stringify(s.totals));
+  ok('รายเดือน: นับตามวันที่รับเงิน (ม.ค. 2 ใบ 4,500 · มี.ค. 1 ใบ 6,000) ไม่ใช่วันจัดงาน (ธ.ค. 2568)', s.byMonth.length === 2 && s.byMonth[0].key === '2026-01' && s.byMonth[0].sales === 4500 && s.byMonth[0].jobs === 2 && s.byMonth[1].sales === 6000 && s.byMonth[0].month === 'ม.ค. 2569', JSON.stringify(s.byMonth));
+  ok('รายลูกค้า: เรียงจากยอดขายมากสุด (คุณเอ 7,500 · คุณบี 3,000)', s.byCustomer.map((c) => `${c.name}:${c.sales}`).join() === 'คุณเอ:7500,คุณบี:3000', JSON.stringify(s.byCustomer));
   ok('รายลูกค้า: ต้นทุนและกำไรต่อลูกค้า (คุณเอ ต้นทุน 5,000 กำไร 2,500)', s.byCustomer[0].cost === 5000 && s.byCustomer[0].profit === 2500 && s.byCustomer[0].jobs === 2 && !!s.byCustomer[0].customerId);
   ok('ยอดรายเดือนและรายลูกค้ารวมกันเท่ายอดรวม', [s.byMonth, s.byCustomer].every((g) => g.reduce((t, x) => t + x.sales, 0) === s.totals.sales && g.reduce((t, x) => t + x.profit, 0) === s.totals.profit));
+  ok('แต่ละแถวคือใบเสร็จ: วันที่รับเงินและเลขใบเสร็จ', s.jobs.every((j) => /^RE-\d{4}-\d{3}$/.test(j.code)) && s.jobs[0].date === '2026-01-10', JSON.stringify(s.jobs.map((j) => [j.date, j.code])));
+  ok('ใบเสร็จที่ไม่มีโปรเจ็กต์ (ไม่มีต้นทุน) ไม่นับ แต่แจ้งไว้ (1 ใบ 150)', r.data.uncosted.count === 1 && r.data.uncosted.sales === 150, JSON.stringify(r.data.uncosted));
   r = await R.call('GET', '/reports?from=2026-01-15&to=2026-03-05');
-  ok('กรองช่วงวันที่ (15 ม.ค.–5 มี.ค.): รวมวันขอบทั้งสองด้าน', r.data.sales.totals.jobs === 2 && r.data.sales.totals.sales === 9000, JSON.stringify(r.data.sales.totals));
+  ok('กรองช่วงวันที่รับเงิน (15 ม.ค.–5 มี.ค.): รวมวันขอบทั้งสองด้าน', r.data.sales.totals.jobs === 2 && r.data.sales.totals.sales === 9000, JSON.stringify(r.data.sales.totals));
   r = await R.call('GET', '/reports?from=2026-03-01');
-  ok('กำหนดแค่วันเริ่ม', r.data.sales.totals.sales === 6150 && r.data.sales.to === null);
+  ok('กำหนดแค่วันเริ่ม', r.data.sales.totals.sales === 6000 && r.data.sales.to === null);
   r = await R.call('GET', '/reports?from=xx&to=2026-13-99x');
-  ok('วันที่ผิดรูปแบบ → ถือว่าไม่กำหนด ไม่ error', r.status === 200 && r.data.sales.totals.jobs === 4 && r.data.sales.from === null);
+  ok('วันที่ผิดรูปแบบ → ถือว่าไม่กำหนด ไม่ error', r.status === 200 && r.data.sales.totals.jobs === 3 && r.data.sales.from === null);
   r = await R.call('GET', '/reports?from=2030-01-01&to=2030-12-31');
-  ok('ช่วงที่ไม่มีงาน → ว่าง ไม่ error', r.data.sales.totals.jobs === 0 && r.data.sales.byMonth.length === 0 && r.data.totals.projects === 6);
+  ok('ช่วงที่ไม่มีใบเสร็จ → ว่าง ไม่ error · จำนวนโปรเจ็กต์ยังนับจากโปรเจ็กต์ (5)', r.data.sales.totals.jobs === 0 && r.data.sales.byMonth.length === 0 && r.data.totals.projects === 5, JSON.stringify(r.data.totals));
   r = await R.call('GET', '/reports?year=2026');
-  ok('กราฟรายปี: ม.ค.–ธ.ค. ของปีที่เลือก (ม.ค. 4,500 · มี.ค. 6,150 กำไร 2,050)', r.data.chartYear === 2026 && r.data.chart.length === 12 && r.data.chart[0].sales === 4500 && r.data.chart[1].sales === 0 && r.data.chart[2].sales === 6150 && r.data.chart[2].profit === 2050, JSON.stringify(r.data.chart));
-  ok('กราฟรายปี: ปีที่เลือกได้มีปีที่มียอดขาย เรียงจากใหม่ไปเก่า', r.data.chartYears.includes(2026) && r.data.chartYears.every((y, i, all) => i === 0 || all[i - 1] > y), JSON.stringify(r.data.chartYears));
+  ok('กราฟรายปี: ม.ค.–ธ.ค. ของปีที่เลือก ตามวันที่รับเงิน (ม.ค. 4,500 · มี.ค. 6,000 กำไร 2,000)', r.data.chartYear === 2026 && r.data.chart.length === 12 && r.data.chart[0].sales === 4500 && r.data.chart[1].sales === 0 && r.data.chart[2].sales === 6000 && r.data.chart[2].profit === 2000, JSON.stringify(r.data.chart));
+  ok('กราฟรายปี: ปีที่เลือกได้มีปีที่มีใบเสร็จ เรียงจากใหม่ไปเก่า (ไม่มีปีของวันจัดงาน 2025)', r.data.chartYears.includes(2026) && !r.data.chartYears.includes(2025) && r.data.chartYears.every((y, i, all) => i === 0 || all[i - 1] > y), JSON.stringify(r.data.chartYears));
+  ok('ตามสถานะ: ยังนับจากโปรเจ็กต์ (เสร็จสิ้น 3 · อนุมัติแล้ว 1 · ร่าง 1)', r.data.byStatus.find((x) => x.status === 'completed').count === 3 && r.data.byStatus.find((x) => x.status === 'approved').count === 1 && r.data.byStatus.find((x) => x.status === 'draft').count === 1, JSON.stringify(r.data.byStatus));
+  ok('ตามประเภทงาน: งาน 5 · ขายแล้ว 3 ใบ ยอด 10,500', r.data.byType[0].projects === 5 && r.data.byType[0].sold === 3 && r.data.byType[0].sales === 10500, JSON.stringify(r.data.byType));
   r = await R.call('GET', '/reports?year=1999');
   ok('กราฟรายปี: ปีที่ไม่มีให้เลือก → ใช้ปีนี้ ไม่ error', r.status === 200 && r.data.chartYear === new Date().getFullYear() && r.data.chart.length === 12, r.data.chartYear);
+  // prices that include VAT: the report takes the VAT out
+  await sell('รวม VAT', 'คุณดี', 100, { paidDate: '2027-05-05', vatMode: 'inclusive' });
+  r = await R.call('GET', '/reports?from=2027-05-01&to=2027-05-31');
+  ok('ใบที่ราคารวม VAT: ยอดขายก่อน VAT (150 ÷ 1.07 = 140) กำไร 40', r.data.sales.totals.sales === 140 && r.data.sales.totals.cost === 100 && r.data.sales.totals.profit === 40, JSON.stringify(r.data.sales.totals));
   ok('ร้านอื่นไม่เห็นยอดขายของร้านนี้', (await B.call('GET', '/reports?from=2026-01-01&to=2026-12-31')).data.sales.jobs.every((j) => !['ม.ค. 1', 'มี.ค.'].includes(j.title)));
 }
 
@@ -971,11 +993,14 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('หมวดใหม่ "ค่าแรงเจ้าของ" และ "เก็บงาน/ขนส่งกลับ" บันทึกได้', d.costItems[1].category === 'owner_labor' && d.costItems[2].category === 'teardown');
   // (1,000 + 500) × 2 + 4,000 × 1.25 = 8,000 on a cost of 5,500
   ok('markup รวมของงานคิดจากผลรวมทุกหัวข้อ (ราคา 8,000 ÷ ต้นทุน 5,500)', Math.abs(d.profitMargin - (8000 / 5500 - 1) * 100) < 1e-9, String(d.profitMargin));
-  r = await A.call('GET', '/reports?from=2031-05-01&to=2031-05-31');
-  ok('รายงานยอดขายใช้ราคารวมทุกหัวข้อ (ขาย 8,000 ต้นทุน 5,500 กำไร 2,500)', r.data.sales.totals.sales === 8000 && r.data.sales.totals.cost === 5500 && r.data.sales.totals.profit === 2500, JSON.stringify(r.data.sales?.totals));
-  // (making a quote moves the job out of "approved", so the report is checked first)
-  r = await A.call('POST', '/quotes', { projectId: d.id, clientName: 'x', items: [{ description: 'รวม', quantity: 1, unitPrice: 8000 }] });
+  r = await A.call('POST', '/quotes', { projectId: d.id, clientName: 'x', vatMode: 'exclusive', items: [{ description: 'รวม', quantity: 1, unitPrice: 8000 }] });
   ok('ใบเสนอราคาล็อกที่ราคารวมทุกหัวข้อ (8,000)', r.status === 201 && r.data.lockedPrice === 8000, JSON.stringify(r.data?.lockedPrice ?? r.data));
+  // the report counts the job once its receipt is issued; cancelled again, the job goes on without its quote
+  await A.call('PUT', `/quotes/${r.data.id}`, { status: 'approved' });
+  const headingsPaid = (await A.call('POST', `/quotes/${r.data.id}/receipt`, { paidDate: '2031-05-10' })).data;
+  const rr = await A.call('GET', '/reports?from=2031-05-01&to=2031-05-31');
+  ok('รายงานยอดขาย (จากใบเสร็จ) ใช้ราคารวมทุกหัวข้อ (ขาย 8,000 ต้นทุน 5,500 กำไร 2,500)', rr.data.sales.totals.sales === 8000 && rr.data.sales.totals.cost === 5500 && rr.data.sales.totals.profit === 2500, JSON.stringify(rr.data.sales?.totals));
+  await A.call('POST', `/receipts/${headingsPaid.id}/cancel`);
 
   r = await A.call('PUT', `/projects/${d.id}`, {
     costGroups: [{ id: g2.id, name: 'ทีมงานและเก็บงาน', markup: 50 }, { id: -9, name: 'ขนส่ง', markup: 0 }],

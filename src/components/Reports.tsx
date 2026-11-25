@@ -109,12 +109,12 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
           widths: [14, 16, 34, 26, 14, 16, 16, 16, 12],
           boldLastRow: true,
           rows: [
-            ['วันที่จัดงาน', 'รหัส', 'โปรเจ็กต์', 'ลูกค้า', 'สถานะ', 'ยอดขาย (บาท)', 'ต้นทุน (บาท)', 'กำไร (บาท)', 'Margin (%)'],
+            ['วันที่รับเงิน', 'เลขที่ใบเสร็จ', 'โปรเจ็กต์', 'ลูกค้า', 'สถานะ', 'ยอดขาย (บาท)', 'ต้นทุน (บาท)', 'กำไร (บาท)', 'Margin (%)'],
             ...sales.jobs.map((j) => [j.date, j.code, j.title, j.customer || 'ไม่ระบุลูกค้า', j.statusText, j.sales, j.cost, j.profit, Math.round(marginOf(j) * 10) / 10]),
             ['รวม', '', '', '', '', sales.totals.sales, sales.totals.cost, sales.totals.profit, Math.round(marginOf(sales.totals) * 10) / 10],
           ],
         },
-        { name: 'ข้อมูลรายงาน', widths: [22, 44], rows: [['รายการ', 'ค่า'], ['ร้าน', brandName(user)], ['ช่วงวันที่', rangeText], ['นับยอดจาก', 'โปรเจ็กต์ที่อนุมัติแล้วหรือเสร็จสิ้น ตามวันที่จัดงาน'], ['ออกรายงานเมื่อ', new Date().toLocaleString('th-TH')]] },
+        { name: 'ข้อมูลรายงาน', widths: [22, 44], rows: [['รายการ', 'ค่า'], ['ร้าน', brandName(user)], ['ช่วงวันที่', rangeText], ['นับยอดจาก', 'ใบเสร็จที่ออกแล้ว (ยอดก่อน VAT) ตามวันที่รับเงิน'], ['ออกรายงานเมื่อ', new Date().toLocaleString('th-TH')]] },
       ]);
     } catch {
       setError('สร้างไฟล์ Excel ไม่สำเร็จ กรุณาลองใหม่');
@@ -128,7 +128,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
       <div className="p-5 md:p-10 pb-28 md:pb-10">
         <div className="mb-8">
           <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">รายงาน</h1>
-          <p className="text-sm text-ink-muted mt-1">สรุปยอดขายและกำไรจากโปรเจ็กต์ที่อนุมัติ/เสร็จสิ้นแล้วทั้งหมด</p>
+          <p className="text-sm text-ink-muted mt-1">สรุปยอดขายและกำไรจากใบเสร็จที่ออกแล้วทั้งหมด (ยอดก่อน VAT)</p>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-4 md:mb-6">
@@ -143,7 +143,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
               <div>
                 <h3 className="text-base md:text-lg text-ink mb-1 font-semibold">ยอดขายและกำไรรายเดือน</h3>
-                <p className="text-sm text-ink-muted">นับตามวันที่จัดงาน</p>
+                <p className="text-sm text-ink-muted">นับตามวันที่รับเงินในใบเสร็จ</p>
               </div>
               <div className="flex items-center gap-2">
                 <select
@@ -205,7 +205,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
           <div className="flex flex-col lg:flex-row justify-between items-start gap-4 mb-5">
             <div>
               <h3 className="text-base md:text-lg font-semibold text-ink">รายงานยอดขาย</h3>
-              <p className="text-sm text-ink-muted">ยอดขาย ต้นทุน และกำไร จากโปรเจ็กต์ที่อนุมัติ/เสร็จสิ้น นับตามวันที่จัดงาน</p>
+              <p className="text-sm text-ink-muted">ยอดขาย ต้นทุน และกำไร จากใบเสร็จที่ออกแล้ว นับตามวันที่รับเงิน</p>
             </div>
             <button onClick={exportExcel} disabled={exporting} className="pb-btn-secondary shrink-0 disabled:opacity-60">
               <Download className="w-4 h-4" />
@@ -214,7 +214,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
           </div>
 
           <div className="flex flex-col lg:flex-row lg:items-center gap-3 mb-5">
-            <DateRange label="วันที่จัดงาน" from={range.from} to={range.to} onChange={(from, to) => setRange({ from, to })} />
+            <DateRange label="วันที่รับเงิน" from={range.from} to={range.to} onChange={(from, to) => setRange({ from, to })} />
             <div className="no-scrollbar flex gap-1 overflow-x-auto">
               {presets().map((p) => {
                 const active = p.from === range.from && p.to === range.to;
@@ -263,7 +263,7 @@ export function Reports({ user, onOpenProject }: ReportsProps) {
 
           {data.uncosted.count > 0 && (
             <p className="mb-4 px-4 py-3 rounded-2xl bg-amber-50 text-amber-700 text-sm">
-              มี {data.uncosted.count} งานที่ลูกค้าตกลงแล้วแต่ยังไม่ได้ใส่ต้นทุน (ราคารวม {baht(data.uncosted.sales)}) ยังไม่นับในรายงาน จนกว่าจะใส่ต้นทุน
+              มีใบเสร็จ {data.uncosted.count} ใบที่งานยังไม่ได้ใส่ต้นทุน (ยอดรวม {baht(data.uncosted.sales)}) ยังไม่นับในรายงาน จนกว่าจะใส่ต้นทุนที่โปรเจ็กต์
             </p>
           )}
 
