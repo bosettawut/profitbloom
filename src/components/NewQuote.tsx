@@ -72,6 +72,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const [job, setJob] = useState<Quote['job'] | null>(null);
   /** something on the form was typed or chosen since it was opened or last saved */
   const touched = useRef(false);
+  /** the next render holds the quote as saved (just loaded, or just saved) */
+  const takeBaseline = useRef(false);
 
   // One line per heading of the job, named after it and priced at what the heading sells for in whole baht, adding up
   // to the job's price: the customer sees the headings and not the costs inside them (see quoteLinesFromJob).
@@ -104,6 +106,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const load = (id: string) =>
     api.quote(id)
       .then(q => {
+        // what is about to be put in the form is what is saved: it becomes the baseline for "anything changed?"
+        takeBaseline.current = true;
         setSavedId(q.id);
         setQuoteCode(q.code);
         setStatus(q.status);
@@ -184,6 +188,24 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const dueDate = quoteData.creditDays > 0 && quoteData.eventDate ? new Date(Date.parse(quoteData.eventDate + 'T00:00:00Z') + quoteData.creditDays * 864e5) : null;
 
   const { subtotal, discount, afterDiscount, beforeVat, vat: tax, total: grandTotal, rate: vatRate, withholding, payable } = quoteTotals({ items: quoteItems, discountRate, taxRate, vatMode, rounding, whtRate });
+
+  /**
+   * Everything a save sends, to tell whether the form differs from the quote as it was last saved. The save button
+   * is only live when it does, or when the quote has never been saved; changing something back makes it idle again.
+   */
+  const current = JSON.stringify({
+    quoteData, customerId, taxRate, discountRate, whtRate, vatMode, rounding,
+    items: quoteItems.map(({ description, quantity, unit, unitPrice, roundUp }) => ({ description, quantity, unit: unit ?? '', unitPrice, roundUp: !!roundUp })),
+  });
+  const [saved, setSaved] = useState<string | null>(null);
+  useEffect(() => {
+    // the render after a quote is loaded or saved shows it as saved
+    if (!takeBaseline.current) return;
+    takeBaseline.current = false;
+    setSaved(current);
+  });
+  const changed = !savedId || saved === null || current !== saved;
+  const saveTitle = changed ? undefined : 'บันทึกแล้ว ยังไม่มีการแก้ไข';
   // show the satang only when some amount on this quote has any, so a whole-baht quote stays clean
   const showSatang = rounding !== 'baht' && [subtotal, discount, tax, grandTotal, withholding, ...quoteItems.map((i) => i.total)].some((n) => !Number.isInteger(n));
   const money = (n: number) => baht(n, showSatang ? 2 : 0);
@@ -285,6 +307,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       setJob(saved.job ?? null);
       if (saved.followsProject) setQuoteItems(saved.items);
       touched.current = false;
+      takeBaseline.current = true;
       if (saved.projectId) onProjectChanged?.(saved.projectId);
       return saved;
     } catch (err) {
@@ -440,7 +463,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             <X className="w-4 h-4" />
             ปิดหน้าต่าง
           </button>
-          <button onClick={handleSave} disabled={saving} className="pb-btn-primary !hidden md:!inline-flex md:min-w-[12rem] disabled:opacity-60">
+          <button onClick={handleSave} disabled={saving || !changed} title={saveTitle} className="pb-btn-primary !hidden md:!inline-flex md:min-w-[12rem] disabled:opacity-60 disabled:cursor-not-allowed">
             <Save className="w-4 h-4" />
             {saving ? 'กำลังบันทึก...' : 'บันทึกใบเสนอราคา'}
           </button>
@@ -1038,7 +1061,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       </div>
 
       {/* on a phone the save button sits at the end of the form, where the thumb is */}
-      <button onClick={handleSave} disabled={saving} className="pb-btn-primary w-full mt-5 md:!hidden disabled:opacity-60">
+      <button onClick={handleSave} disabled={saving || !changed} title={saveTitle} className="pb-btn-primary w-full mt-5 md:!hidden disabled:opacity-60 disabled:cursor-not-allowed">
         <Save className="w-4 h-4" />
         {saving ? 'กำลังบันทึก...' : 'บันทึกใบเสนอราคา'}
       </button>
