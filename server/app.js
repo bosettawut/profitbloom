@@ -644,6 +644,8 @@ async function serializeProject(p) {
     eventDate: p.event_date || '',
     budget: p.budget,
     notes: p.notes,
+    /** for the shop's own eyes: shared with the internal note of the job's quote, never printed */
+    internalNote: p.internal_note ?? '',
     status: p.status,
     statusText: PROJECT_STATUS[p.status] || p.status,
     profitMargin: p.profit_margin,
@@ -695,6 +697,7 @@ function readProjectBody(body, existing, categories = COST_CATEGORIES) {
     event_date: date(body.eventDate),
     budget: num(body.budget, { min: 0 }),
     notes: str(body.notes, 5000),
+    internal_note: str(body.internalNote, 2000),
     profit_margin: num(body.profitMargin ?? 30, { min: 0, max: 1000 }),
     deposit_pct: num(body.depositPct ?? 30, { min: 0, max: 100 }),
     setup_days: num(body.setupDays ?? 1, { min: 0, max: 60 }),
@@ -812,6 +815,14 @@ const SHARED_DETAILS = [
 const JOB_DETAILS = [...SHARED_DETAILS, ['event_date', 'event_date', 'วันที่จัดงาน', false]];
 const detail = (v) => v ?? '';
 
+/**
+ * The note for the shop's own eyes, shared by a job and the quote its page opens. It is never printed, so it moves
+ * between them without asking, whatever the quote's status, and even while the quote has a receipt in force.
+ */
+async function shareInternalNote(table, id, note) {
+  await db.prepare(`UPDATE ${table === 'quotes' ? 'quotes' : 'projects'} SET internal_note = ?, updated_at = ${NOW} WHERE id = ?`).run(note, id);
+}
+
 /** the details a save of a job changed that its quote does not hold yet, as the quote is to take them */
 function jobDetailChanges(existing, d, quote) {
   if (!quote) return [];
@@ -839,10 +850,10 @@ app.post('/api/projects', route(async (req, res) => {
     await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
-                  deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+                  deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown, internal_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
-        d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown);
+        d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.internal_note);
     await replaceCosts(Number(lastInsertRowid), d);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่ - ${d.title}`, 'เพิ่มแล้ว');
     return await getProject(req.user.id, lastInsertRowid);
@@ -870,11 +881,11 @@ app.put('/api/projects/:id', route(async (req) => {
     const before = ['costItems', 'costGroups', 'profitMargin'].some((k) => k in req.body) ? await jobQuoteLines(existing.id) : null;
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
     await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
-    await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
+    await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, internal_note=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
                   reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
+      .run(customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.internal_note, d.status || existing.status, d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.review_applied,
         d.review_applied, existing.id, req.user.id);
     // a caller that sends one markup for the job, and no headings, means it for every heading
@@ -887,6 +898,7 @@ app.put('/api/projects/:id', route(async (req) => {
       confirmed: req.body.confirmQuoteChange === true,
     });
     quoteUpdated = synced.changed;
+    if (ownQuote && detail(d.internal_note) !== detail(existing.internal_note) && detail(ownQuote.internal_note) !== detail(d.internal_note)) await shareInternalNote('quotes', ownQuote.id, d.internal_note);
     // the customer turned the quote down and the job's prices have now been changed: it is a new offer, not yet sent
     if (synced.lines && existing.status === 'rejected' && nextStatus === 'rejected') await reviseRejected(req.user.id, existing.id);
     if (d.status && d.status !== existing.status) {
@@ -1157,7 +1169,7 @@ async function syncJobQuote(quote, { changes = [], lines = false, customerId = n
  * the quote's price, since it is changed on the quote. Says whether the job changed, and whether its price did.
  */
 async function syncJobFromQuote(job, quoteId, before, d, customerId) {
-  const changes = SHARED_DETAILS.filter(([pk, qk, , required]) =>
+  const changes = [...SHARED_DETAILS, ['internal_note', 'internal_note', 'โน้ตภายใน', false]].filter(([pk, qk, , required]) =>
     ((required || !before) ? !!detail(d[qk]) : true) && (!before || detail(d[qk]) !== detail(before[qk])) && detail(job[pk]) !== detail(d[qk]));
   const sets = changes.map(([pk]) => `${pk} = ?`);
   const values = changes.map(([, qk]) => d[qk]);
@@ -1238,10 +1250,10 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
     const code = await nextCode('projects', req.user.id, 'EV');
     const status = QUOTE_TO_PROJECT_STATUS[quote.status] || 'approved';
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, notes, status, profit_margin, deposit_pct, agreed_price)
-                VALUES (?, ?, ?, ?, 'อื่นๆ', ?, ?, ?, ?, ?, ?, 0, ?, ?) RETURNING id`)
+      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, notes, status, profit_margin, deposit_pct, agreed_price, internal_note)
+                VALUES (?, ?, ?, ?, 'อื่นๆ', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, quote.customer_id, title, quote.client_name, quote.client_phone, quote.client_email, quote.event_date, quote.notes, status,
-        Number.isFinite(rules.depositPct) ? rules.depositPct : 30, afterDiscount);
+        Number.isFinite(rules.depositPct) ? rules.depositPct : 30, afterDiscount, quote.internal_note ?? '');
     const projectId = Number(lastInsertRowid);
     await replaceCosts(projectId, {
       profit_margin: 0,
@@ -1273,6 +1285,8 @@ app.post('/api/quotes', route(async (req, res) => {
     // newest quote, which this one becomes. Either way the quote shares the job's details, and its event date is the job's.
     const job = d.project_id ? await db.prepare('SELECT * FROM projects WHERE id = ?').get(d.project_id) : null;
     if (job) d.event_date = job.event_date;
+    // and its note for the shop, unless one was written for it
+    if (job && !d.internal_note) d.internal_note = job.internal_note ?? '';
     const follows = !!job && job.agreed_price === null;
     let lockedPrice = null;
     if (follows) {
@@ -1347,6 +1361,21 @@ app.put('/api/quotes/:id', route(async (req) => {
     }
   });
   return { ...(await serializeQuote(await getQuote(req.user.id, existing.id), { withJob: true })), jobUpdated };
+}));
+
+/**
+ * The note for the shop's own eyes on a quote, on its own: it can be changed even while the quote has a receipt in
+ * force (it is never printed), and the quote's job takes it too.
+ */
+app.put('/api/quotes/:id/internal-note', route(async (req) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  const note = str(req.body?.internalNote, 2000);
+  await transaction(async () => {
+    await shareInternalNote('quotes', quote.id, note);
+    const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
+    if (job && detail(job.internal_note) !== detail(note)) await shareInternalNote('projects', job.id, note);
+  });
+  return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
 }));
 
 // A quote tied to its job normally keeps up by itself. One made before the two were tied may still hold its old

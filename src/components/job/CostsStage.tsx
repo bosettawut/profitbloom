@@ -410,6 +410,23 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
           </div>
         </div>
       </div>
+
+      {/* the shop's own note on the job: never printed, and shared with the internal note of the job's quote */}
+      <div className="pb-card p-5 md:p-6">
+        <h3 className="text-base md:text-lg font-semibold text-ink">โน้ตภายในบริษัท</h3>
+        <p className="text-sm text-ink-muted mb-4">
+          ไม่แสดงในใบเสนอราคา{draft.quote ? ` · ใช้ร่วมกับโน้ตภายในของใบเสนอราคา ${draft.quote.code} แก้ที่ไหนก็ได้ อีกฝั่งเปลี่ยนตามเมื่อบันทึก` : ' · สร้างใบเสนอราคาแล้วโน้ตนี้จะติดไปด้วย'}
+        </p>
+        <textarea
+          className="pb-input"
+          aria-label="โน้ตภายในบริษัท"
+          rows={3}
+          maxLength={2000}
+          value={draft.internalNote ?? ''}
+          placeholder="เช่น ร้านดอกไม้เจ้าประจำให้ราคาพิเศษ หรือข้อตกลงที่คุยกับลูกค้าไว้"
+          onChange={(e) => patch({ internalNote: e.target.value })}
+        />
+      </div>
       {headingPrompt.node}
     </div>
   );

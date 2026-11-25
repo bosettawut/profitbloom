@@ -26,8 +26,8 @@ const steps = [
   { id: 3, title: 'เช็คสุขภาพงาน' },
 ];
 
-/** A new job opens with two headings of four empty rows; the name box of each shows one of these typical items in grey. */
-const STARTER_HINTS = ['เช่น โอเอซิส', 'เช่น ค่าแรง', 'เช่น ค่าขนส่ง', 'เช่น กุหลาบขาว'];
+/** A new job opens with two headings of two empty rows; the name box of each shows one of these typical items in grey. */
+const STARTER_HINTS = ['เช่น กุหลาบขาว', 'เช่น ค่าแรง'];
 
 /** The step the browser's current history entry stands for: "ถัดไป" adds an entry per step, so the browser's back button goes one step back. */
 const stepOfEntry = (): number => {
@@ -40,6 +40,7 @@ function blankDraft(rules: ReturnType<typeof rulesOf>, costGroups: Project['cost
   return {
     id: 'new',
     customerId: null,
+    internalNote: '',
     code: '',
     title: '',
     projectType: 'งานแต่งงาน',

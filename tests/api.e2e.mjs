@@ -1266,6 +1266,45 @@ ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
   for (const id of [job.id, made.id]) await A.call('DELETE', `/projects/${id}`);
 }
 
+// --- the shop's own note on a job, shared with the internal note of its quote (never printed)
+{
+  let r = await A.call('POST', '/projects', { title: 'งานโน้ตภายใน', projectType: 'อื่นๆ', client: 'คุณโน้ต', internalNote: 'ร้านดอกไม้เจ้าประจำลด 10%', profitMargin: 50, costItems: [{ name: 'ดอกไม้', category: 'material', quantity: 1, price: 1000 }] });
+  const job = r.data;
+  ok('โปรเจ็กต์มีโน้ตภายในบริษัท', r.status === 201 && job.internalNote === 'ร้านดอกไม้เจ้าประจำลด 10%', JSON.stringify(job.internalNote));
+  r = await A.call('PUT', `/projects/${job.id}`, { internalNote: 'x'.repeat(2500) });
+  ok('โน้ตภายในยาวเกิน → 2,000 ตัว', r.data.internalNote.length === 2000, r.data.internalNote.length);
+  await A.call('PUT', `/projects/${job.id}`, { internalNote: 'ร้านดอกไม้เจ้าประจำลด 10%' });
+  r = await A.call('POST', '/quotes', { projectId: job.id, clientName: 'คุณโน้ต', projectTitle: job.title });
+  const q = r.data;
+  ok('สร้างใบเสนอราคาจากโปรเจ็กต์ → โน้ตภายในติดไปด้วย', r.status === 201 && q.internalNote === 'ร้านดอกไม้เจ้าประจำลด 10%', JSON.stringify(q.internalNote));
+  r = await A.call('PUT', `/projects/${job.id}`, { internalNote: 'แก้ที่โปรเจ็กต์' });
+  ok('แก้โน้ตที่โปรเจ็กต์ → ใบเสนอราคาเปลี่ยนตาม', r.status === 200 && (await A.call('GET', `/quotes/${q.id}`)).data.internalNote === 'แก้ที่โปรเจ็กต์');
+  r = await A.call('PUT', `/quotes/${q.id}`, { internalNote: 'แก้ที่ใบเสนอราคา' });
+  ok('แก้โน้ตที่ใบเสนอราคา → โปรเจ็กต์เปลี่ยนตาม', r.status === 200 && (await A.call('GET', `/projects/${job.id}`)).data.internalNote === 'แก้ที่ใบเสนอราคา');
+  await A.call('PUT', `/quotes/${q.id}`, { status: 'sent' });
+  r = await A.call('PUT', `/projects/${job.id}`, { internalNote: 'หลังส่งใบแล้ว' });
+  ok('ใบส่งแล้ว: แก้โน้ตที่โปรเจ็กต์ไม่ต้องยืนยัน (ไม่พิมพ์ในใบ) ใบเปลี่ยนตาม', r.status === 200 && (await A.call('GET', `/quotes/${q.id}`)).data.internalNote === 'หลังส่งใบแล้ว', JSON.stringify([r.status, r.data.error]));
+
+  // with its receipt in force the quote cannot change, but the note for the shop still can
+  await A.call('PUT', `/quotes/${q.id}`, { status: 'approved' });
+  const rc = (await A.call('POST', `/quotes/${q.id}/receipt`, {})).data;
+  r = await A.call('PUT', `/projects/${job.id}`, { internalNote: 'หลังรับเงิน (โปรเจ็กต์)' });
+  ok('มีใบเสร็จแล้ว: แก้โน้ตที่โปรเจ็กต์ได้ ใบเสนอราคาเปลี่ยนตาม', r.status === 200 && (await A.call('GET', `/quotes/${q.id}`)).data.internalNote === 'หลังรับเงิน (โปรเจ็กต์)', JSON.stringify([r.status, r.data.error]));
+  const put = await A.call('PUT', `/quotes/${q.id}`, { internalNote: 'ผ่านการแก้ใบตามปกติ' });
+  r = await A.call('PUT', `/quotes/${q.id}/internal-note`, { internalNote: 'หลังรับเงิน (ใบ)' });
+  ok('มีใบเสร็จแล้ว: แก้ใบตามปกติไม่ได้ แต่แก้โน้ตภายในของใบได้ และโปรเจ็กต์เปลี่ยนตาม', put.status === 400 && r.status === 200 && r.data.internalNote === 'หลังรับเงิน (ใบ)' && (await A.call('GET', `/projects/${job.id}`)).data.internalNote === 'หลังรับเงิน (ใบ)', JSON.stringify([put.status, r.status, r.data.internalNote]));
+  ok('ร้านอื่นแก้โน้ตภายในของใบร้านนี้ไม่ได้', (await B.call('PUT', `/quotes/${q.id}/internal-note`, { internalNote: 'แอบแก้' })).status === 404 && (await A.call('GET', `/quotes/${q.id}`)).data.internalNote === 'หลังรับเงิน (ใบ)');
+  await A.call('POST', `/receipts/${rc.id}/cancel`);
+
+  // a job made from a quote takes the quote's note
+  r = await A.call('POST', '/quotes', { clientName: 'คุณใบก่อนโน้ต', projectTitle: 'งานจากใบมีโน้ต', status: 'approved', internalNote: 'โน้ตจากใบ', items: [{ description: 'ซุ้ม', quantity: 1, unitPrice: 3000 }] });
+  const sq = r.data;
+  const made = (await A.call('POST', `/quotes/${sq.id}/project`)).data;
+  ok('สร้างโปรเจ็กต์จากใบเสนอราคา → โปรเจ็กต์ได้โน้ตภายในของใบ', made.internalNote === 'โน้ตจากใบ', JSON.stringify(made.internalNote));
+  for (const id of [q.id, sq.id]) await A.call('DELETE', `/quotes/${id}`);
+  for (const id of [job.id, made.id]) await A.call('DELETE', `/projects/${id}`);
+}
+
 r = await A.call('POST', '/auth/logout');
 r = await A.call('GET', '/auth/me');
 ok('logout แล้ว me = null', r.data.user === null);

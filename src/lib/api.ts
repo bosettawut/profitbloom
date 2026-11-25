@@ -141,6 +141,8 @@ export interface Project {
   phone: string;
   email: string;
   notes: string;
+  /** for the shop's own eyes: shared with the internal note of the job's quote, never printed */
+  internalNote: string;
   createdDate: string;
   projectType: string;
   costGroups: CostGroup[];
@@ -452,6 +454,8 @@ export const api = {
   receipts: () => request<Receipt[]>('GET', '/receipts'),
   receipt: (id: string) => request<Receipt>('GET', `/receipts/${id}`),
   cancelReceipt: (id: string) => request<Receipt>('POST', `/receipts/${id}/cancel`),
+  /** a quote's note for the shop alone: allowed even while it has a receipt in force; its job takes it too */
+  updateQuoteNote: (id: string, internalNote: string) => request<Quote>('PUT', `/quotes/${id}/internal-note`, { internalNote }),
   createQuote: (body: QuoteInput) => request<Quote>('POST', '/quotes', body),
   updateQuote: (id: string, body: QuoteInput) => request<Quote>('PUT', `/quotes/${id}`, body),
   /** brings a quote tied to a job into line with the job as it stands (for one made before the two were tied) */
