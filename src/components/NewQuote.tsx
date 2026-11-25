@@ -144,9 +144,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   }, [quoteId, startInPreview]);
 
   useEffect(() => {
-    // A job has one quote tied to it. When this form is opened for a job that already has its quote (reached again
-    // with the browser's back button, say), that quote is what opens, not the start of a second one.
-    if (quoteId || !fromProject || fromProject.agreedPrice != null) return;
+    // A job has one quote. When this form is opened for a job that already has it (reached again with the browser's
+    // back button, say), that quote is what opens, not the start of a second one; for a job made from a quote, that is
+    // the quote it was made from.
+    if (quoteId || !fromProject) return;
     let stale = false;
     api.project(fromProject.id)
       .then((p) => {

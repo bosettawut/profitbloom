@@ -355,12 +355,14 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
 
   // --- a job made from a quote is the other way round: its price is settled, and a quote for it is only held to that price
   r = await make({ taxRate: 7, status: 'approved', items: line(1500) });
-  r = await A.call('POST', `/quotes/${r.data.id}/project`);
+  const sourceQ = r.data;
+  r = await A.call('POST', `/quotes/${sourceQ.id}/project`);
   const settled = r.data;
+  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: หน้างานเปิดใบต้นทางได้ (quote = ใบที่สร้างงานนี้ขึ้นมา)', settled.quote?.id === sourceQ.id && settled.quote.code === sourceQ.code && settled.quote.status === 'approved', JSON.stringify(settled.quote));
   r = await make({ projectId: settled.id, items: line(1500) });
   const lq = r.data;
   ok('ใบที่ไม่ได้ผูกกับโปรเจ็กต์ สั่งอัปเดตตามโปรเจ็กต์ไม่ได้ (400)', (await A.call('POST', `/quotes/${lq.id}/sync`)).status === 400);
-  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: ใบของโปรเจ็กต์นี้ไม่ตามโปรเจ็กต์ แค่ล็อกราคาที่ตกลงไว้ (1,500)', r.status === 201 && lq.followsProject === false && lq.lockedPrice === 1500 && settled.agreedPrice === 1500 && settled.quote === null, JSON.stringify([r.status, lq.followsProject, lq.lockedPrice, settled.agreedPrice, settled.quote]));
+  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: ใบของโปรเจ็กต์นี้ไม่ตามโปรเจ็กต์ แค่ล็อกราคาที่ตกลงไว้ (1,500)', r.status === 201 && lq.followsProject === false && lq.lockedPrice === 1500 && settled.agreedPrice === 1500, JSON.stringify([r.status, lq.followsProject, lq.lockedPrice, settled.agreedPrice, settled.quote]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 1, unitPrice: 1000 }, { description: 'ค่าแรง', quantity: 2, unitPrice: 250 }] });
   ok('แก้รายการได้ ถ้ายอดรวมยังเท่าราคาที่ล็อก', r.status === 200 && r.data.items.length === 2 && r.data.totalAmount === 1605, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: line(1400) });
@@ -440,6 +442,14 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ตั้งกลับเป็น 0 = ไม่หัก', r.status === 200 && r.data.withholding === 0 && r.data.payableAmount === r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { whtRate: 3 });
   ok('หัก ณ ที่จ่ายไม่กระทบราคาที่ล็อก: ยังบันทึกได้ และหัก 3% ของ 1,500 = 45', r.status === 200 && r.data.withholding === 45 && r.data.payableAmount === 1560, JSON.stringify([r.status, r.data.withholding, r.data.payableAmount]));
+  // the quote that job's page opens: the newest for it; with none left, the page offers to make one again
+  job = (await A.call('GET', `/projects/${settled.id}`)).data;
+  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคาและมีใบเสนอราคามากกว่าหนึ่งใบ: หน้างานเปิดใบล่าสุด', job.quote?.id === lq.id, JSON.stringify(job.quote));
+  await A.call('DELETE', `/quotes/${lq.id}`);
+  const backToSource = (await A.call('GET', `/projects/${settled.id}`)).data.quote;
+  await A.call('DELETE', `/quotes/${sourceQ.id}`);
+  job = (await A.call('GET', `/projects/${settled.id}`)).data;
+  ok('ลบใบล่าสุด → กลับไปเปิดใบต้นทาง · ลบทุกใบ → ไม่มีใบให้เปิด (หน้างานกลับมีปุ่มสร้างใบเสนอราคา)', backToSource?.id === sourceQ.id && job.quote === null && job.agreedPrice === 1500, JSON.stringify([backToSource, job.quote, job.agreedPrice]));
   for (const id of [lp.id, settled.id]) await A.call('DELETE', `/projects/${id}`);
   for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
 }

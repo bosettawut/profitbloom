@@ -589,9 +589,9 @@ async function nextCode(table, userId, prefix) {
 async function serializeProject(p) {
   const items = await db.prepare('SELECT * FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(p.id);
   const groups = await db.prepare('SELECT * FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(p.id);
-  const quote = await followingQuote(p.id);
+  const quote = await jobQuote(p);
   return {
-    /** the quote tied to this job: its lines and price are the job's and change when the job is saved (null until one is made) */
+    /** the quote the job's page opens (null until there is one): see jobQuote */
     quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status } : null,
     id: String(p.id),
     code: p.code,
@@ -943,6 +943,16 @@ async function lockedPriceOf(projectId) {
 async function followingQuote(projectId) {
   if (!projectId) return undefined;
   return db.prepare('SELECT * FROM quotes WHERE project_id = ? AND follows_project = 1').get(projectId);
+}
+
+/**
+ * The quote a job's page opens instead of offering to make one. For an ordinary job it is the quote tied to it.
+ * A job made from a quote has none tied to it: its price was settled by that quote, so it is the newest quote for
+ * the job, which is as a rule the one it was made from. Null when the job has no quote (it was never made, or deleted).
+ */
+async function jobQuote(p) {
+  if (p.agreed_price === null) return followingQuote(p.id);
+  return db.prepare('SELECT * FROM quotes WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(p.id);
 }
 
 /** what a job's quote should hold right now: one line per heading, and the price they come to */
