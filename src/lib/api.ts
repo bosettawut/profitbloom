@@ -142,8 +142,9 @@ export interface Project {
   /** set when the job was made from an accepted quote: its price is fixed at this amount */
   agreedPrice: number | null;
   /**
-   * The quote tied to this job (null until one is made). Its lines and price are the job's: they are changed here,
-   * in the job, and the quote follows when the job is saved. A job made from a quote has none.
+   * The quote the job's page opens, instead of offering to make one (null while there is none). For an ordinary job
+   * it is the quote tied to it: its lines and price are the job's, are changed here, and follow when the job is saved.
+   * For a job made from a quote it is that quote (the newest for the job): its price settled the job's, it is not tied.
    */
   quote?: { id: string; code: string; status: QuoteStatus; statusText: string } | null;
   depositPct: number;
