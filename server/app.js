@@ -1472,21 +1472,31 @@ app.get('/api/receipts/:id', route(async (req) => serializeReceipt(await getRece
  */
 app.post('/api/quotes/:id/receipt', route(async (req, res) => {
   const quote = await getQuote(req.user.id, req.params.id);
+  const receipt = await issueReceipt(req.user.id, quote, { paidDate: req.body?.paidDate, paymentMethod: req.body?.paymentMethod });
+  res.status(201);
+  return serializeReceipt(receipt);
+}));
+
+/**
+ * Issues the receipt for an approved quote of a shop (`quote` is its row) and returns the receipt's row; the quote's
+ * job is finished by it. Used by the quote's page and by server/backfill-receipts.js, so both follow the same rules.
+ */
+export async function issueReceipt(userId, quote, { paidDate: askedDate, paymentMethod } = {}) {
   if (quote.status !== 'approved') throw new HttpError(400, 'ออกใบเสร็จได้เมื่อใบเสนอราคาอนุมัติแล้ว');
   const issued = await receiptInForce(quote.id);
   if (issued) throw new HttpError(400, `ใบเสนอราคานี้ออกใบเสร็จ ${issued.code} แล้ว`);
   if (!((await quotePrice(quote)) > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนออกใบเสร็จ');
-  const paidDate = date(req.body?.paidDate) || bangkokToday();
-  const method = PAYMENT_METHODS[req.body?.paymentMethod] ? req.body.paymentMethod : 'transfer';
+  const paidDate = date(askedDate) || bangkokToday();
+  const method = PAYMENT_METHODS[paymentMethod] ? paymentMethod : 'transfer';
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
-  const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
-  const receipt = await transaction(async () => {
-    const code = await nextCode('receipts', req.user.id, 'RE');
+  const job = await jobOfQuote(userId, quote.id, quote.project_id);
+  return transaction(async () => {
+    const code = await nextCode('receipts', userId, 'RE');
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO receipts (user_id, code, quote_id, project_id, customer_id, quote_code, client_name, client_phone, client_email, client_address, client_tax_id, client_branch,
                   project_title, reference_no, event_date, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, paid_date, payment_method)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
-      .run(req.user.id, code, quote.id, quote.project_id, quote.customer_id, quote.code, quote.client_name, quote.client_phone, quote.client_email, quote.client_address, quote.client_tax_id, quote.client_branch,
+      .run(userId, code, quote.id, quote.project_id, quote.customer_id, quote.code, quote.client_name, quote.client_phone, quote.client_email, quote.client_address, quote.client_tax_id, quote.client_branch,
         quote.project_title, quote.reference_no, quote.event_date, quote.notes, quote.tax_rate, quote.discount_rate, quote.wht_rate, quote.vat_mode, ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht', paidDate, method);
     const receiptId = Number(lastInsertRowid);
     const ins = db.prepare('INSERT INTO receipt_items (receipt_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -1494,14 +1504,21 @@ app.post('/api/quotes/:id/receipt', route(async (req, res) => {
     // the money is in: the job is finished
     if (job && job.status !== 'completed') {
       await db.prepare(`UPDATE projects SET status = 'completed', updated_at = ${NOW} WHERE id = ?`).run(job.id);
-      await logActivity(req.user.id, 'project_completed', `โปรเจ็กต์ ${job.title}`, `${PROJECT_STATUS.completed} (ใบเสร็จ ${code})`);
+      await logActivity(userId, 'project_completed', `โปรเจ็กต์ ${job.title}`, `${PROJECT_STATUS.completed} (ใบเสร็จ ${code})`);
     }
-    await logActivity(req.user.id, 'receipt_created', `ใบเสร็จ ${code}`, `จากใบเสนอราคา ${quote.code}`);
-    return getReceipt(req.user.id, receiptId);
+    await logActivity(userId, 'receipt_created', `ใบเสร็จ ${code}`, `จากใบเสนอราคา ${quote.code}`);
+    return getReceipt(userId, receiptId);
   });
-  res.status(201);
-  return serializeReceipt(receipt);
-}));
+}
+
+/** the quote a job's page opens, for a script that has the job's row (see jobQuote) */
+export const quoteOfJob = (p) => jobQuote(p);
+/** what a quote comes to: its subtotal, discount, amount before VAT, VAT and total (for a script's listing) */
+export async function amountOfQuote(q) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
+  const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
+  return quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding });
+}
 
 /**
  * Cancels a receipt. It stays, with its number, marked cancelled. Its quote is cancelled with it and leaves its job,
@@ -1615,6 +1632,45 @@ app.get('/api/activities', route(async (req) =>
  * by month, by customer and job by job. A job's day is its event date, or the day it was created
  * when no event date is set. Either bound may be left out.
  */
+/**
+ * The money that came in, for the report page: one row per receipt in force, on the day it was paid. Its sales are
+ * the receipt's amount after the discount and before VAT (VAT is not the shop's; withholding tax does not lower the
+ * sale); its cost is its job's, counted as everywhere else. A receipt whose job has no costs yet, or that has no job,
+ * is left out of the figures and counted apart (as uncosted), so it does not show as all profit.
+ */
+async function receiptFinancials(userId) {
+  const jobs = new Map((await projectFinancials(userId)).map((p) => [p.id, p]));
+  const receipts = await db.prepare(`SELECT * FROM receipts WHERE user_id = ? AND status = 'issued' ORDER BY id`).all(userId);
+  return Promise.all(
+    receipts.map(async (r) => {
+      const items = await db.prepare('SELECT quantity, unit_price, round_up FROM receipt_items WHERE receipt_id = ?').all(r.id);
+      const rounding = ROUNDINGS.includes(r.rounding) ? r.rounding : 'baht';
+      // before VAT: for prices that include VAT, the VAT is taken out
+      const sales = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: r.discount_rate, taxRate: r.tax_rate, vatMode: r.vat_mode, rounding }).beforeVat;
+      const job = r.project_id ? jobs.get(r.project_id) : null;
+      const cost = job ? job.cost : 0;
+      const uncosted = !(cost > 0);
+      const day = (r.paid_date || r.created_at).slice(0, 10);
+      return {
+        id: r.id,
+        code: r.code,
+        title: r.project_title || job?.title || '',
+        project_type: job?.project_type ?? 'อื่นๆ',
+        customer_id: r.customer_id,
+        client: r.client_name,
+        status: job?.status ?? 'completed',
+        day,
+        month: day.slice(0, 7),
+        sales,
+        cost,
+        profit: sales - cost,
+        sold: !uncosted,
+        uncosted,
+      };
+    }),
+  );
+}
+
 async function salesReport(userId, rows, from, to) {
   const names = new Map((await db.prepare('SELECT id, name FROM customers WHERE user_id = ?').all(userId)).map((c) => [c.id, c.name]));
   const jobs = rows
@@ -1623,7 +1679,8 @@ async function salesReport(userId, rows, from, to) {
       id: String(r.id),
       code: r.code,
       title: r.title,
-      date: (r.event_date || r.created_at).slice(0, 10),
+      // a receipt counts on the day it was paid
+      date: r.day ?? (r.event_date || r.created_at).slice(0, 10),
       customerId: r.customer_id ? String(r.customer_id) : null,
       customer: names.get(r.customer_id) || r.client || '',
       statusText: PROJECT_STATUS[r.status],
@@ -1661,20 +1718,22 @@ async function salesReport(userId, rows, from, to) {
   return { from, to, totals: sum(jobs), byMonth, byCustomer, jobs };
 }
 
+// The report page counts the money that came in: its sales, costs and profit come from the receipts in force, on the
+// day each was paid (receiptFinancials). How many jobs there are, and in which status, is still counted from the jobs.
 app.get('/api/reports', route(async (req) => {
-  const rows = await projectFinancials(req.user.id);
+  const jobs = await projectFinancials(req.user.id);
+  const rows = await receiptFinancials(req.user.id);
   const byType = {};
+  for (const p of jobs) (byType[p.project_type] ||= { type: p.project_type, projects: 0, sold: 0, sales: 0, profit: 0 }).projects++;
   for (const r of rows) {
+    if (!r.sold) continue;
     const t = (byType[r.project_type] ||= { type: r.project_type, projects: 0, sold: 0, sales: 0, profit: 0 });
-    t.projects++;
-    if (r.sold) {
-      t.sold++;
-      t.sales += r.sales;
-      t.profit += r.profit;
-    }
+    t.sold++;
+    t.sales += r.sales;
+    t.profit += r.profit;
   }
   const sales = await salesReport(req.user.id, rows, date(req.query.from), date(req.query.to));
-  const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: rows.filter((r) => r.status === s).length }));
+  const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: jobs.filter((p) => p.status === s).length }));
   const sold = rows.filter((r) => r.sold);
   // the chart shows one calendar year: this year unless another is asked for. The years on offer are
   // those with sales, and this year
@@ -1684,7 +1743,7 @@ app.get('/api/reports', route(async (req) => {
   const chartYear = chartYears.includes(asked) ? asked : thisYear;
   return {
     totals: {
-      projects: rows.length,
+      projects: jobs.length,
       sales: sold.reduce((s, r) => s + r.sales, 0),
       profit: sold.reduce((s, r) => s + r.profit, 0),
       cost: sold.reduce((s, r) => s + r.cost, 0),
@@ -1695,7 +1754,7 @@ app.get('/api/reports', route(async (req) => {
     byType: Object.values(byType).sort((a, b) => b.sales - a.sales),
     byStatus,
     sales,
-    // accepted jobs left out of every figure above because their costs are not in yet
+    // receipts left out of every figure above because their job's costs are not in yet (or they have no job)
     uncosted: { count: rows.filter((r) => r.uncosted).length, sales: rows.filter((r) => r.uncosted).reduce((s, r) => s + r.sales, 0) },
   };
 }));
