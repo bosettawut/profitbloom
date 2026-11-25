@@ -258,7 +258,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
       {/* Unsaved changes bar */}
       {dirty && (
-        <div className="fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 md:left-[calc(50%+8.5rem)] z-40 flex items-center gap-3 bg-ink text-white rounded-full pl-5 pr-2 py-2 shadow-soft-xl">
+        <div className="fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 md:left-[calc(50%+var(--content-shift,8rem))] z-40 flex items-center gap-3 bg-ink text-white rounded-full pl-5 pr-2 py-2 shadow-soft-xl">
           <span className="text-sm whitespace-nowrap">มีการแก้ไขที่ยังไม่บันทึก</span>
           <button onClick={() => setDraft(project)} className="px-3 py-1.5 text-sm text-white/70 hover:text-white">ยกเลิก</button>
           <button onClick={() => save()} disabled={saving} className="px-4 py-1.5 rounded-full bg-white text-ink text-sm font-semibold disabled:opacity-60">

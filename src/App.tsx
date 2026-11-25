@@ -105,6 +105,24 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
   const activeNav = view.nav;
   /** the job the address points at (open in the workspace, or the one a new quote is built from) */
   const neededProjectId = view.projectId ?? view.fromProjectId;
+  /**
+   * How much of the menu at the side a page gets, on a notebook or computer (a phone has the bar at the bottom).
+   * Making something new takes the whole width: no menu, a small button to call it up. Looking at one job, quote or
+   * customer folds it to a strip of icons. Everything else has the whole menu.
+   */
+  const menu: 'full' | 'icons' | 'none' =
+    activeNav === 'new-project' || (activeNav === 'quotes-new' && !view.quoteId) ? 'none'
+      : view.projectId || (activeNav === 'quotes-new' && view.quoteId) || (activeNav === 'customers' && view.customerId) ? 'icons'
+        : 'full';
+  /** the whole menu called up over a page that has it folded or hidden */
+  const [menuShown, setMenuShown] = useState(false);
+  useEffect(() => setMenuShown(false), [path]);
+  useEffect(() => {
+    if (!menuShown) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuShown(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuShown]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [openJobs, setOpenJobs] = useState<Project[]>([]);
@@ -319,7 +337,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
       case 'projects':
         return <Projects onProjectSelect={handleProjectSelect} onNavigate={navigate} user={user} />;
       case 'new-project':
-        return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} />;
+        return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} onClose={() => navigate('projects')} />;
       case 'quotes':
       case 'quotes-all':
         return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} onOpenProjectCosts={(p) => handleProjectSelect(p, true)} user={user} />;
@@ -541,11 +559,46 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
   };
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
-      {/* Desktop sidebar: floating purple panel */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
-        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
-      </aside>
+    // --content-shift: how far the middle of the page is from the middle of the window, for things centred on the page
+    <div className="min-h-screen bg-canvas text-ink" style={{ ['--content-shift' as string]: menu === 'full' ? '8rem' : menu === 'icons' ? '2.75rem' : '0rem' }}>
+      {/* Desktop sidebar: floating purple panel, whole or folded to icons */}
+      {menu === 'full' && (
+        <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
+          <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
+        </aside>
+      )}
+      {menu === 'icons' && (
+        <aside className="hidden md:flex fixed inset-y-0 left-0 w-[5.5rem] py-4 pl-4 z-30">
+          <Sidebar compact activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} onExpand={() => setMenuShown(true)} />
+        </aside>
+      )}
+      {menu === 'none' && (
+        <button
+          onClick={() => setMenuShown(true)}
+          aria-label="แสดงเมนู"
+          title="แสดงเมนู"
+          className="hidden md:flex fixed left-0 top-6 z-30 w-9 h-11 items-center justify-center rounded-r-2xl bg-gradient-to-b from-[#7C4DDB] to-[#673AB7] text-white shadow-[0_6px_16px_-6px_rgba(103,58,183,0.6)] hover:w-10 transition-all"
+        >
+          <Menu className="w-[18px] h-[18px]" />
+        </button>
+      )}
+      {/* the whole menu, called up for a moment over a page that has it folded or hidden */}
+      {menuShown && menu !== 'full' && (
+        <div className="hidden md:block fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-[#221A33]/30 backdrop-blur-[1px]" onClick={() => setMenuShown(false)} aria-hidden />
+          <aside className="absolute inset-y-0 left-0 w-64 py-4 pl-4" aria-label="เมนู">
+            <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
+          </aside>
+          <button
+            onClick={() => setMenuShown(false)}
+            aria-label="ซ่อนเมนู"
+            title="ซ่อนเมนู"
+            className="absolute top-6 left-[16.75rem] w-10 h-10 flex items-center justify-center rounded-full bg-white text-ink shadow-soft-xl hover:bg-[#F1F0F5]"
+          >
+            <X className="w-[18px] h-[18px]" />
+          </button>
+        </div>
+      )}
 
       {/* Mobile top bar */}
       <header className="md:hidden flex items-center justify-between px-5 pt-5 pb-3">
@@ -563,7 +616,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
       </header>
 
       {/* Content floats on one soft sheet */}
-      <main className="md:pl-[17rem] md:py-4 md:pr-4">
+      <main className={`${menu === 'full' ? 'md:pl-[17rem]' : menu === 'icons' ? 'md:pl-[6.5rem]' : 'md:pl-4'} md:py-4 md:pr-4`}>
         <div className="pb-sheet min-h-[calc(100vh-5rem)] md:min-h-[calc(100vh-2rem)] mx-2 md:mx-0">
           {renderContent()}
         </div>

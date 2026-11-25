@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Save } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Save, X } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
 import { rulesOf, toJob } from '../lib/job';
@@ -14,6 +14,8 @@ import { useCustomerContactPrompt } from './CustomerContactPrompt';
 interface NewProjectProps {
   user: User;
   onCreated: (project: Project) => void;
+  /** leaves the form without saving */
+  onClose: () => void;
 }
 
 const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
@@ -105,7 +107,7 @@ const tagEntry = (id: string) => {
 };
 
 /** New job: the same building blocks as the job workspace, so nothing has to be typed twice later. */
-export function NewProject({ user, onCreated }: NewProjectProps) {
+export function NewProject({ user, onCreated, onClose }: NewProjectProps) {
   const rules = useMemo(() => rulesOf(user), [user]);
   const [initial] = useState(() => {
     const saved = savedDraft(user.id);
@@ -237,11 +239,28 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
     </div>
   );
 
+  /** anything typed or chosen in the form, so leaving it is asked about first */
+  const hasInput =
+    (['title', 'client', 'phone', 'email', 'notes', 'eventDate'] as const).some((k) => String(draft[k] ?? '').trim() !== '') ||
+    draft.costItems.some((i) => i.name.trim() !== '' || i.price > 0 || i.quantity !== 1) ||
+    draft.costGroups.some((g) => g.name.trim() !== '');
+  const close = () => {
+    if (hasInput && !window.confirm('มีข้อมูลที่ยังไม่บันทึก ออกจากหน้านี้เลยหรือไม่?')) return;
+    onClose();
+  };
+
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
-      <div className="mb-6 md:mb-8">
-        <h2 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
-        <p className="text-sm text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
+      <div className="mb-6 md:mb-8 flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">สร้างโปรเจ็กต์ใหม่</h2>
+          <p className="text-sm text-ink-muted">ใส่ข้อมูลงานและต้นทุน ระบบจะเช็คสุขภาพกำไรให้ก่อนบันทึก</p>
+        </div>
+        {/* the menu is put away on this page, so the way out is here, as on a new quote */}
+        <button type="button" onClick={close} className="pb-btn-secondary shrink-0">
+          <X className="w-4 h-4" />
+          ปิดหน้าต่าง
+        </button>
       </div>
 
       {/* on a phone the three steps share the width equally, each name under its number, so the bar fits any screen */}
