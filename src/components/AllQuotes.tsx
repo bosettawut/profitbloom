@@ -242,14 +242,15 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden xl:block pb-card overflow-hidden mb-6">
+        <div className="hidden rows:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              {/* Until the screen is wide (2xl) the table has no column for the code or the customer: both sit under the name, so the name keeps a readable width at this text size. */}
               <thead>
                 <tr className="bg-canvas/60 border-b border-line">
                   <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="งาน" sortKey="title" sort={sort} onSort={sortBy} />
-                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
+                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="วันที่สร้าง" sortKey="date" sort={sort} onSort={sortBy} firstDir="desc" />
                   <SortHeader label="ใช้ได้ถึง" sortKey="validUntil" sort={sort} onSort={sortBy} firstDir="desc" />
                   <SortHeader label="จำนวนเงิน" sortKey="amount" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
@@ -263,9 +264,10 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                     <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
                     <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
                       <span className="line-clamp-2">{quote.projectTitle || '-'}</span>
+                      {quote.clientName && <span className="2xl:hidden block mt-0.5 font-normal text-ink truncate">{quote.clientName}</span>}
                       <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{quote.code}</span>
                     </td>
-                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
+                    <td className="hidden 2xl:table-cell px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
                     <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
                     <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{quote.validUntilText || '-'}</td>
                     <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">{baht(quote.totalAmount, Number.isInteger(quote.totalAmount) ? 0 : 2)}</td>
@@ -308,7 +310,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
       )}
 
       {/* Cards (phones) */}
-      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <div className="rows:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((quote) => (
           <div
             key={quote.id}

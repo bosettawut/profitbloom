@@ -313,14 +313,15 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden xl:block pb-card overflow-hidden mb-6">
+        <div className="hidden rows:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              {/* Until the screen is wide (2xl) the table has no column for the code or the customer: both sit under the name, so the name keeps a readable width at this text size. */}
               <thead>
                 <tr className="bg-canvas/60 border-b border-line">
                   <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="โปรเจ็กต์" sortKey="title" sort={sort} onSort={sortBy} />
-                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} />
+                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="วันที่จัดงาน" sortKey="eventDate" sort={sort} onSort={sortBy} firstDir="desc" />
                   <SortHeader label="ราคา" sortKey="price" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
                   <SortHeader label="Margin" sortKey="margin" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
@@ -337,9 +338,10 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                       <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
                       <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
                         <span className="line-clamp-2">{project.title}</span>
+                        {project.client && <span className="2xl:hidden block mt-0.5 font-normal text-ink truncate">{project.client}</span>}
                         <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{project.code}</span>
                       </td>
-                      <td className="px-2 2xl:px-3 py-3 text-ink max-w-[9rem] 2xl:max-w-[10rem] truncate">{project.client || '-'}</td>
+                      <td className="hidden 2xl:table-cell px-3 py-3 text-ink max-w-[10rem] truncate">{project.client || '-'}</td>
                       <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{formatEventDate(project.eventDate)}</td>
                       <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{Math.round(h.price).toLocaleString('th-TH')}</td>
                       <td className="px-2 2xl:px-3 py-3 text-right text-ink whitespace-nowrap">{h.margin.toFixed(0)}%</td>
@@ -384,7 +386,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
       )}
 
       {/* Cards (phones) */}
-      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <div className="rows:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((project) => {
           const progress = getProgressFromStatus(project.status);
           
