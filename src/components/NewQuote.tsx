@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderPlus } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderOpen, FolderPlus } from 'lucide-react';
 import { api, baht, quoteChangeOf, Project, Quote, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
@@ -28,6 +28,8 @@ interface NewQuoteProps {
   startInPreview: boolean;
   /** opens a job on its cost step */
   onOpenProjectCosts: (project: Project) => void;
+  /** opens a job on its own page */
+  onOpenProject?: (project: Project) => void;
   /** a save here changed something about the job (its status, or which quote is tied to it) */
   onProjectChanged?: (projectId: string) => void;
   onDone: () => void;
@@ -35,7 +37,7 @@ interface NewQuoteProps {
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
-export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onProjectChanged, onDone }: NewQuoteProps) {
+export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onOpenProject, onProjectChanged, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
@@ -333,13 +335,16 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     }
   };
 
-  /** the job is where a tied quote's lines and prices are changed: opens it on its costs */
-  const backToProject = async () => {
+  /**
+   * Goes to the quote's job. A tied quote's lines and prices are changed there, so it opens on the costs; any other
+   * quote linked to a job (the one the job was made from, or an older copy) opens the job's own page.
+   */
+  const backToProject = async (where: 'costs' | 'page' = 'costs') => {
     if (touched.current && !window.confirm('มีการแก้ไขที่ยังไม่บันทึก ออกจากหน้านี้เลยหรือไม่?')) return;
     try {
       // read again, not the copy this form was opened with: saving the quote has changed the job (its quote, its status)
       const target = projectId ? await api.project(projectId) : fromProject;
-      if (target) onOpenProjectCosts(target);
+      if (target) (where === 'page' && onOpenProject ? onOpenProject : onOpenProjectCosts)(target);
     } catch (err) {
       showNotification((err as Error).message);
     }
@@ -545,6 +550,13 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   สร้างโปรเจ็กต์และใส่ต้นทุน
                 </button>
               )}
+              {/* a quote linked to a job but not tied to it (the job was made from it): its lines are its own, the job is a click away */}
+              {savedId && projectId && !follows && (
+                <button onClick={() => backToProject('page')} className={action}>
+                  <FolderOpen className="w-6 h-6" />
+                  เปิดโปรเจ็กต์
+                </button>
+              )}
             </div>
             <p className="text-sm font-medium text-ink">จำนวนเงินรวมทั้งสิ้น</p>
             <p className="text-3xl md:text-4xl font-semibold text-[#673AB7] tracking-tight mt-1 mb-4 break-words">{money(grandTotal)}</p>
@@ -647,7 +659,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   {job && !job.inStep && (
                     <button type="button" onClick={syncWithJob} className="pb-btn-secondary !py-2 !bg-white">อัปเดตใบนี้ตามโปรเจ็กต์</button>
                   )}
-                  <button type="button" onClick={backToProject} className="pb-btn-secondary !py-2 !bg-white">
+                  <button type="button" onClick={() => backToProject()} className="pb-btn-secondary !py-2 !bg-white">
                     <ArrowLeft className="w-4 h-4" />
                     กลับไปแก้โปรเจ็กต์
                   </button>
