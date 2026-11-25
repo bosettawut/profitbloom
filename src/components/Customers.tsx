@@ -169,7 +169,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
             />
           </div>
           {/* the cards have no column headings to sort by */}
-          <select className="pb-input text-ink-muted xl:hidden" value={sort.key} onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })} aria-label="เรียงลำดับ">
+          <select className="pb-input text-ink-muted rows:hidden" value={sort.key} onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })} aria-label="เรียงลำดับ">
             <option value="name">เรียงตามชื่อ</option>
             <option value="sales">เรียงตามยอดซื้อรวม</option>
             <option value="projects">เรียงตามจำนวนโปรเจ็กต์</option>
@@ -192,14 +192,15 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
 
       {/* Table (desktop) */}
       {paged.rows.length > 0 && (
-        <div className="hidden xl:block pb-card overflow-hidden mb-6">
+        <div className="hidden rows:block pb-card overflow-hidden mb-6">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              {/* Until the screen is wide (2xl) LINE has no column of its own: it sits under the phone number, so the name keeps a readable width at this text size. */}
               <thead>
                 <tr className="bg-canvas/60 border-b border-line">
                   <SortHeader label="ลูกค้า" sortKey="name" sort={sort} onSort={sortBy} />
                   <SortHeader label="เบอร์โทร" sortKey="phone" sort={sort} onSort={sortBy} />
-                  <SortHeader label="LINE" sortKey="lineId" sort={sort} onSort={sortBy} />
+                  <SortHeader label="LINE" sortKey="lineId" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
                   <SortHeader label="อีเมล" sortKey="email" sort={sort} onSort={sortBy} />
                   <SortHeader label="งานล่าสุด" sortKey="lastEvent" sort={sort} onSort={sortBy} firstDir="desc" />
                   <SortHeader label="โปรเจ็กต์" sortKey="projects" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
@@ -211,9 +212,12 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
                 {paged.rows.map((c) => (
                   <tr key={c.id} onClick={() => onOpenCustomer(c.id)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
                     <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]"><span className="line-clamp-2">{c.name}</span></td>
-                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{c.phone || '-'}</td>
-                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[9rem] truncate">{c.lineId || '-'}</td>
-                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[10rem] 2xl:max-w-[13rem] truncate">{c.email || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">
+                      {c.phone || '-'}
+                      {c.lineId && <span className="2xl:hidden block mt-0.5 text-xs text-ink-muted truncate max-w-[7.5rem]">LINE: {c.lineId}</span>}
+                    </td>
+                    <td className="hidden 2xl:table-cell px-3 py-3 text-ink max-w-[9rem] truncate">{c.lineId || '-'}</td>
+                    <td className="px-2 2xl:px-3 py-3 text-ink max-w-[9rem] 2xl:max-w-[13rem] truncate">{c.email || '-'}</td>
                     <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{c.lastEventDate ? formatDate(c.lastEventDate) : '-'}</td>
                     <td className="px-2 2xl:px-3 py-3 text-right text-ink">{c.projectCount}</td>
                     <td className="px-2 2xl:px-3 py-3 text-right text-ink">{c.quoteCount}</td>
@@ -227,7 +231,7 @@ export function Customers({ onOpenCustomer }: CustomersProps) {
       )}
 
       {/* Cards (phone) */}
-      <div className="xl:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      <div className="rows:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
         {paged.rows.map((c) => (
           <div key={c.id} onClick={() => onOpenCustomer(c.id)} className="pb-card cursor-pointer transition-all duration-300 overflow-hidden">
             <div className="p-4 md:p-6 border-b border-line">
