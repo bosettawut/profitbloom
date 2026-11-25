@@ -341,7 +341,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             // the deleted customer's address is replaced, so the back button can't land on it again
             onGone={() => show({ nav: 'customers' }, { replace: true })}
             onOpenProject={(p) => handleProjectSelect(p)}
-            onOpenQuote={(id) => openQuote(id, true)}
+            onOpenQuote={(id) => openQuote(id)}
           />
         ) : (
           <Customers onOpenCustomer={(id) => show({ nav: 'customers', customerId: id })} />

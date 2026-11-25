@@ -260,7 +260,8 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
               </thead>
               <tbody>
                 {paged.rows.map((quote) => (
-                  <tr key={quote.id} onClick={() => onOpenQuote(quote.id, true)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
+                  // a row opens the quote itself; only the eye button opens it with the preview showing
+                  <tr key={quote.id} onClick={() => onOpenQuote(quote.id)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
                     <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
                     <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
                       <span className="line-clamp-2">{quote.projectTitle || '-'}</span>
@@ -314,7 +315,7 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
         {paged.rows.map((quote) => (
           <div
             key={quote.id}
-            onClick={() => onOpenQuote(quote.id, true)}
+            onClick={() => onOpenQuote(quote.id)}
             className="pb-card cursor-pointer transition-all duration-300 overflow-hidden"
           >
             {/* Quote Header */}
