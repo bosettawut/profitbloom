@@ -306,8 +306,13 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
   job = (await A.call('GET', `/projects/${lp.id}`)).data;
   ok('ใบเสนอราคาเป็น "ปฏิเสธ" → โปรเจ็กต์เป็น "ลูกค้าปฏิเสธ"', r.status === 200 && job.status === 'rejected' && job.statusText === 'ลูกค้าปฏิเสธ', JSON.stringify([r.status, job.status]));
+  r = await A.call('PUT', `/projects/${lp.id}`, { notes: 'ลูกค้าบอกว่าแพงไป' });
+  ok('ลูกค้าปฏิเสธ: บันทึกโปรเจ็กต์โดยไม่แก้ราคา → สถานะยังเป็นลูกค้าปฏิเสธ', r.status === 200 && r.data.status === 'rejected' && r.data.quoteUpdated === false, JSON.stringify([r.status, r.data.status]));
   r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
-  ok('ใบที่ลูกค้าปฏิเสธ: แก้โปรเจ็กต์แล้วใบเดิมเปลี่ยนตามโดยไม่ต้องยืนยัน (เลขเดิม)', r.status === 200 && r.data.quoteUpdated === true && r.data.quote.code === fq.code, JSON.stringify([r.status, r.data.quoteUpdated, r.data.quote]));
+  now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('ใบที่ลูกค้าปฏิเสธ: แก้ราคาที่โปรเจ็กต์ → ใบเดิมเปลี่ยนตามโดยไม่ต้องยืนยัน (เลขเดิม) และกลับเป็น "สร้างใบเสนอราคาแล้ว" / ใบเป็น "ร่าง" รอส่งใหม่',
+    r.status === 200 && r.data.quoteUpdated === true && r.data.quote.code === fq.code && r.data.status === 'quote_created' && now.status === 'draft' && r.data.quote.follows === true,
+    JSON.stringify([r.status, r.data.quoteUpdated, r.data.status, now.status, r.data.quote]));
   r = await A.call('PUT', `/projects/${lp.id}`, { status: 'pending' });
   now = (await A.call('GET', `/quotes/${fq.id}`)).data;
   ok('ส่งใหม่: ตั้งโปรเจ็กต์เป็น "รอการอนุมัติ" → ใบเป็น "ส่งแล้ว"', r.status === 200 && now.status === 'sent', JSON.stringify([r.status, now.status]));

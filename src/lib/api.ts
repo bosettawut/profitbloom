@@ -146,7 +146,7 @@ export interface Project {
    * it is the quote tied to it: its lines and price are the job's, are changed here, and follow when the job is saved.
    * For a job made from a quote it is that quote (the newest for the job): its price settled the job's, it is not tied.
    */
-  quote?: { id: string; code: string; status: QuoteStatus; statusText: string } | null;
+  quote?: { id: string; code: string; status: QuoteStatus; statusText: string; /** tied to the job: saving the job's prices changes it */ follows?: boolean } | null;
   depositPct: number;
   setupDays: number;
   eventDays: number;
