@@ -8,6 +8,8 @@ export interface TypedContact {
   name: string;
   phone: string;
   email: string;
+  /** a quote's days of credit (a project has none) */
+  creditDays?: number;
 }
 
 interface Difference {
@@ -24,12 +26,14 @@ function differences(customer: Customer, typed: TypedContact): Difference[] {
   const out: Difference[] = [];
   if (typed.phone.trim() && customer.phone && !samePhone(typed.phone, customer.phone)) out.push({ label: 'เบอร์โทรศัพท์', kept: customer.phone, typed: typed.phone.trim() });
   if (typed.email.trim() && customer.email && !sameEmail(typed.email, customer.email)) out.push({ label: 'อีเมล', kept: customer.email, typed: typed.email.trim() });
+  const credit = typed.creditDays ?? 0;
+  if (credit > 0 && customer.creditDays > 0 && credit !== customer.creditDays) out.push({ label: 'เครดิต', kept: `${customer.creditDays} วัน`, typed: `${credit} วัน` });
   return out;
 }
 
 /**
- * Before saving a project or quote: when its phone number or email differs from what the customer's
- * record holds, asks whether the customer should be updated or the new details are for this job only.
+ * Before saving a project or quote: when its phone number or email (or a quote's days of credit) differs from what
+ * the customer's record holds, asks whether the customer should be updated or the new details are for this job only.
  *
  * `ask` resolves to true (update the customer), false (this job only, or nothing to ask) or
  * null (the dialog was closed: do not save). Pass `unchangedFrom` when editing, so a document whose
@@ -40,7 +44,10 @@ export function useCustomerContactPrompt() {
   const answer = useRef<(value: boolean | null) => void>(() => {});
 
   const ask = async (typed: TypedContact, unchangedFrom?: TypedContact): Promise<boolean | null> => {
-    if (unchangedFrom && unchangedFrom.customerId === typed.customerId && unchangedFrom.name === typed.name && unchangedFrom.phone === typed.phone && unchangedFrom.email === typed.email) return false;
+    if (
+      unchangedFrom && unchangedFrom.customerId === typed.customerId && unchangedFrom.name === typed.name && unchangedFrom.phone === typed.phone && unchangedFrom.email === typed.email &&
+      (unchangedFrom.creditDays ?? 0) === (typed.creditDays ?? 0)
+    ) return false;
     let customers: Customer[];
     try {
       customers = await api.customers();
@@ -64,7 +71,7 @@ export function useCustomerContactPrompt() {
   const node = open ? (
     <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={() => answer.current(null)}>
       <div role="dialog" aria-modal="true" aria-label="อัปเดตข้อมูลลูกค้า" className="bg-white rounded-[24px] shadow-soft-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-ink mb-1">ข้อมูลติดต่อไม่ตรงกับที่จำไว้</h3>
+        <h3 className="text-lg font-semibold text-ink mb-1">{open.diffs.some((d) => d.label === 'เครดิต') ? 'ข้อมูลลูกค้าไม่ตรงกับที่จำไว้' : 'ข้อมูลติดต่อไม่ตรงกับที่จำไว้'}</h3>
         <p className="text-sm text-ink-muted mb-4">
           ข้อมูลที่กรอกต่างจากที่บันทึกไว้ของ <span className="font-medium text-ink">{open.customer.name}</span> ต้องการให้จำข้อมูลใหม่กับลูกค้ารายนี้ด้วยหรือไม่
         </p>

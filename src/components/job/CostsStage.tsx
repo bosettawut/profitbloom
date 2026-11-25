@@ -365,7 +365,7 @@ export function CostsStage({ draft, patch, rules, h, lessons, nameHints }: Props
             </div>
           </div>
           {agreed !== null ? (
-            <p className="mt-2 text-xs text-ink-muted">ราคาขายยึดตามใบเสนอราคาที่ลูกค้าตกลงแล้ว ฿{fmt(agreed)} จึงแก้ที่นี่ไม่ได้ · Margin คำนวณจากต้นทุนที่กรอก</p>
+            <p className="mt-2 text-xs text-ink-muted">ราคาขาย ฿{fmt(agreed)} มาจากใบเสนอราคาที่สร้างโปรเจ็กต์นี้ แก้รายการและราคาที่ใบเสนอราคา แล้วราคาขายนี้จะเปลี่ยนตาม · Margin คำนวณจากต้นทุนที่กรอก</p>
           ) : (
             <p className="mt-2 text-xs text-ink-muted">Margin รวมของทั้งงาน = กำไร ÷ ราคาขาย · แก้ Margin หรือราคาขายที่นี่ ระบบจะปรับทุกหัวข้อตามสัดส่วนเดิม ให้ทั้งงานได้ตามที่กรอก</p>
           )}

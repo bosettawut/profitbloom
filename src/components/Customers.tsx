@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ChevronRight, Edit, FileText, FolderOpen, Mail, MapPin, MessageCircle, Phone, Plus, Search, Trash2, Wallet, X } from 'lucide-react';
+import { ArrowLeft, CalendarClock, ChevronRight, Edit, FileText, FolderOpen, Mail, MapPin, MessageCircle, Phone, Plus, Search, Trash2, Wallet, X } from 'lucide-react';
 import { api, baht, type Customer, type CustomerDetail, type CustomerInput, type CustomerSummary, type Project } from '../lib/api';
 import { ProjectItem, statusPill } from './ProjectItem';
 import { StatsCard } from './StatsCard';
@@ -40,6 +40,7 @@ export function CustomerForm({ customer, initialName = '', onClose, onSaved }: C
     lineId: customer?.lineId ?? '',
     address: customer?.address ?? '',
     notes: customer?.notes ?? '',
+    creditDays: customer?.creditDays ?? 0,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -78,6 +79,20 @@ export function CustomerForm({ customer, initialName = '', onClose, onSaved }: C
           {field('เบอร์โทรศัพท์', 'phone', 'tel', 'เช่น 081-234-5678')}
           {field('LINE', 'lineId', 'text', 'เช่น @somchai')}
           <div className="sm:col-span-2">{field('อีเมล', 'email', 'email', 'เช่น somchai@email.com')}</div>
+          <div>
+            <label className="pb-label">เครดิต (วัน)</label>
+            <input
+              className="pb-input"
+              type="number"
+              min="0"
+              max="365"
+              inputMode="numeric"
+              placeholder="0"
+              value={form.creditDays || ''}
+              onChange={(e) => setForm((f) => ({ ...f, creditDays: Math.min(365, Math.max(0, Math.round(parseFloat(e.target.value) || 0))) }))}
+            />
+          </div>
+          <p className="text-xs text-ink-muted sm:self-end sm:pb-3">นับจากวันจัดงาน ใบเสนอราคาใหม่ของลูกค้ารายนี้จะเติมให้</p>
           <div className="sm:col-span-2">
             <label className="pb-label">ที่อยู่</label>
             <textarea className="pb-input" rows={2} value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
@@ -319,6 +334,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
     { icon: MessageCircle, label: 'LINE', value: customer.lineId, href: '' },
     { icon: Mail, label: 'อีเมล', value: customer.email, href: customer.email ? `mailto:${customer.email}` : '' },
     { icon: MapPin, label: 'ที่อยู่', value: customer.address, href: '' },
+    { icon: CalendarClock, label: 'เครดิต', value: customer.creditDays > 0 ? `${customer.creditDays} วัน หลังวันจัดงาน` : 'ไม่มีเครดิต', href: '' },
   ];
 
   return (

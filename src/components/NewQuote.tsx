@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderOpen, FolderPlus } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderOpen, FolderPlus } from 'lucide-react';
 import { api, baht, quoteChangeOf, Project, Quote, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
-import { DateField } from './DateField';
+import { DateField, thaiShortDate } from './DateField';
+import { statusPill } from './ProjectItem';
+import { QUOTE_STATUS_OPTIONS, StatusDialog } from './StatusDialog';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
 import { useQuoteChangePrompt } from './job/QuoteChangePrompt';
 import { fitToPrice, lineAmount, quoteLinesFromJob, quoteTotals, toSatang } from '../../shared/quote-math.js';
@@ -66,10 +68,18 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
   // A quote made for a job is tied to it: what it lists and what it comes to are the job's, are changed in the job,
   // and follow it when the job is saved; here they are only shown. A job that was itself made from a quote is the
-  // other way round: its price is settled, and a quote for it is only held to that price (`lockedPrice`).
+  // other way round: its lines are changed here, and the job's price follows them.
   const [follows, setFollows] = useState(!!fromProject && fromProject.agreedPrice == null);
   /** the job a saved quote follows, and whether the quote still holds what the job gives it */
   const [job, setJob] = useState<Quote['job'] | null>(null);
+  /**
+   * The job whose page opens this quote (a quote made for a job becomes that one). They share the customer's name,
+   * phone and email and the job's name, changed on either; the event date is the job's, changed there.
+   */
+  const [linkedJob, setLinkedJob] = useState<Quote['linkedJob'] | null>(
+    fromProject ? { id: fromProject.id, code: fromProject.code, eventDate: fromProject.eventDate, priceFromQuote: fromProject.agreedPrice != null } : null,
+  );
+  const [statusOpen, setStatusOpen] = useState(false);
   /** the number of the job this quote belonged to, when that job was deleted */
   const [deletedJob, setDeletedJob] = useState<string | null>(null);
   /** something on the form was typed or chosen since it was opened or last saved */
@@ -80,7 +90,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   // One line per heading of the job, named after it and priced at what the heading sells for in whole baht, adding up
   // to the job's price: the customer sees the headings and not the costs inside them (see quoteLinesFromJob).
   const [fromJob] = useState(() => (fromProject ? quoteLinesFromJob(fromProject.costItems, fromProject.costGroups, fromProject.profitMargin, fromProject.agreedPrice) : null));
-  const [lockedPrice, setLockedPrice] = useState<number | null>(fromJob?.price ?? null);
+  // only an older copy of a job's quote is still held to a price; a new quote for a job never is
+  const [lockedPrice, setLockedPrice] = useState<number | null>(follows ? fromJob?.price ?? null : null);
   // each line chooses whether its amount rounds up to a whole baht ('line'); a quote made before that
   // choice existed opens on the old rule ('baht') until the user switches it
   const [rounding, setRounding] = useState<Rounding>('line');
@@ -101,7 +112,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   const quoteChangePrompt = useQuoteChangePrompt();
   /** the contact details this quote started with (from its project, or as last saved): unchanged, they are not asked about */
   const startContact = useRef<TypedContact | undefined>(
-    fromProject ? { customerId: fromProject.customerId, name: fromProject.client, phone: fromProject.phone, email: fromProject.email } : undefined,
+    fromProject ? { customerId: fromProject.customerId, name: fromProject.client, phone: fromProject.phone, email: fromProject.email, creditDays: 0 } : undefined,
   );
 
   /** fills the form from a saved quote */
@@ -115,7 +126,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setStatus(q.status);
         setProjectId(q.projectId);
         setCustomerId(q.customerId);
-        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail };
+        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail, creditDays: q.creditDays ?? 0 };
         setCreatedDate(q.createdDate);
         setQuoteData({
           clientName: q.clientName,
@@ -126,7 +137,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           clientBranch: q.clientBranch ?? '',
           projectTitle: q.projectTitle,
           referenceNo: q.referenceNo ?? '',
-          eventDate: q.eventDate,
+          // the event date of a job's quote is the job's (an older quote can be behind until it is next saved)
+          eventDate: q.linkedJob ? q.linkedJob.eventDate : q.eventDate,
           validUntil: q.validUntil,
           creditDays: q.creditDays ?? 0,
           notes: q.notes,
@@ -135,6 +147,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setQuoteItems(q.items.length || q.followsProject ? q.items : [{ id: 1, description: '', quantity: 1, unit: '', unitPrice: 0, total: 0, roundUp: q.rounding !== 'baht' }]);
         setFollows(!!q.followsProject);
         setJob(q.job ?? null);
+        setLinkedJob(q.linkedJob ?? null);
         setDeletedJob(q.deletedProjectCode ?? null);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
@@ -172,14 +185,14 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
   }, []);
 
   useEffect(() => {
-    // a quote made from a job: the job holds no address or tax id, so they come from the customer's record and last quote
+    // a quote made from a job: the job holds no address, tax id or credit, so they come from the customer's record and last quote
     if (!fromProject?.customerId) return;
     let stale = false;
     api.customers()
       .then((all) => {
         const c = all.find((x) => x.id === fromProject.customerId);
         if (!c || stale) return;
-        setQuoteData((d) => ({ ...d, clientAddress: d.clientAddress || c.address || c.quoteAddress || '', clientTaxId: d.clientTaxId || c.quoteTaxId || '', clientBranch: d.clientBranch || c.quoteBranch || '' }));
+        setQuoteData((d) => ({ ...d, clientAddress: d.clientAddress || c.address || c.quoteAddress || '', clientTaxId: d.clientTaxId || c.quoteTaxId || '', clientBranch: d.clientBranch || c.quoteBranch || '', creditDays: d.creditDays || c.creditDays || 0 }));
       })
       .catch(() => {});
     return () => {
@@ -197,7 +210,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
    * is only live when it does, or when the quote has never been saved; changing something back makes it idle again.
    */
   const current = JSON.stringify({
-    quoteData, customerId, taxRate, discountRate, whtRate, vatMode, rounding,
+    quoteData, customerId, status, taxRate, discountRate, whtRate, vatMode, rounding,
     items: quoteItems.map(({ description, quantity, unit, unitPrice, roundUp }) => ({ description, quantity, unit: unit ?? '', unitPrice, roundUp: !!roundUp })),
   });
   const [saved, setSaved] = useState<string | null>(null);
@@ -277,7 +290,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       showNotification(`ยอดรายการยังไม่เท่าราคาที่ล็อกไว้ ${money(lockedPrice ?? 0)} กด "ปรับส่วนต่างอัตโนมัติ"`);
       return null;
     }
-    const contact: TypedContact = { customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail };
+    const contact: TypedContact = { customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail, creditDays: quoteData.creditDays };
     const updateCustomer = await contactPrompt.ask(contact, startContact.current);
     if (updateCustomer === null) return null;
     setSaving(true);
@@ -308,7 +321,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       setLockedPrice(saved.lockedPrice);
       setFollows(!!saved.followsProject);
       setJob(saved.job ?? null);
+      setLinkedJob(saved.linkedJob ?? null);
       if (saved.followsProject) setQuoteItems(saved.items);
+      // the event date of a job's quote is the job's: the server keeps it so
+      if (saved.linkedJob) setQuoteData((d) => ({ ...d, eventDate: saved.eventDate }));
       touched.current = false;
       takeBaseline.current = true;
       if (saved.projectId) onProjectChanged?.(saved.projectId);
@@ -323,7 +339,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
   const handleSave = async () => {
     const saved = await persist();
-    if (saved) showNotification(`บันทึกใบเสนอราคา ${saved.code} เรียบร้อยแล้ว!`);
+    if (!saved) return;
+    showNotification(saved.jobUpdated && saved.linkedJob ? `บันทึกใบเสนอราคา ${saved.code} แล้ว โปรเจ็กต์ ${saved.linkedJob.code} เปลี่ยนตามแล้ว` : `บันทึกใบเสนอราคา ${saved.code} เรียบร้อยแล้ว!`);
   };
 
   const handlePreview = () => {
@@ -458,10 +475,22 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           <p className="text-sm text-ink-muted">
             {follows
               ? `ผูกกับโปรเจ็กต์${jobCode ? ` ${jobCode}` : ''} · หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว`
-              : fromProject ? `สร้างจากโปรเจ็กต์ ${fromProject.code} (หนึ่งบรรทัดต่อหนึ่งหัวข้อ ราคารวมกำไรแล้ว)` : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
+              : linkedJob ? `ผูกกับโปรเจ็กต์ ${linkedJob.code} · แก้รายการและราคาที่ใบนี้ ราคาขายของโปรเจ็กต์เปลี่ยนตาม`
+              : savedId ? 'แก้ไขรายละเอียดแล้วกดบันทึก' : 'สร้างใบเสนอราคาสำหรับลูกค้า'}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {/* the quote's status, changed here as on the job's page: it is saved with the rest of the page */}
+          <button
+            type="button"
+            onClick={() => setStatusOpen(true)}
+            aria-label="สถานะใบเสนอราคา"
+            title="เปลี่ยนสถานะ"
+            className={`self-stretch inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ${statusPill(status)}`}
+          >
+            {QUOTE_STATUS_OPTIONS.find((o) => o.id === status)?.name ?? 'หมดอายุ'}
+            <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />
+          </button>
           <button onClick={onDone} className="pb-btn-secondary">
             <X className="w-4 h-4" />
             ปิดหน้าต่าง
@@ -483,6 +512,12 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         {/* the customer on the left; the total, what can be done with the quote and its dates on the right */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-6 lg:gap-12">
           <div role="group" aria-label="ข้อมูลลูกค้า" className="space-y-4">
+            {linkedJob && (
+              <p role="note" className="flex items-start gap-2 text-xs text-ink-muted">
+                <Link2 className="w-4 h-4 text-[#673AB7] shrink-0" />
+                ชื่อลูกค้า เบอร์โทร อีเมล และชื่อโปรเจ็กต์ ใช้ร่วมกับโปรเจ็กต์ {linkedJob.code} แก้ที่นี่หรือที่โปรเจ็กต์ก็ได้ บันทึกแล้วอีกฝั่งเปลี่ยนตาม
+              </p>
+            )}
             <div>
               <label className="pb-label">ชื่อลูกค้า *</label>
               <CustomerPicker
@@ -503,6 +538,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                     clientAddress: c.address || c.quoteAddress || quoteData.clientAddress,
                     clientTaxId: c.quoteTaxId || quoteData.clientTaxId,
                     clientBranch: c.quoteBranch || quoteData.clientBranch,
+                    creditDays: c.creditDays || quoteData.creditDays,
                   });
                 }}
               />
@@ -604,7 +640,17 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               </div>
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <label className="text-sm font-medium text-ink">วันที่จัดงาน</label>
-                <DateField label="วันที่จัดงาน" className="pb-input-sm" value={quoteData.eventDate} onChange={(v) => { touched.current = true; setQuoteData({ ...quoteData, eventDate: v }); }} />
+                {linkedJob ? (
+                  // the job's date: changed on the job, and this quote takes it
+                  <div role="group" aria-label="วันที่จัดงาน (จากโปรเจ็กต์)" className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-2 px-[0.95rem]">
+                    <span className={`text-sm ${quoteData.eventDate ? 'text-ink' : 'text-ink-muted'}`}>{quoteData.eventDate ? thaiShortDate(quoteData.eventDate) : 'ยังไม่ได้ระบุ'}</span>
+                    <button type="button" onClick={() => backToProject('page')} className="text-xs font-medium text-[#673AB7] hover:underline">
+                      แก้ที่โปรเจ็กต์
+                    </button>
+                  </div>
+                ) : (
+                  <DateField label="วันที่จัดงาน" className="pb-input-sm" value={quoteData.eventDate} onChange={(v) => { touched.current = true; setQuoteData({ ...quoteData, eventDate: v }); }} />
+                )}
               </div>
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <label className="text-sm font-medium text-ink">เครดิต (วัน)</label>
@@ -1074,6 +1120,27 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         <Save className="w-4 h-4" />
         {saving ? 'กำลังบันทึก...' : 'บันทึกใบเสนอราคา'}
       </button>
+
+      {statusOpen && (
+        <StatusDialog
+          title="เปลี่ยนสถานะใบเสนอราคา"
+          subject={`${quoteCode || 'ใบเสนอราคาใหม่'} · ${quoteData.projectTitle || quoteData.clientName}`}
+          options={QUOTE_STATUS_OPTIONS}
+          current={status}
+          note={
+            status === 'expired'
+              ? 'ใบนี้เลยวันที่ใช้ได้แล้ว (หมดอายุ) เลือกสถานะใหม่ได้ หรือเลื่อนวันที่ใช้ได้ถึง'
+              : linkedJob ? `โปรเจ็กต์ ${linkedJob.code} จะเปลี่ยนสถานะตามเมื่อบันทึก` : undefined
+          }
+          noteTone={status === 'expired' ? 'warn' : 'info'}
+          onPick={(id) => {
+            touched.current = true;
+            setStatus(id);
+            setStatusOpen(false);
+          }}
+          onClose={() => setStatusOpen(false)}
+        />
+      )}
 
       {/* Notification */}
       {contactPrompt.node}
