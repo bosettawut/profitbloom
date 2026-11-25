@@ -407,6 +407,19 @@ const MIGRATIONS = [
   ${TIE_QUOTES}
   CREATE UNIQUE INDEX idx_quotes_follows ON quotes(project_id) WHERE follows_project = 1;
   `,
+
+  // 15 — the last number handed out for each shop, kind of document (its prefix: QT, WD, EN, …) and year, so a number
+  //      once given is never given again, even when its document is deleted (a customer may already hold it)
+  `
+  CREATE TABLE doc_counters (
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    prefix  TEXT NOT NULL,
+    year    INTEGER NOT NULL,
+    last_n  INTEGER NOT NULL,
+    PRIMARY KEY (user_id, prefix, year)
+  );
+  ALTER TABLE doc_counters ENABLE ROW LEVEL SECURITY;
+  `,
 ];
 
 async function schemaVersion(q) {
