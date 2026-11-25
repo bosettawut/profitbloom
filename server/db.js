@@ -138,6 +138,28 @@ export const TIE_QUOTES = `
 `;
 
 /**
+ * A customer's days of credit start from the latest of their quotes that gave any (a customer that already has a
+ * credit keeps it). Safe to run again.
+ */
+export const CUSTOMER_CREDIT = `
+  UPDATE customers c SET credit_days = q.credit_days
+    FROM (SELECT DISTINCT ON (customer_id) customer_id, credit_days FROM quotes
+           WHERE customer_id IS NOT NULL AND credit_days > 0
+           ORDER BY customer_id, created_at DESC, id DESC) q
+   WHERE c.id = q.customer_id AND c.credit_days = 0;
+`;
+
+/**
+ * A job made from a quote takes its price from that quote, so its quotes are no longer held to a locked price: the
+ * lines are changed freely on the quote and the job's price follows. Safe to run again.
+ */
+export const UNLOCK_AGREED = `
+  UPDATE quotes q SET locked_price = NULL
+   WHERE q.locked_price IS NOT NULL AND q.follows_project = 0
+     AND EXISTS (SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.agreed_price IS NOT NULL);
+`;
+
+/**
  * Gives every job that has costs but no heading yet one heading holding all of them, at the job's
  * own markup, so its price stays exactly what it was. Safe to run again.
  */
@@ -424,6 +446,14 @@ const MIGRATIONS = [
   // 16 — a quote whose job was deleted remembers the job's number, so it can say so (it is cancelled with the job)
   `
   ALTER TABLE quotes ADD COLUMN deleted_project_code TEXT NOT NULL DEFAULT '';
+  `,
+
+  // 17 — a customer has days of credit, which a new quote for them starts with (from their latest quote that gave
+  //      any); and the quotes of a job made from a quote are no longer locked to its price: the job's price follows them
+  `
+  ALTER TABLE customers ADD COLUMN credit_days INTEGER NOT NULL DEFAULT 0;
+  ${CUSTOMER_CREDIT}
+  ${UNLOCK_AGREED}
   `,
 ];
 

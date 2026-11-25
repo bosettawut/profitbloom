@@ -60,8 +60,8 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const h = useMemo(() => health(job, rules), [job, rules]);
   const lessons = useMemo(() => learnings(history.filter((p) => p.reviewApplied && p.id !== draft.id).map(toJob)), [history, draft.id]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(project);
-  /** what the save buttons say: a quote tied to the job changes with it, so the button says so */
-  const saveLabel = project.quote?.follows ? 'บันทึกและอัปเดตใบเสนอราคา' : 'บันทึกการเปลี่ยนแปลง';
+  /** what the save buttons say: the job's quote changes with it (its customer, name and date, and a tied quote's lines), so the button says so */
+  const saveLabel = project.quote ? 'บันทึกและอัปเดตใบเสนอราคา' : 'บันทึกการเปลี่ยนแปลง';
 
   const patch = (p: Partial<Project>) => setDraft((d) => ({ ...d, ...p }));
   const flash = (t: string) => {

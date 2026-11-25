@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
 import { emailError, phoneError } from '../shared/contact.js';
-import { DISCOUNT_TYPES, jobPricing, lineAmount, projectPrice, quoteLinesFromJob, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
+import { DISCOUNT_TYPES, jobPricing, lineAmount, quoteLinesFromJob, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -372,6 +372,8 @@ function serializeCustomer(c) {
     lineId: c.line_id,
     address: c.address,
     notes: c.notes,
+    /** days of credit this customer is given after the event (0 = none): a new quote for them starts with it */
+    creditDays: c.credit_days ?? 0,
     createdDate: thaiDate(c.created_at),
   };
 }
@@ -392,8 +394,12 @@ function readCustomerBody(body, existing) {
     line_id: str(body.lineId, 100),
     address: str(body.address, 1000),
     notes: str(body.notes, 5000),
+    credit_days: creditDays(body.creditDays),
   };
 }
+
+/** days of credit from a form: a whole number of days, 0 to 365 */
+const creditDays = (v) => Math.round(num(v ?? 0, { min: 0, max: 365 }));
 
 /**
  * The customer a project or quote belongs to. A customer picked from the list wins; otherwise the
@@ -414,17 +420,18 @@ async function resolveCustomer(userId, customerId, name, phone, email) {
 }
 
 /**
- * Carries the phone number and email typed on a project or quote over to the customer's own record.
- * An empty field on the customer is always filled in; a different value replaces what the customer
- * has only when the shop said so (`overwrite`), because a job is sometimes arranged with someone else.
+ * Carries the phone number and email typed on a project or quote over to the customer's own record, and the days of
+ * credit given on a quote (`credit`; a project has none). An empty field on the customer (no credit: 0) is always
+ * filled in; a different value replaces what the customer has only when the shop said so (`overwrite`), because a job
+ * is sometimes arranged with someone else, or given a credit just this once.
  */
-async function syncCustomerContact(customerId, phone, email, overwrite) {
+async function syncCustomerContact(customerId, phone, email, overwrite, credit = 0) {
   if (!customerId) return;
-  const c = await db.prepare('SELECT phone, email FROM customers WHERE id = ?').get(customerId);
+  const c = await db.prepare('SELECT phone, email, credit_days FROM customers WHERE id = ?').get(customerId);
   const pick = (typed, kept) => (typed && (overwrite || !kept) ? typed : kept);
-  const next = { phone: pick(phone, c.phone), email: pick(email, c.email) };
-  if (next.phone === c.phone && next.email === c.email) return;
-  await db.prepare(`UPDATE customers SET phone = ?, email = ?, updated_at = ${NOW} WHERE id = ?`).run(next.phone, next.email, customerId);
+  const next = { phone: pick(phone, c.phone), email: pick(email, c.email), credit: pick(credit, c.credit_days) };
+  if (next.phone === c.phone && next.email === c.email && next.credit === c.credit_days) return;
+  await db.prepare(`UPDATE customers SET phone = ?, email = ?, credit_days = ?, updated_at = ${NOW} WHERE id = ?`).run(next.phone, next.email, next.credit, customerId);
 }
 
 /** which customer a save points at: `customerId` in the request picks one, a changed name is looked up again */
@@ -529,8 +536,8 @@ app.get('/api/customers/:id', route(async (req) => {
 app.post('/api/customers', route(async (req, res) => {
   const d = readCustomerBody(req.body);
   const { lastInsertRowid } = await db
-    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id')
-    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes);
+    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes, credit_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days);
   await logActivity(req.user.id, 'customer_created', `ลูกค้าใหม่ - ${d.name}`, 'เพิ่มแล้ว');
   res.status(201);
   return serializeCustomer(await getCustomer(req.user.id, lastInsertRowid));
@@ -539,8 +546,8 @@ app.post('/api/customers', route(async (req, res) => {
 app.put('/api/customers/:id', route(async (req) => {
   const existing = await getCustomer(req.user.id, req.params.id);
   const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body }, existing);
-  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
-    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, existing.id, req.user.id);
+  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, credit_days=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
+    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, existing.id, req.user.id);
   return serializeCustomer(await getCustomer(req.user.id, existing.id));
 }));
 
@@ -747,17 +754,54 @@ async function replaceCosts(projectId, d, oneMarkup = false) {
   }
   const { cost, price } = jobPricing(priced, saved);
   const { agreed_price: agreed } = await db.prepare('SELECT agreed_price FROM projects WHERE id = ?').get(projectId);
-  if (agreed !== null && cost > 0) {
-    // the price was settled with the client: every heading gets the one markup that makes the costs come to it
-    // (negative when the costs are more than the price)
-    const markup = (agreed / cost - 1) * 100;
-    // a discount has no meaning under a settled price, so none is kept
-    await db.prepare('UPDATE cost_groups SET markup = ?, discount = 0 WHERE project_id = ?').run(markup, projectId);
-    await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(markup, projectId);
-    return;
-  }
+  if (agreed !== null && cost > 0) return holdToAgreedPrice(projectId, agreed, cost);
   const overall = cost > 0 ? (price / cost - 1) * 100 : saved[0]?.markup ?? d.profit_margin;
   await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(overall, projectId);
+}
+
+/**
+ * A job whose price was settled with the customer (made from a quote): every heading gets the one markup that makes
+ * the costs come to the price (negative when the costs are more than it). A discount has no meaning under a settled
+ * price, so none is kept.
+ */
+async function holdToAgreedPrice(projectId, agreed, cost) {
+  const markup = (agreed / cost - 1) * 100;
+  await db.prepare('UPDATE cost_groups SET markup = ?, discount = 0 WHERE project_id = ?').run(markup, projectId);
+  await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(markup, projectId);
+}
+
+/** a job made from a quote takes that quote's new price (after its discount, before VAT); its margin follows from its costs */
+async function applyAgreedPrice(projectId, price) {
+  await db.prepare(`UPDATE projects SET agreed_price = ?, updated_at = ${NOW} WHERE id = ?`).run(price, projectId);
+  const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
+  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ?').all(projectId)).map(groupRow);
+  const { cost } = jobPricing(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), groups);
+  if (cost > 0) await holdToAgreedPrice(projectId, price, cost);
+}
+
+const groupRow = (g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount });
+
+/**
+ * What a job and the quote its page opens share, both ways: the customer's name, phone number and email, and the
+ * job's name. [the job's column, the quote's column, what it is called, whether it is never left empty]
+ * The customer's name (a quote needs one) and the job's name (a job needs one) are not emptied through the other.
+ */
+const SHARED_DETAILS = [
+  ['client', 'client_name', 'ชื่อลูกค้า', true],
+  ['phone', 'client_phone', 'เบอร์โทรศัพท์', false],
+  ['email', 'client_email', 'อีเมล', false],
+  ['title', 'project_title', 'ชื่อโปรเจ็กต์', true],
+];
+/** and the event date, which is the job's: it is changed on the job, and the quote takes it */
+const JOB_DETAILS = [...SHARED_DETAILS, ['event_date', 'event_date', 'วันที่จัดงาน', false]];
+const detail = (v) => v ?? '';
+
+/** the details a save of a job changed that its quote does not hold yet, as the quote is to take them */
+function jobDetailChanges(existing, d, quote) {
+  if (!quote) return [];
+  const shown = (column, v) => (column === 'event_date' ? thaiDate(v) : detail(v));
+  return JOB_DETAILS.filter(([pk, qk, , required]) => (!required || detail(d[pk])) && detail(d[pk]) !== detail(existing[pk]) && detail(quote[qk]) !== detail(d[pk]))
+    .map(([pk, qk, label]) => ({ column: qk, value: d[pk], label, from: shown(qk, quote[qk]), to: shown(qk, d[pk]) }));
 }
 
 app.get('/api/projects', route(async (req) =>
@@ -798,6 +842,8 @@ app.put('/api/projects/:id', route(async (req) => {
   const refusal = projectStatusRefusal(existing.status, nextStatus, !!ownQuote);
   if (refusal) throw new HttpError(400, refusal);
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
+  /** what this save changes that the job's quote shows too (its customer, its name, its date) */
+  const detailChanges = jobDetailChanges(existing, d, ownQuote);
   await transaction(async () => {
     // What the job gives its quote before this save. The quote follows the job, so it is this save changing that
     // which changes the quote: a save that leaves it alone (a status, a note, what the job really cost) leaves the
@@ -814,12 +860,16 @@ app.put('/api/projects/:id', route(async (req) => {
         d.review_applied, existing.id, req.user.id);
     // a caller that sends one markup for the job, and no headings, means it for every heading
     await replaceCosts(existing.id, d, req.body.profitMargin !== undefined && !Array.isArray(req.body.costGroups));
-    if (before) {
-      const after = await jobQuoteLines(existing.id);
-      if (before.price !== after.price || !sameLines(before.lines, after.lines)) quoteUpdated = await syncFollowingQuote(existing.id, req.body.confirmQuoteChange === true);
-    }
+    const after = before && (await jobQuoteLines(existing.id));
+    const synced = await syncJobQuote(ownQuote, {
+      changes: detailChanges,
+      lines: !!before && (before.price !== after.price || !sameLines(before.lines, after.lines)),
+      customerId,
+      confirmed: req.body.confirmQuoteChange === true,
+    });
+    quoteUpdated = synced.changed;
     // the customer turned the quote down and the job's prices have now been changed: it is a new offer, not yet sent
-    if (quoteUpdated && existing.status === 'rejected' && nextStatus === 'rejected') await reviseRejected(req.user.id, existing.id);
+    if (synced.lines && existing.status === 'rejected' && nextStatus === 'rejected') await reviseRejected(req.user.id, existing.id);
     if (d.status && d.status !== existing.status) {
       // the job's quote takes the status that goes with the job's (a finished job leaves it as it is)
       const quoteStatus = PROJECT_TO_QUOTE_STATUS[d.status];
@@ -863,6 +913,13 @@ async function serializeQuote(q, { withJob = false } = {}) {
     const fresh = await jobQuoteLines(q.project_id);
     job = { id: String(p.id), code: p.code, title: p.title, price: fresh.price, inStep: await inStepWithJob(q, fresh) };
   }
+  // the job this quote shares its customer, name and event date with: the job whose page opens it (an older copy has none)
+  let linkedJob;
+  if (withJob && q.project_id) {
+    const p = await db.prepare('SELECT * FROM projects WHERE id = ?').get(q.project_id);
+    const own = p && (await jobQuote(p));
+    if (own && Number(own.id) === Number(q.id)) linkedJob = { id: String(p.id), code: p.code, eventDate: p.event_date || '', priceFromQuote: p.agreed_price !== null };
+  }
   const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
   // payment falls due so many days after the event
   const dueDate = q.credit_days > 0 && q.event_date ? new Date(Date.parse(q.event_date + 'T00:00:00Z') + q.credit_days * 864e5).toISOString().slice(0, 10) : '';
@@ -905,6 +962,12 @@ async function serializeQuote(q, { withJob = false } = {}) {
     /** the number of the job this quote belonged to, when that job was deleted */
     deletedProjectCode: q.deleted_project_code || null,
     ...(job ? { job } : {}),
+    /**
+     * On a quote read by itself: the job whose page opens it. The customer's name, phone and email and the job's name
+     * are the same on both, changed on either; the event date is the job's. `priceFromQuote`: a job made from a quote,
+     * whose price follows this quote's lines (an ordinary job's quote follows the job instead).
+     */
+    ...(linkedJob ? { linkedJob } : {}),
     status,
     statusText: QUOTE_STATUS[status] || status,
     createdDate: thaiDate(q.created_at),
@@ -937,7 +1000,7 @@ async function readQuoteBody(userId, body, existing) {
     client_tax_id: str(body.clientTaxId, 20),
     client_branch: str(body.clientBranch, 60),
     reference_no: str(body.referenceNo, 60),
-    credit_days: Math.round(num(body.creditDays ?? 0, { min: 0, max: 365 })),
+    credit_days: creditDays(body.creditDays),
     internal_note: str(body.internalNote, 2000),
     project_title: str(body.projectTitle, 200),
     event_date: date(body.eventDate),
@@ -963,17 +1026,6 @@ function checkLockedPrice(lockedPrice, d, items) {
     const baht = (n) => `฿${n.toLocaleString('th-TH')}`;
     throw new HttpError(400, `ยอดรวมรายการ ${baht(afterDiscount)} ไม่เท่ากับราคาโปรเจ็กต์ที่ล็อกไว้ ${baht(lockedPrice)} กด "ปรับส่วนต่างอัตโนมัติ" หรือแก้รายการให้ยอดตรงกัน`);
   }
-}
-
-async function lockedPriceOf(projectId) {
-  if (!projectId) return null;
-  const p = await db.prepare('SELECT profit_margin, agreed_price FROM projects WHERE id = ?').get(projectId);
-  if (p.agreed_price !== null) return p.agreed_price;
-  const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
-  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ?').all(projectId)).map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount }));
-  const price = projectPrice(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), p.profit_margin, groups);
-  // a job with no costs yet has no price to hold the quote to
-  return price > 0 ? price : null;
 }
 
 /** the quote tied to a job: its lines and price are the job's. One per job; a job made from a quote has none. */
@@ -1018,27 +1070,81 @@ async function inStepWithJob(quote, fresh) {
 /** the customer has this quote in hand (or has agreed to it), so it is not changed without the shop saying so */
 const QUOTE_IS_OUT = ['sent', 'approved'];
 
+/** what a quote's lines come to after its discount, before VAT: the price a job made from it takes */
+async function quotePrice(quote) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const rounding = ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht';
+  return quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding }).afterDiscount;
+}
+
 /**
- * Brings the job's quote into line with the job as it stands, and says whether the quote changed.
+ * Brings the quote a job's page opens into line with a save of the job: the details the two share that the save
+ * changed (`changes`, from jobDetailChanges), and for a quote tied to the job its lines and price (`lines`: the save
+ * changed what the job gives its quote). Says whether the quote changed, and whether its lines did.
  * A quote that is already sent or approved is only changed when the caller has confirmed it: otherwise the request
- * is refused with 409 and the details the confirmation needs, and nothing of it is kept.
+ * is refused with 409 and what the confirmation needs to show, and nothing of it is kept.
  */
-async function syncFollowingQuote(projectId, confirmed) {
-  const quote = await followingQuote(projectId);
-  if (!quote) return false;
-  const fresh = await jobQuoteLines(projectId);
-  if (await inStepWithJob(quote, fresh)) return false;
+async function syncJobQuote(quote, { changes = [], lines = false, customerId = null, confirmed = false }) {
+  const none = { changed: false, lines: false };
+  if (!quote) return none;
+  const fresh = lines && quote.follows_project ? await jobQuoteLines(quote.project_id) : null;
+  const newLines = fresh && !(await inStepWithJob(quote, fresh)) ? fresh : null;
+  if (!newLines && changes.length === 0) return none;
   if (QUOTE_IS_OUT.includes(quote.status) && !confirmed) {
-    const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
-    const rounding = ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht';
-    const before = quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, rounding }).afterDiscount;
+    const price = await quotePrice(quote);
     const err = new HttpError(409, `ใบเสนอราคา ${quote.code} ${quote.status === 'approved' ? 'ลูกค้าอนุมัติแล้ว' : 'ส่งให้ลูกค้าแล้ว'} การแก้นี้จะเปลี่ยนใบเสนอราคาตามโปรเจ็กต์ ยืนยันก่อนบันทึก`);
-    err.data = { code: 'quote_change', quote: { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status], price: before, newPrice: fresh.price ?? 0 } };
+    err.data = {
+      code: 'quote_change',
+      quote: {
+        id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status],
+        price, newPrice: newLines ? newLines.price ?? 0 : price, lines: !!newLines,
+        details: changes.map(({ label, from, to }) => ({ label, from, to })),
+      },
+    };
     throw err;
   }
-  await replaceQuoteItems(quote.id, fresh.lines.map(lineRow));
-  await db.prepare(`UPDATE quotes SET locked_price = ?, discount_rate = 0, rounding = 'line', updated_at = ${NOW} WHERE id = ?`).run(fresh.price, quote.id);
-  return true;
+  if (changes.length) {
+    // the columns are the fixed ones of JOB_DETAILS, never from the request
+    const sets = changes.map((c) => `${c.column} = ?`);
+    const values = changes.map((c) => c.value);
+    if (changes.some((c) => c.column === 'client_name')) {
+      sets.push('customer_id = ?');
+      values.push(customerId);
+    }
+    await db.prepare(`UPDATE quotes SET ${sets.join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...values, quote.id);
+  }
+  if (newLines) {
+    await replaceQuoteItems(quote.id, newLines.lines.map(lineRow));
+    await db.prepare(`UPDATE quotes SET locked_price = ?, discount_rate = 0, rounding = 'line', updated_at = ${NOW} WHERE id = ?`).run(newLines.price, quote.id);
+  }
+  return { changed: true, lines: !!newLines };
+}
+
+/**
+ * A save of the quote a job's page opens: the details the two share that this save changed go to the job too (for a
+ * new quote, `before` is null: the ones it was given that differ from the job's); and a job made from a quote takes
+ * the quote's price, since it is changed on the quote. Says whether the job changed, and whether its price did.
+ */
+async function syncJobFromQuote(job, quoteId, before, d, customerId) {
+  const changes = SHARED_DETAILS.filter(([pk, qk, , required]) =>
+    ((required || !before) ? !!detail(d[qk]) : true) && (!before || detail(d[qk]) !== detail(before[qk])) && detail(job[pk]) !== detail(d[qk]));
+  const sets = changes.map(([pk]) => `${pk} = ?`);
+  const values = changes.map(([, qk]) => d[qk]);
+  if (changes.some(([pk]) => pk === 'client')) {
+    sets.push('customer_id = ?');
+    values.push(customerId);
+  }
+  if (sets.length) await db.prepare(`UPDATE projects SET ${sets.join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...values, job.id);
+  let priced = false;
+  if (job.agreed_price !== null) {
+    // a quote with nothing on it yet (being written) does not take the job's price down to nothing
+    const price = await quotePrice(await db.prepare('SELECT * FROM quotes WHERE id = ?').get(quoteId));
+    if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) {
+      await applyAgreedPrice(job.id, price);
+      priced = true;
+    }
+  }
+  return { changed: sets.length > 0 || priced, priced };
 }
 
 async function replaceQuoteItems(quoteId, items) {
@@ -1086,7 +1192,8 @@ app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(re
 /**
  * Turns a quote that was written on its own into a job, once the client has said yes: the job takes the
  * quote's details and its lines (as cost items waiting for a cost), and its price is the quote's amount
- * after the discount and before VAT. The quote is tied to the new job and held to that price.
+ * after the discount and before VAT. From then on the two share their details, and the job's price follows
+ * the quote's lines, which stay free to change on the quote.
  */
 app.post('/api/quotes/:id/project', route(async (req, res) => {
   const quote = await getQuote(req.user.id, req.params.id);
@@ -1110,7 +1217,7 @@ app.post('/api/quotes/:id/project', route(async (req, res) => {
       groups: [{ id: 1, name: 'รายการต้นทุน', markup: 0 }],
       items: items.filter((i) => i.description).map((i) => ({ group: 1, name: i.description, category: 'material', quantity: i.quantity > 0 ? i.quantity : 1, unit: i.unit, price: 0, actual: null, is_extra: 0 })),
     });
-    await db.prepare(`UPDATE quotes SET project_id = ?, locked_price = ?, updated_at = ${NOW} WHERE id = ?`).run(projectId, afterDiscount, quote.id);
+    await db.prepare(`UPDATE quotes SET project_id = ?, locked_price = NULL, updated_at = ${NOW} WHERE id = ?`).run(projectId, quote.id);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่จากใบเสนอราคา ${quote.code} - ${title}`, 'เพิ่มแล้ว');
     return await getProject(req.user.id, projectId);
   });
@@ -1123,17 +1230,20 @@ app.post('/api/quotes', route(async (req, res) => {
   // a new quote lets each line choose; only quotes that already exist stay on the old whole-baht rule
   d.rounding ||= 'line';
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
+  /** whether this save changed the job too (the details they share, or the price of a job made from a quote) */
+  let jobUpdated = false;
   const quote = await transaction(async () => {
     const code = await nextCode('quotes', req.user.id, 'QT');
     const status = d.status || 'draft';
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
-    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
+    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true, d.credit_days);
     // A quote made for a job follows it: the lines and the price are the job's, whatever the caller sent, and one
-    // quote per job does. A job that was itself made from a quote is the other way round: its price is settled, and
-    // a quote for it is only held to that price.
-    const job = d.project_id ? await db.prepare('SELECT agreed_price FROM projects WHERE id = ?').get(d.project_id) : null;
+    // quote per job does. A job that was itself made from a quote is the other way round: its price follows its
+    // newest quote, which this one becomes. Either way the quote shares the job's details, and its event date is the job's.
+    const job = d.project_id ? await db.prepare('SELECT * FROM projects WHERE id = ?').get(d.project_id) : null;
+    if (job) d.event_date = job.event_date;
     const follows = !!job && job.agreed_price === null;
-    let lockedPrice;
+    let lockedPrice = null;
     if (follows) {
       const other = await followingQuote(d.project_id);
       if (other) throw new HttpError(400, `โปรเจ็กต์นี้มีใบเสนอราคา ${other.code} อยู่แล้ว เปิดใบนั้นแทนการสร้างใหม่`);
@@ -1142,9 +1252,6 @@ app.post('/api/quotes', route(async (req, res) => {
       d.discount_rate = 0;
       d.rounding = 'line';
       lockedPrice = fresh.price;
-    } else {
-      lockedPrice = await lockedPriceOf(d.project_id);
-      checkLockedPrice(lockedPrice, d, d.items || []);
     }
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status,
@@ -1154,12 +1261,13 @@ app.post('/api/quotes', route(async (req, res) => {
         d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status,
         d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, follows ? 1 : 0);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
+    if (job) jobUpdated = (await syncJobFromQuote(job, lastInsertRowid, null, d, customerId)).changed;
     await syncProjectStatus(req.user.id, lastInsertRowid, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
     return await getQuote(req.user.id, lastInsertRowid);
   });
   res.status(201);
-  return serializeQuote(quote, { withJob: true });
+  return { ...(await serializeQuote(quote, { withJob: true })), jobUpdated };
 }));
 
 app.put('/api/quotes/:id', route(async (req) => {
@@ -1169,9 +1277,14 @@ app.put('/api/quotes/:id', route(async (req) => {
   const d = await readQuoteBody(req.user.id, merged, existing);
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const status = d.status || existing.status;
+  /** the job whose page opens this quote: they share the customer and the job's name, and the event date is the job's */
+  const job = await jobOfQuote(req.user.id, existing.id, existing.project_id);
+  if (job) d.event_date = job.event_date;
+  /** whether this save changed the job too (the details they share, or the price of a job made from a quote) */
+  let jobUpdated = false;
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
-    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
+    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true, d.credit_days);
     if (existing.follows_project && existing.project_id) {
       // its lines, discount and job are not the quote's to change: they are the job's, and are changed there
       d.project_id = existing.project_id;
@@ -1188,15 +1301,20 @@ app.put('/api/quotes/:id', route(async (req) => {
       .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status,
         d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
+    if (job) {
+      const synced = await syncJobFromQuote(job, existing.id, existing, d, customerId);
+      jobUpdated = synced.changed;
+      // the customer turned the quote down and its prices have now been changed: it is a new offer, not yet sent
+      if (synced.priced && existing.status === 'rejected' && status === 'rejected') await reviseRejected(req.user.id, job.id);
+    }
     if (status !== existing.status) {
       // a finished job keeps its quote as approved: its status is changed at the job first
-      const job = await jobOfQuote(req.user.id, existing.id, d.project_id);
       if (job?.status === 'completed') throw new HttpError(400, `โปรเจ็กต์ ${job.code} เสร็จสิ้นแล้ว เปลี่ยนสถานะใบเสนอราคาไม่ได้ ถ้าจะเปลี่ยน ให้เปลี่ยนสถานะที่โปรเจ็กต์ก่อน`);
       await syncProjectStatus(req.user.id, existing.id, d.project_id, status);
       await logActivity(req.user.id, `quote_${status}`, `ใบเสนอราคา ${existing.code}`, QUOTE_STATUS[status]);
     }
   });
-  return serializeQuote(await getQuote(req.user.id, existing.id), { withJob: true });
+  return { ...(await serializeQuote(await getQuote(req.user.id, existing.id), { withJob: true })), jobUpdated };
 }));
 
 // A quote tied to its job normally keeps up by itself. One made before the two were tied may still hold its old
@@ -1205,7 +1323,8 @@ app.post('/api/quotes/:id/sync', route(async (req) => {
   const quote = await getQuote(req.user.id, req.params.id);
   if (!quote.follows_project || !quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้ไม่ได้ผูกกับโปรเจ็กต์');
   await transaction(async () => {
-    if (await syncFollowingQuote(quote.project_id, req.body?.confirmQuoteChange === true) && quote.status === 'rejected') await reviseRejected(req.user.id, quote.project_id);
+    const synced = await syncJobQuote(quote, { lines: true, confirmed: req.body?.confirmQuoteChange === true });
+    if (synced.lines && quote.status === 'rejected') await reviseRejected(req.user.id, quote.project_id);
   });
   return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
 }));
@@ -1219,6 +1338,11 @@ app.delete('/api/quotes/:id', route(async (req) => {
     const next = await jobQuote(job);
     const status = next ? QUOTE_TO_PROJECT_STATUS[next.status] ?? job.status : 'draft';
     if (status !== job.status) await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(status, job.id);
+    // and a job made from a quote takes the price of the quote it opens now (with none left, it keeps the last one)
+    if (next && job.agreed_price !== null) {
+      const price = await quotePrice(next);
+      if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) await applyAgreedPrice(job.id, price);
+    }
   }
   await logActivity(req.user.id, 'quote_deleted', `ลบใบเสนอราคา ${q.code}`, 'ลบแล้ว');
   return { ok: true };

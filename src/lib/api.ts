@@ -89,6 +89,8 @@ export interface Customer {
   lineId: string;
   address: string;
   notes: string;
+  /** days of credit this customer is given after the event (0 = none): a new quote for them starts with it */
+  creditDays: number;
   createdDate: string;
 }
 
@@ -208,6 +210,14 @@ export interface Quote {
   deletedProjectCode?: string | null;
   /** on a quote read by itself: the job it follows, the job's price now, and whether the quote still holds what the job gives it */
   job?: { id: string; code: string; title: string; price: number | null; inStep: boolean };
+  /**
+   * On a quote read by itself: the job whose page opens it. The customer's name, phone and email and the job's name
+   * are the same on both, changed on either; the event date is the job's (`eventDate`) and is changed there.
+   * `priceFromQuote`: a job made from a quote, whose price follows this quote's lines.
+   */
+  linkedJob?: { id: string; code: string; eventDate: string; priceFromQuote: boolean };
+  /** on the answer to a save: the save changed the job too (the details they share, or its price) */
+  jobUpdated?: boolean;
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
@@ -300,6 +310,10 @@ export interface QuoteChange {
   /** the quote's price before VAT as it stands, and what the save would make it */
   price: number;
   newPrice: number;
+  /** the save changes the quote's lines (a tied quote: its prices or headings) */
+  lines?: boolean;
+  /** the details the save changes on the quote (its customer, the job's name, the event date), as they read */
+  details?: Array<{ label: string; from: string; to: string }>;
 }
 export type QuoteInput = Partial<Omit<Quote, 'items'>> & CustomerUpdate & {
   items?: Array<Pick<QuoteItem, 'description' | 'quantity' | 'unitPrice'> & { unit?: string; roundUp?: boolean }>;

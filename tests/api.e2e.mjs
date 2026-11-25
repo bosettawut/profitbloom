@@ -420,7 +420,7 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ร้าน B สั่งอัปเดตใบเสนอราคาของ A ไม่ได้', r.status === 404, r.status);
   await A.call('DELETE', `/projects/${oldJob.id}`);
 
-  // --- a job made from a quote is the other way round: its price is settled, and a quote for it is only held to that price
+  // --- a job made from a quote is the other way round: its price follows its quote, whose lines are changed on the quote
   r = await make({ taxRate: 7, status: 'approved', items: line(1500) });
   const sourceQ = r.data;
   r = await A.call('POST', `/quotes/${sourceQ.id}/project`);
@@ -429,20 +429,21 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await make({ projectId: settled.id, items: line(1500) });
   const lq = r.data;
   ok('ใบที่ไม่ได้ผูกกับโปรเจ็กต์ สั่งอัปเดตตามโปรเจ็กต์ไม่ได้ (400)', (await A.call('POST', `/quotes/${lq.id}/sync`)).status === 400);
-  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: ใบของโปรเจ็กต์นี้ไม่ตามโปรเจ็กต์ แค่ล็อกราคาที่ตกลงไว้ (1,500)', r.status === 201 && lq.followsProject === false && lq.lockedPrice === 1500 && settled.agreedPrice === 1500, JSON.stringify([r.status, lq.followsProject, lq.lockedPrice, settled.agreedPrice, settled.quote]));
+  const agreed = async () => (await A.call('GET', `/projects/${settled.id}`)).data.agreedPrice;
+  ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคา: ใบใหม่ของโปรเจ็กต์นี้ไม่ตามโปรเจ็กต์ และไม่ล็อกราคา', r.status === 201 && lq.followsProject === false && lq.lockedPrice === null && settled.agreedPrice === 1500 && lq.linkedJob?.id === settled.id && lq.linkedJob.priceFromQuote === true, JSON.stringify([r.status, lq.followsProject, lq.lockedPrice, settled.agreedPrice, lq.linkedJob]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 1, unitPrice: 1000 }, { description: 'ค่าแรง', quantity: 2, unitPrice: 250 }] });
-  ok('แก้รายการได้ ถ้ายอดรวมยังเท่าราคาที่ล็อก', r.status === 200 && r.data.items.length === 2 && r.data.totalAmount === 1605, r.data.totalAmount);
+  ok('แก้รายการในใบ ยอดเท่าเดิม (1,500) → ราคาโปรเจ็กต์คงเดิม ไม่บอกว่าโปรเจ็กต์เปลี่ยน', r.status === 200 && r.data.items.length === 2 && r.data.totalAmount === 1605 && r.data.jobUpdated === false && (await agreed()) === 1500, JSON.stringify([r.data.totalAmount, r.data.jobUpdated]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: line(1400) });
-  ok('แก้รายการจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('1,400') && r.data.error.includes('1,500'), JSON.stringify(r.data));
+  ok('แก้รายการจนยอดเปลี่ยน (1,400) → บันทึกได้ ราคาโปรเจ็กต์เปลี่ยนตามใบ', r.status === 200 && r.data.jobUpdated === true && (await agreed()) === 1400, JSON.stringify([r.status, r.data.jobUpdated, r.data.error]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { discountRate: 10 });
-  ok('ใส่ส่วนลดจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400);
+  ok('ใส่ส่วนลด 10% → ราคาโปรเจ็กต์เป็นยอดหลังลด (1,260)', r.status === 200 && (await agreed()) === 1260, r.status);
   r = await A.call('PUT', `/quotes/${lq.id}`, { discountRate: 25, items: line(2000) });
-  ok('ส่วนลดได้ ถ้ายอดหลังหักส่วนลดเท่าราคาที่ล็อก (2,000 -25%)', r.status === 200 && r.data.totalAmount === 1605, r.data.totalAmount);
+  ok('2,000 ลด 25% → ราคาโปรเจ็กต์ 1,500', r.status === 200 && r.data.totalAmount === 1605 && (await agreed()) === 1500, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { vatMode: 'inclusive' });
-  ok('เปลี่ยนเป็นถอด VAT: ลูกค้าจ่ายเท่าราคาที่ล็อก', r.status === 200 && r.data.totalAmount === 1500, r.data.totalAmount);
+  ok('เปลี่ยนเป็นถอด VAT: ลูกค้าจ่าย 1,500 ราคาโปรเจ็กต์คงเดิม', r.status === 200 && r.data.totalAmount === 1500 && (await agreed()) === 1500, r.data.totalAmount);
   await A.call('PUT', `/projects/${settled.id}`, { profitMargin: 100 });
   r = await A.call('PUT', `/quotes/${lq.id}`, { notes: 'x', status: 'sent' });
-  ok('ราคาโปรเจ็กต์เปลี่ยนทีหลัง ราคาที่ล็อกในใบเสนอราคาไม่เปลี่ยน', r.status === 200 && r.data.lockedPrice === 1500, r.data.lockedPrice);
+  ok('ส่ง Margin มาที่โปรเจ็กต์ → ราคาขายยังมาจากใบ (1,500) ใบไม่ถูกล็อก', r.status === 200 && r.data.lockedPrice === null && (await agreed()) === 1500, JSON.stringify([r.data.lockedPrice]));
   // rounding: each line chooses to round up; discount and VAT keep the satang
   const cents = [{ description: 'a', quantity: 3, unitPrice: 33.33 }];
   const mixed = [{ description: 'ปัด', quantity: 3, unitPrice: 33.33, roundUp: true }, { description: 'ไม่ปัด', quantity: 1, unitPrice: 10.25 }];
@@ -475,13 +476,11 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await make({ taxRate: 7, vatMode: 'inclusive', rounding: 'satang', items: [{ description: 'a', quantity: 1, unitPrice: 1000 }] });
   ok('ไม่ปัดเศษ + ถอด VAT: ลูกค้าจ่าย 1,000 เท่าเดิม', r.data.totalAmount === 1000, r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }] });
-  ok('ไม่ปัดเศษกับราคาที่ล็อก: 1,499.97 ไม่เท่า 1,500 ถูกปฏิเสธ', r.status === 400, r.status);
-  r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'satang', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99 }, { description: 'ปรับยอด', quantity: 1, unitPrice: 0.03 }] });
-  ok('ไม่ปัดเศษกับราคาที่ล็อก: รายการรวม 1,500.00 พอดี บันทึกได้', r.status === 200 && r.data.totalAmount === 1605, JSON.stringify([r.status, r.data.totalAmount]));
+  ok('ไม่ปัดเศษ: 1,499.97 → ราคาโปรเจ็กต์ได้สตางค์ตามใบ', r.status === 200 && (await agreed()) === 1499.97, r.status);
   r = await A.call('PUT', `/quotes/${lq.id}`, { rounding: 'line', discountRate: 0, vatMode: 'exclusive', items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99, roundUp: true }] });
-  ok('เลือกปัดรายบรรทัดกับราคาที่ล็อก: 1,499.97 ปัดเป็น 1,500 ตรงราคาที่ล็อก บันทึกได้', r.status === 200 && r.data.items[0].total === 1500 && r.data.totalAmount === 1605, JSON.stringify([r.status, r.data.totalAmount]));
+  ok('เลือกปัดรายบรรทัด: 1,499.97 ปัดเป็น 1,500 → ราคาโปรเจ็กต์ 1,500', r.status === 200 && r.data.items[0].total === 1500 && r.data.totalAmount === 1605 && (await agreed()) === 1500, JSON.stringify([r.status, r.data.totalAmount]));
   r = await A.call('PUT', `/quotes/${lq.id}`, { items: [{ description: 'ดอกไม้', quantity: 3, unitPrice: 499.99, roundUp: false }] });
-  ok('เอาติ๊กปัดออกจนยอดไม่เท่าราคาที่ล็อก ถูกปฏิเสธ', r.status === 400, r.status);
+  ok('เอาติ๊กปัดออก → ราคาโปรเจ็กต์กลับเป็น 1,499.97', r.status === 200 && (await agreed()) === 1499.97, r.status);
   r = await make({ taxRate: 7, discountRate: 5, rounding: 'satang', status: 'approved', items: cents });
   r = await A.call('POST', `/quotes/${r.data.id}/project`);
   ok('ใบเสนอราคาแบบไม่ปัดเศษ → โปรเจ็กต์ได้ราคาที่ตกลงพร้อมสตางค์ (94.99)', r.status === 201 && r.data.agreedPrice === 94.99, JSON.stringify([r.status, r.data.agreedPrice]));
@@ -508,7 +507,7 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   r = await A.call('PUT', `/quotes/${wq.id}`, { whtRate: 0 });
   ok('ตั้งกลับเป็น 0 = ไม่หัก', r.status === 200 && r.data.withholding === 0 && r.data.payableAmount === r.data.totalAmount);
   r = await A.call('PUT', `/quotes/${lq.id}`, { whtRate: 3 });
-  ok('หัก ณ ที่จ่ายไม่กระทบราคาที่ล็อก: ยังบันทึกได้ และหัก 3% ของ 1,500 = 45', r.status === 200 && r.data.withholding === 45 && r.data.payableAmount === 1560, JSON.stringify([r.status, r.data.withholding, r.data.payableAmount]));
+  ok('หัก ณ ที่จ่ายไม่กระทบราคาโปรเจ็กต์: หัก 3% ของ 1,499.97 = 45 ราคาโปรเจ็กต์ยัง 1,499.97', r.status === 200 && r.data.withholding === 45 && r.data.payableAmount === 1559.97 && (await agreed()) === 1499.97, JSON.stringify([r.status, r.data.withholding, r.data.payableAmount]));
   // the quote that job's page opens: the newest for it; with none left, the page offers to make one again
   job = (await A.call('GET', `/projects/${settled.id}`)).data;
   ok('โปรเจ็กต์ที่สร้างจากใบเสนอราคาและมีใบเสนอราคามากกว่าหนึ่งใบ: หน้างานเปิดใบล่าสุด', job.quote?.id === lq.id, JSON.stringify(job.quote));
@@ -516,7 +515,7 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   const backToSource = (await A.call('GET', `/projects/${settled.id}`)).data.quote;
   await A.call('DELETE', `/quotes/${sourceQ.id}`);
   job = (await A.call('GET', `/projects/${settled.id}`)).data;
-  ok('ลบใบล่าสุด → กลับไปเปิดใบต้นทาง · ลบทุกใบ → ไม่มีใบให้เปิด (หน้างานกลับมีปุ่มสร้างใบเสนอราคา)', backToSource?.id === sourceQ.id && job.quote === null && job.agreedPrice === 1500, JSON.stringify([backToSource, job.quote, job.agreedPrice]));
+  ok('ลบใบล่าสุด → กลับไปเปิดใบต้นทาง และราคาโปรเจ็กต์กลับเป็นของใบนั้น (1,500) · ลบทุกใบ → ไม่มีใบให้เปิด ราคาคงเดิม', backToSource?.id === sourceQ.id && job.quote === null && job.agreedPrice === 1500, JSON.stringify([backToSource, job.quote, job.agreedPrice]));
   for (const id of [lp.id, settled.id]) await A.call('DELETE', `/projects/${id}`);
   for (const q of (await A.call('GET', '/quotes')).data) if (q.clientName === 'ลูกค้าคำนวณ') await A.call('DELETE', `/quotes/${q.id}`);
 }
@@ -647,7 +646,7 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('ราคาโปรเจ็กต์ยึดตามยอดหลังส่วนลดก่อน VAT = 45,000', p.agreedPrice === 45000, p.agreedPrice);
   ok('รายการในใบเสนอราคากลายเป็นรายการต้นทุนที่รอกรอกราคาทุน อยู่ใต้หัวข้อเดียว', p.costGroups.length === 1 && p.costItems.length === 2 && p.costItems[0].name === 'ซุ้มดอกไม้' && p.costItems[0].quantity === 2 && p.costItems.every((i) => i.price === 0 && i.groupId === p.costGroups[0].id), JSON.stringify(p.costItems));
   r = await A.call('GET', `/quotes/${q.id}`);
-  ok('ใบเสนอราคาถูกผูกกับโปรเจ็กต์ และล็อกราคา 45,000', r.data.projectId === p.id && r.data.lockedPrice === 45000);
+  ok('ใบเสนอราคาถูกผูกกับโปรเจ็กต์ ไม่ล็อกราคา และรู้ว่าราคาโปรเจ็กต์มาจากใบนี้', r.data.projectId === p.id && r.data.lockedPrice === null && r.data.linkedJob?.id === p.id && r.data.linkedJob.priceFromQuote === true, JSON.stringify([r.data.lockedPrice, r.data.linkedJob]));
   ok('สร้างซ้ำจากใบเดิมไม่ได้', (await A.call('POST', `/quotes/${q.id}/project`)).status === 400);
 
   let rep = await report();
@@ -668,7 +667,7 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('ต้นทุน 50,000 เกินราคาที่ตกลง → ราคายัง 45,000 และรายงานแสดงขาดทุน 5,000', Math.abs(price(r.data) - 45000) < 0.01 && (await report()).sales.totals.profit === -5000, JSON.stringify([price(r.data), (await report()).sales.totals]));
 
   r = await A.call('PUT', `/quotes/${q.id}`, { items: [{ description: 'ซุ้มดอกไม้', quantity: 2, unitPrice: 30000 }] });
-  ok('แก้ใบเสนอราคาจนยอดไม่เท่าราคาที่ตกลง → ถูกปฏิเสธ', r.status === 400 && r.data.error.includes('45,000'), JSON.stringify(r.data));
+  ok('แก้ใบเสนอราคา (60,000 ลด 10% = 54,000) → ราคาโปรเจ็กต์เปลี่ยนตาม กำไรคิดใหม่จากต้นทุน 50,000', r.status === 200 && r.data.jobUpdated === true && (await A.call('GET', `/projects/${p.id}`)).data.agreedPrice === 54000 && (await report()).sales.totals.profit === 4000, JSON.stringify([r.status, r.data.jobUpdated, (await report()).sales.totals]));
   r = await A.call('POST', '/quotes', { clientName: 'คุณว่าง', status: 'approved', items: [] });
   ok('ใบเสนอราคาที่ยังไม่มียอดเงิน → สร้างโปรเจ็กต์ไม่ได้', (await A.call('POST', `/quotes/${r.data.id}/project`)).status === 400);
   await A.call('DELETE', `/quotes/${r.data.id}`);
@@ -1041,6 +1040,98 @@ ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
   await A.call('DELETE', `/projects/${made.data.id}`);
   await A.call('DELETE', `/quotes/${q.id}`);
   await A.call('DELETE', `/quotes/${plain.id}`);
+}
+
+// --- a customer's credit, and the details a job shares with its quote
+{
+  // credit on the customer's own record
+  let r = await A.call('POST', '/customers', { name: 'คุณเครดิต', phone: '081-555-0001', creditDays: 30 });
+  const c = r.data;
+  ok('ลูกค้ามีเครดิต (วัน): สร้างพร้อมเครดิต 30 วัน', r.status === 201 && c.creditDays === 30, JSON.stringify(c));
+  r = await A.call('PUT', `/customers/${c.id}`, { notes: 'แก้อย่างอื่น' });
+  ok('แก้ช่องอื่นของลูกค้า เครดิตคงเดิม', r.data.creditDays === 30, r.data.creditDays);
+  r = await A.call('PUT', `/customers/${c.id}`, { creditDays: 500 });
+  const capped = r.data.creditDays;
+  r = await A.call('PUT', `/customers/${c.id}`, { creditDays: -3 });
+  ok('เครดิตของลูกค้าเกิน 365 → 365 · ติดลบ → 0', capped === 365 && r.data.creditDays === 0, JSON.stringify([capped, r.data.creditDays]));
+  r = await A.call('GET', '/customers');
+  ok('รายชื่อลูกค้าบอกเครดิต (ให้ใบใหม่เติม)', typeof r.data.find((x) => x.id === c.id)?.creditDays === 'number');
+
+  // a quote's credit goes to the customer: filled in when the customer has none, replaced only when the shop says so
+  r = await A.call('POST', '/quotes', { customerId: c.id, clientName: c.name, creditDays: 15, items: [{ description: 'x', quantity: 1, unitPrice: 100 }] });
+  const cq = r.data;
+  ok('ใบเสนอราคาให้เครดิต 15 วัน ลูกค้ายังไม่มีเครดิต → ลูกค้าได้ 15 วัน', (await A.call('GET', `/customers/${c.id}`)).data.creditDays === 15);
+  r = await A.call('PUT', `/quotes/${cq.id}`, { creditDays: 60 });
+  ok('ใบให้เครดิตต่างจากของลูกค้า (60) โดยไม่สั่งอัปเดต → ลูกค้ายัง 15 วัน', r.status === 200 && (await A.call('GET', `/customers/${c.id}`)).data.creditDays === 15);
+  r = await A.call('PUT', `/quotes/${cq.id}`, { creditDays: 45, updateCustomer: true });
+  ok('สั่งอัปเดตข้อมูลลูกค้า → ลูกค้าได้เครดิต 45 วันตามใบ', r.status === 200 && (await A.call('GET', `/customers/${c.id}`)).data.creditDays === 45);
+  await A.call('DELETE', `/quotes/${cq.id}`);
+
+  // an ordinary job and its quote: the customer, the job's name both ways; the event date is the job's
+  r = await A.call('POST', '/projects', { title: 'งานผูกข้อมูล', projectType: 'อื่นๆ', client: 'คุณเดิม', phone: '081-555-0002', email: 'old@x.test', eventDate: '2031-06-01', profitMargin: 50,
+    costItems: [{ name: 'ดอกไม้', category: 'material', quantity: 1, price: 1000 }] });
+  const job = r.data;
+  r = await A.call('POST', '/quotes', { projectId: job.id, clientName: 'คุณเดิม', clientPhone: '081-555-0002', clientEmail: 'old@x.test', projectTitle: 'งานผูกข้อมูล', eventDate: '2031-12-31' });
+  const tq = r.data;
+  ok('ใบของโปรเจ็กต์: วันจัดงานเป็นของโปรเจ็กต์ (ส่งวันอื่นมาก็ไม่ใช้) และรู้ว่าผูกกับโปรเจ็กต์ไหน', r.status === 201 && tq.eventDate === '2031-06-01' && tq.linkedJob?.id === job.id && tq.linkedJob.priceFromQuote === false && tq.linkedJob.eventDate === '2031-06-01', JSON.stringify([tq.eventDate, tq.linkedJob]));
+  r = await A.call('PUT', `/projects/${job.id}`, { client: 'คุณใหม่', phone: '089-555-0003', email: 'new@x.test', title: 'งานผูกข้อมูล (แก้ชื่อ)', eventDate: '2031-07-01' });
+  let now = (await A.call('GET', `/quotes/${tq.id}`)).data;
+  ok('แก้ที่โปรเจ็กต์ (ใบยังเป็นร่าง) → ชื่อลูกค้า เบอร์ อีเมล ชื่องาน วันจัดงานในใบเปลี่ยนตาม และบอกว่าใบเปลี่ยน',
+    r.status === 200 && r.data.quoteUpdated === true && now.clientName === 'คุณใหม่' && now.clientPhone === '089-555-0003' && now.clientEmail === 'new@x.test' && now.projectTitle === 'งานผูกข้อมูล (แก้ชื่อ)' && now.eventDate === '2031-07-01' && now.customerId === r.data.customerId,
+    JSON.stringify([r.status, r.data.quoteUpdated, now.clientName, now.clientPhone, now.projectTitle, now.eventDate, now.customerId, r.data.customerId]));
+  r = await A.call('PUT', `/quotes/${tq.id}`, { clientName: 'คุณจากใบ', clientPhone: '', projectTitle: 'ชื่อจากใบ', eventDate: '2031-01-01', referenceNo: 'PO-1' });
+  let p = (await A.call('GET', `/projects/${job.id}`)).data;
+  ok('แก้ที่ใบเสนอราคา → โปรเจ็กต์ได้ชื่อลูกค้า ชื่องานตามใบ เบอร์ที่ลบในใบก็ลบที่โปรเจ็กต์ และบอกว่าโปรเจ็กต์เปลี่ยน',
+    r.status === 200 && r.data.jobUpdated === true && p.client === 'คุณจากใบ' && p.title === 'ชื่อจากใบ' && p.phone === '' && p.email === 'new@x.test' && p.customerId === r.data.customerId,
+    JSON.stringify([r.status, r.data.jobUpdated, p.client, p.title, p.phone, p.email, p.customerId, r.data.customerId]));
+  ok('วันจัดงานแก้ที่ใบไม่ได้: ทั้งใบและโปรเจ็กต์ยังเป็นวันของโปรเจ็กต์', r.data.eventDate === '2031-07-01' && p.eventDate === '2031-07-01', JSON.stringify([r.data.eventDate, p.eventDate]));
+  r = await A.call('PUT', `/quotes/${tq.id}`, { referenceNo: 'PO-2', creditDays: 7 });
+  ok('แก้ช่องที่เป็นของใบเอง (เลขอ้างอิง เครดิต) → โปรเจ็กต์ไม่ถูกแตะ', r.status === 200 && r.data.jobUpdated === false, r.data.jobUpdated);
+  r = await A.call('PUT', `/quotes/${tq.id}`, { projectTitle: '' });
+  ok('ลบชื่องานในใบ → โปรเจ็กต์ยังมีชื่อ (ชื่อโปรเจ็กต์ต้องมีเสมอ)', r.status === 200 && (await A.call('GET', `/projects/${job.id}`)).data.title === 'ชื่อจากใบ');
+  await A.call('PUT', `/quotes/${tq.id}`, { projectTitle: 'ชื่อจากใบ' });
+
+  // the customer has the quote: a change from the job is asked about first, showing what would change
+  await A.call('PUT', `/quotes/${tq.id}`, { status: 'sent' });
+  r = await A.call('PUT', `/projects/${job.id}`, { title: 'ชื่อหลังส่ง', eventDate: '2031-08-01' });
+  ok('ใบส่งแล้ว: แก้ชื่องานและวันจัดงานที่โปรเจ็กต์ → ถามก่อน (409) บอกว่าอะไรเปลี่ยนจากอะไรเป็นอะไร ไม่มีรายการเปลี่ยน',
+    r.status === 409 && r.data.code === 'quote_change' && r.data.quote.lines === false && r.data.quote.details.length === 2 && r.data.quote.details[0].label === 'ชื่อโปรเจ็กต์' && r.data.quote.details[0].from === 'ชื่อจากใบ' && r.data.quote.details[0].to === 'ชื่อหลังส่ง' && r.data.quote.details[1].label === 'วันที่จัดงาน' && r.data.quote.details[1].to.includes('2574'),
+    JSON.stringify(r.data));
+  p = (await A.call('GET', `/projects/${job.id}`)).data;
+  ok('ถูกถามแล้วยังไม่ยืนยัน → ไม่มีอะไรถูกบันทึก', p.title === 'ชื่อจากใบ' && p.eventDate === '2031-07-01', JSON.stringify([p.title, p.eventDate]));
+  r = await A.call('PUT', `/projects/${job.id}`, { title: 'ชื่อหลังส่ง', eventDate: '2031-08-01', confirmQuoteChange: true });
+  now = (await A.call('GET', `/quotes/${tq.id}`)).data;
+  ok('ยืนยันแล้ว → ใบเปลี่ยนตาม สถานะยังเป็นส่งแล้ว', r.status === 200 && now.projectTitle === 'ชื่อหลังส่ง' && now.eventDate === '2031-08-01' && now.status === 'sent', JSON.stringify([r.status, now.projectTitle, now.eventDate, now.status]));
+  r = await A.call('PUT', `/projects/${job.id}`, { notes: 'แค่โน้ต' });
+  ok('ใบส่งแล้ว: บันทึกสิ่งที่ไม่อยู่ในใบ → ไม่ถาม', r.status === 200 && r.data.quoteUpdated === false, r.status);
+  r = await A.call('PUT', `/quotes/${tq.id}`, { clientName: 'คุณแก้ในใบที่ส่งแล้ว' });
+  ok('แก้ที่ใบเองตอนส่งแล้ว → ไม่ถาม (แก้เอกสารนั้นตรง ๆ) โปรเจ็กต์เปลี่ยนตาม', r.status === 200 && (await A.call('GET', `/projects/${job.id}`)).data.client === 'คุณแก้ในใบที่ส่งแล้ว');
+
+  // turned down: a new name is not a new offer; new prices are
+  await A.call('PUT', `/quotes/${tq.id}`, { status: 'rejected' });
+  r = await A.call('PUT', `/projects/${job.id}`, { title: 'ชื่อหลังปฏิเสธ' });
+  now = (await A.call('GET', `/quotes/${tq.id}`)).data;
+  ok('ลูกค้าปฏิเสธ: แก้ชื่องาน → ใบเปลี่ยนชื่อตาม แต่สถานะยังเป็นปฏิเสธ', r.status === 200 && r.data.status === 'rejected' && now.status === 'rejected' && now.projectTitle === 'ชื่อหลังปฏิเสธ', JSON.stringify([r.data.status, now.status, now.projectTitle]));
+
+  // a job made from a quote: the same details both ways, and its price follows the quote
+  r = await A.call('POST', '/quotes', { clientName: 'คุณใบก่อน', projectTitle: 'งานจากใบ', eventDate: '2031-09-09', status: 'approved', items: [{ description: 'ซุ้ม', quantity: 1, unitPrice: 5000 }] });
+  const sq = r.data;
+  const made = (await A.call('POST', `/quotes/${sq.id}/project`)).data;
+  r = await A.call('PUT', `/quotes/${sq.id}`, { clientName: 'คุณใบก่อน (แก้)', eventDate: '2031-01-01' });
+  p = (await A.call('GET', `/projects/${made.id}`)).data;
+  ok('โปรเจ็กต์ที่สร้างจากใบ: แก้ชื่อลูกค้าที่ใบ → โปรเจ็กต์เปลี่ยนตาม · วันจัดงานยังเป็นของโปรเจ็กต์', r.status === 200 && p.client === 'คุณใบก่อน (แก้)' && r.data.eventDate === '2031-09-09' && p.eventDate === '2031-09-09', JSON.stringify([p.client, r.data.eventDate, p.eventDate]));
+  r = await A.call('PUT', `/projects/${made.id}`, { title: 'งานจากใบ (แก้ที่โปรเจ็กต์)', confirmQuoteChange: true });
+  ok('แก้ชื่องานที่โปรเจ็กต์ → ใบ (อนุมัติแล้ว) เปลี่ยนตามเมื่อยืนยัน', r.status === 200 && (await A.call('GET', `/quotes/${sq.id}`)).data.projectTitle === 'งานจากใบ (แก้ที่โปรเจ็กต์)');
+  await A.call('PUT', `/quotes/${sq.id}`, { status: 'rejected' });
+  r = await A.call('PUT', `/quotes/${sq.id}`, { items: [{ description: 'ซุ้ม', quantity: 1, unitPrice: 4500 }] });
+  p = (await A.call('GET', `/projects/${made.id}`)).data;
+  ok('ลูกค้าปฏิเสธแล้วแก้ราคาที่ใบ → ราคาโปรเจ็กต์ 4,500 · โปรเจ็กต์กลับเป็น "สร้างใบเสนอราคาแล้ว" ใบเป็นร่าง รอส่งใหม่', r.status === 200 && r.data.status === 'draft' && p.agreedPrice === 4500 && p.status === 'quote_created', JSON.stringify([r.data.status, p.agreedPrice, p.status]));
+  r = await B.call('PUT', `/quotes/${sq.id}`, { clientName: 'ร้าน B แอบแก้' });
+  ok('ร้านอื่นแก้ใบ (และโปรเจ็กต์) ของร้านนี้ไม่ได้', r.status === 404 && (await A.call('GET', `/projects/${made.id}`)).data.client === 'คุณใบก่อน (แก้)');
+
+  for (const id of [job.id, made.id]) await A.call('DELETE', `/projects/${id}`);
+  for (const id of [tq.id, sq.id]) await A.call('DELETE', `/quotes/${id}`);
+  await A.call('DELETE', `/customers/${c.id}`);
 }
 
 r = await A.call('POST', '/auth/logout');
