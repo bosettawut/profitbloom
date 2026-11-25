@@ -23,6 +23,10 @@ npm run dev
 
 ถ้าต้องการตั้งค่าเองบนเครื่อง (เปลี่ยนพอร์ต, ส่งอีเมลจริง, ชี้ฐานข้อมูลอื่น) คัดลอก `.env.example` เป็น `.env` แล้วแก้ค่าในนั้น `npm run dev` จะอ่านไฟล์นี้ให้เอง ค่าที่พิมพ์นำหน้าคำสั่งมีผลเหนือค่าในไฟล์ ไฟล์ `.env` ไม่ถูก commit และระบบจริงบน Vercel ไม่ใช้ไฟล์นี้
 
+ถ้าเครื่องยังไม่มี PostgreSQL (macOS + Homebrew): `brew install postgresql@16` แล้ว `brew services start postgresql@16` คำสั่ง `createdb` อยู่ที่ `/opt/homebrew/opt/postgresql@16/bin/` ถ้า API ขึ้นข้อความ `ECONNREFUSED ... 5432` แปลว่า PostgreSQL ยังไม่ได้เปิด
+
+**ข้อมูลตัวอย่างสำหรับทดสอบ:** `npm run seed-mock -- you@example.com รหัสผ่าน` สร้างบัญชี (ถ้ายังไม่มี) พร้อมลูกค้า 8 รายและโปรเจ็กต์ราว 76 งาน กระจายสามปีล่าสุด ใช้ดูหน้ารายงานและกราฟรายปีได้ทันที บัญชีที่มีงานอยู่แล้วต้องเติม `--reset` (ลบงาน ใบเสนอราคา และลูกค้าของบัญชีนั้นก่อน) คำสั่งนี้ทำงานกับฐานข้อมูลบนเครื่องเท่านั้น (`server/seed-mock.js`)
+
 ข้อมูลเก็บในฐานข้อมูล `profitbloom` ของ PostgreSQL บนเครื่อง (ตารางถูกสร้างให้อัตโนมัติ) ถ้าต้องการเริ่มใหม่ทั้งหมด: `dropdb profitbloom && createdb profitbloom`
 ถ้า PostgreSQL ไม่ได้อยู่ที่ `localhost:5432` ให้กำหนด `DATABASE_URL` เช่น `postgresql://user:pass@host:5432/profitbloom`
 

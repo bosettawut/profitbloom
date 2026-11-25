@@ -321,7 +321,11 @@ export interface Dashboard {
 
 export interface Reports {
   totals: { projects: number; sales: number; profit: number; cost: number };
+  /** January to December of `chartYear` */
   chart: ChartPoint[];
+  chartYear: number;
+  /** the years the chart can show, newest first: those with sales, and this year */
+  chartYears: number[];
   byType: Array<{ type: string; projects: number; sold: number; sales: number; profit: number }>;
   byStatus: Array<{ status: ProjectStatus; statusText: string; count: number }>;
   sales: SalesReport;
@@ -418,7 +422,7 @@ export const api = {
 
   dashboard: (range: '6' | '12' | 'year') => request<Dashboard>('GET', `/dashboard?range=${range}`),
   activities: (limit = 50) => request<Activity[]>('GET', `/activities?limit=${limit}`),
-  reports: (from = '', to = '') => request<Reports>('GET', `/reports?from=${from}&to=${to}`),
+  reports: (from = '', to = '', year?: number) => request<Reports>('GET', `/reports?from=${from}&to=${to}${year ? `&year=${year}` : ''}`),
 
   projects: () => request<Project[]>('GET', '/projects'),
   project: (id: string) => request<Project>('GET', `/projects/${id}`),

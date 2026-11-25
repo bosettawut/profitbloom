@@ -908,6 +908,11 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
   ok('วันที่ผิดรูปแบบ → ถือว่าไม่กำหนด ไม่ error', r.status === 200 && r.data.sales.totals.jobs === 4 && r.data.sales.from === null);
   r = await R.call('GET', '/reports?from=2030-01-01&to=2030-12-31');
   ok('ช่วงที่ไม่มีงาน → ว่าง ไม่ error', r.data.sales.totals.jobs === 0 && r.data.sales.byMonth.length === 0 && r.data.totals.projects === 6);
+  r = await R.call('GET', '/reports?year=2026');
+  ok('กราฟรายปี: ม.ค.–ธ.ค. ของปีที่เลือก (ม.ค. 4,500 · มี.ค. 6,150 กำไร 2,050)', r.data.chartYear === 2026 && r.data.chart.length === 12 && r.data.chart[0].sales === 4500 && r.data.chart[1].sales === 0 && r.data.chart[2].sales === 6150 && r.data.chart[2].profit === 2050, JSON.stringify(r.data.chart));
+  ok('กราฟรายปี: ปีที่เลือกได้มีปีที่มียอดขาย เรียงจากใหม่ไปเก่า', r.data.chartYears.includes(2026) && r.data.chartYears.every((y, i, all) => i === 0 || all[i - 1] > y), JSON.stringify(r.data.chartYears));
+  r = await R.call('GET', '/reports?year=1999');
+  ok('กราฟรายปี: ปีที่ไม่มีให้เลือก → ใช้ปีนี้ ไม่ error', r.status === 200 && r.data.chartYear === new Date().getFullYear() && r.data.chart.length === 12, r.data.chartYear);
   ok('ร้านอื่นไม่เห็นยอดขายของร้านนี้', (await B.call('GET', '/reports?from=2026-01-01&to=2026-12-31')).data.sales.jobs.every((j) => !['ม.ค. 1', 'มี.ค.'].includes(j.title)));
 }
 

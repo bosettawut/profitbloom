@@ -4,26 +4,31 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, R
 interface SalesChartProps {
   chartType: 'line' | 'bar';
   data: Array<{ month: string; sales: number; profit: number }>;
+  /** bars only: one bar a month, as tall as the sales, with the profit inside it marked in its own colour */
+  stacked?: boolean;
 }
 
-export function SalesChart({ chartType, data }: SalesChartProps) {
+export const SALES_COLOR = '#673AB7';
+export const PROFIT_COLOR = '#eab308';
+
+export function SalesChart({ chartType, data, stacked = false }: SalesChartProps) {
+  // the two parts of a stacked bar: the profit, and the rest of the sales above it (a month sold at a loss has no profit part)
+  const rows = data.map((d) => {
+    const profitPart = Math.min(Math.max(d.profit, 0), Math.max(d.sales, 0));
+    return { ...d, profitPart, restPart: Math.max(d.sales, 0) - profitPart };
+  });
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
       return (
         <div className="bg-white p-3 rounded-xl shadow-soft-lg">
           <p className="font-medium mb-2 text-ink text-sm">{`${label}`}</p>
-          {payload.map((entry: any, index: number) => (
-            <div key={index} className="flex items-center gap-3 mb-2">
-              <div 
-                className="w-4 h-4 rounded-full shadow-sm" 
-                style={{ backgroundColor: entry.color }}
-              />
-              <span className="text-sm text-ink-muted">
-                {entry.name === 'sales' ? 'ยอดขาย' : 'กำไร'}:
-              </span>
-              <span className="text-sm font-bold" style={{ color: entry.color }}>
-                ฿{entry.value.toLocaleString('th-TH')}
+          {([['ยอดขาย', payload[0].payload.sales, SALES_COLOR], ['กำไร', payload[0].payload.profit, PROFIT_COLOR]] as const).map(([name, value, color]) => (
+            <div key={name} className="flex items-center gap-3 mb-2">
+              <div className="w-4 h-4 rounded-full shadow-sm" style={{ backgroundColor: color }} />
+              <span className="text-sm text-ink-muted">{name}:</span>
+              <span className="text-sm font-bold" style={{ color }}>
+                ฿{value.toLocaleString('th-TH')}
               </span>
             </div>
           ))}
@@ -83,6 +88,15 @@ export function SalesChart({ chartType, data }: SalesChartProps) {
               }}
             />
           </LineChart>
+        ) : stacked ? (
+          <BarChart data={rows} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+            <CartesianGrid vertical={false} stroke="#ECEAF2" />
+            <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#747083' }} />
+            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#747083' }} tickFormatter={(value) => `${+(value / 1000).toFixed(1)}k`} />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: '#F4F3F7' }} />
+            <Bar key="profit-part" dataKey="profitPart" stackId="month" fill={PROFIT_COLOR} maxBarSize={36} />
+            <Bar key="rest-part" dataKey="restPart" stackId="month" fill={SALES_COLOR} radius={[6, 6, 0, 0]} maxBarSize={36} />
+          </BarChart>
         ) : (
           <BarChart data={data} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
             <CartesianGrid vertical={false} stroke="#ECEAF2" />
