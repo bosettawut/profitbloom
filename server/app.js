@@ -564,14 +564,25 @@ const PROJECT_STATUS = {
 };
 const TYPE_PREFIX = { 'งานแต่งงาน': 'WD', 'งานหมั้น': 'EN', 'งานวันเกิด': 'BD', 'งานบวช': 'OR', 'งานเปิดร้าน': 'OP' };
 
+const BANGKOK_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' });
+/** the year as it is in Thailand: the server's clock is UTC, seven hours behind on the night of 31 December */
+const bangkokYear = (at = new Date()) => Number(BANGKOK_YEAR.format(at));
+
+/**
+ * The next number for a shop's document, like QT-2026-013: one run per shop, per kind (prefix) and per year, starting
+ * at 001. A number is never given twice, even after its document is deleted: the last one handed out is kept in
+ * doc_counters, and the numbers in use count too (for documents from before that table, or brought in from the old system).
+ */
 async function nextCode(table, userId, prefix) {
   // always called inside a transaction: one shop's codes are handed out one at a time, so two
   // requests arriving together can't be given the same number
   await db.prepare('SELECT pg_advisory_xact_lock(?::bigint)').get(userId);
-  const year = new Date().getFullYear();
-  const like = `${prefix}-${year}-%`;
-  const row = await db.prepare(`SELECT code FROM ${table} WHERE user_id = ? AND code LIKE ? ORDER BY id DESC LIMIT 1`).get(userId, like);
-  const n = row ? Number(row.code.split('-').pop()) + 1 : 1;
+  const year = bangkokYear();
+  const inUse = await db.prepare(`SELECT MAX(CAST(split_part(code, '-', 3) AS INTEGER)) AS n FROM ${table} WHERE user_id = ? AND code ~ ?`).get(userId, `^${prefix}-${year}-[0-9]+$`);
+  const given = await db.prepare('SELECT last_n FROM doc_counters WHERE user_id = ? AND prefix = ? AND year = ?').get(userId, prefix, year);
+  const n = Math.max(inUse?.n ?? 0, given?.last_n ?? 0) + 1;
+  await db.prepare('INSERT INTO doc_counters (user_id, prefix, year, last_n) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, prefix, year) DO UPDATE SET last_n = EXCLUDED.last_n')
+    .run(userId, prefix, year, n);
   return `${prefix}-${year}-${String(n).padStart(3, '0')}`;
 }
 

@@ -180,6 +180,30 @@ ok('ร้าน B อ่านใบเสนอราคาของ A ไม�
 r = await B.call('PUT', `/quotes/${q1.id}`, { status: 'rejected' });
 ok('ร้าน B แก้ใบเสนอราคาของ A ไม่ได้', r.status === 404);
 
+// --- numbers: one run per shop, per kind and per year (the year as it is in Thailand); a number is never handed out twice
+{
+  const bangkok = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' }).format(new Date()));
+  const n = (code) => Number(code.split('-').pop());
+  ok('ปีในเลขเอกสารเป็นปีตามเวลาไทย', q1.code.startsWith(`QT-${bangkok}-`) && p1.code.startsWith(`WD-${bangkok}-`), [q1.code, p1.code].join());
+  const bq = (await B.call('POST', '/quotes', { clientName: 'ลูกค้าร้านบี' })).data;
+  ok('ร้านอื่นมีเลขของตัวเอง เริ่มที่ 001', bq.code === `QT-${bangkok}-001`, bq.code);
+  const a1 = (await A.call('POST', '/quotes', { clientName: 'ลูกค้าเลขที่' })).data;
+  const a2 = (await A.call('POST', '/quotes', { clientName: 'ลูกค้าเลขที่' })).data;
+  await A.call('DELETE', `/quotes/${a2.id}`);
+  const a3 = (await A.call('POST', '/quotes', { clientName: 'ลูกค้าเลขที่' })).data;
+  ok('ลบใบเสนอราคาใบล่าสุดแล้ว ใบถัดไปไม่ใช้เลขที่ลบไปซ้ำ', n(a2.code) === n(a1.code) + 1 && n(a3.code) === n(a2.code) + 1, [a1.code, a2.code, a3.code].join(' → '));
+  const w1 = (await A.call('POST', '/projects', { title: 'งานเลขที่', projectType: 'งานแต่งงาน' })).data;
+  await A.call('DELETE', `/projects/${w1.id}`);
+  const w2 = (await A.call('POST', '/projects', { title: 'งานเลขที่ 2', projectType: 'งานแต่งงาน' })).data;
+  const e1 = (await A.call('POST', '/projects', { title: 'งานหมั้นเลขที่', projectType: 'งานหมั้น' })).data;
+  ok('ลบโปรเจ็กต์ล่าสุดแล้ว โปรเจ็กต์ถัดไปก็ข้ามเลขที่ลบไป และแต่ละประเภทงานรันเลขของตัวเอง', n(w2.code) === n(w1.code) + 1 && w2.code.startsWith(`WD-${bangkok}-`) && e1.code === `EN-${bangkok}-001`, [w1.code, w2.code, e1.code].join(' · '));
+  const bq2 = (await B.call('POST', '/quotes', { clientName: 'ลูกค้าร้านบี' })).data;
+  ok('เลขของร้าน B ไม่ถูกกระทบจากร้าน A (002)', bq2.code === `QT-${bangkok}-002`, bq2.code);
+  for (const q of [a1, a3]) await A.call('DELETE', `/quotes/${q.id}`);
+  for (const p of [w2, e1]) await A.call('DELETE', `/projects/${p.id}`);
+  for (const q of [bq, bq2]) await B.call('DELETE', `/quotes/${q.id}`);
+}
+
 r = await A.call('POST', '/quotes', { clientName: 'หมดอายุ', validUntil: past, status: 'sent' });
 ok('ใบเสนอราคาเลยวันหมดอายุ แสดงเป็น "หมดอายุ"', r.data.status === 'expired', r.data.status);
 const qExp = r.data;
