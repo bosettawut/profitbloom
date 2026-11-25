@@ -58,6 +58,7 @@ export const getProgressFromStatus = (status: string): number => {
     case 'quote_created': return 25;
     case 'pending': return 25; // Same as quote_created since quote is sent
     case 'approved': return 60;
+    case 'rejected': return 25; // the quote goes out again
     case 'completed': return 100;
     case 'cancelled': return 0;
     default: return 0;
@@ -139,7 +140,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
     api.dashboard(chartRange).then(setDashboard).catch(() => {});
     // jobs still waiting for a decision or under way — the dashboard leads with these
     api.projects()
-      .then((ps) => setOpenJobs(ps.filter((p) => ['draft', 'quote_created', 'pending', 'approved'].includes(p.status))))
+      .then((ps) => setOpenJobs(ps.filter((p) => ['draft', 'quote_created', 'pending', 'approved', 'rejected'].includes(p.status))))
       .catch(() => {});
   }, [chartRange]);
 

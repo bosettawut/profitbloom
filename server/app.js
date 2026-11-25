@@ -559,9 +559,25 @@ const PROJECT_STATUS = {
   quote_created: 'สร้างใบเสนอราคาแล้ว',
   pending: 'รอการอนุมัติ',
   approved: 'อนุมัติแล้ว',
+  // the customer turned the quote down: the job's prices are changed and the same quote sent again
+  rejected: 'ลูกค้าปฏิเสธ',
   completed: 'เสร็จสิ้น',
   cancelled: 'ยกเลิก',
 };
+/** statuses that describe a job's quote, so a job without one cannot have them */
+const QUOTE_STAGE = ['quote_created', 'pending', 'rejected'];
+
+/**
+ * Why a job cannot be put in `next` (null when it can). A job with its quote is past the draft; the quote statuses
+ * need a quote; a job is only finished once the customer has approved it (until receipts exist, which will be the rule).
+ */
+function projectStatusRefusal(current, next, hasQuote) {
+  if (next === current) return null;
+  if (next === 'draft' && hasQuote) return 'โปรเจ็กต์นี้มีใบเสนอราคาแล้ว จึงเปลี่ยนกลับเป็นร่างไม่ได้';
+  if (QUOTE_STAGE.includes(next) && !hasQuote) return `ยังไม่มีใบเสนอราคา จึงเป็น "${PROJECT_STATUS[next]}" ไม่ได้ สร้างใบเสนอราคาก่อน`;
+  if (next === 'completed' && current !== 'approved') return 'ปิดงานเป็น "เสร็จสิ้น" ได้เมื่อลูกค้าอนุมัติแล้ว';
+  return null;
+}
 const TYPE_PREFIX = { 'งานแต่งงาน': 'WD', 'งานหมั้น': 'EN', 'งานวันเกิด': 'BD', 'งานบวช': 'OR', 'งานเปิดร้าน': 'OP' };
 
 const BANGKOK_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' });
@@ -751,6 +767,8 @@ app.get('/api/projects/:id', route(async (req) => serializeProject(await getProj
 
 app.post('/api/projects', route(async (req, res) => {
   const d = readProjectBody(req.body, undefined, await allowedCategories(req.user.id));
+  // a new job has no quote, so it cannot start in a status that describes one
+  if (d.status && QUOTE_STAGE.includes(d.status)) throw new HttpError(400, `ยังไม่มีใบเสนอราคา จึงเป็น "${PROJECT_STATUS[d.status]}" ไม่ได้ สร้างใบเสนอราคาก่อน`);
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
@@ -773,6 +791,11 @@ app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
   /** whether this save changed the quote tied to the job */
   let quoteUpdated = false;
+  /** the quote the job's page opens; its status goes with the job's */
+  const ownQuote = await jobQuote(existing);
+  const nextStatus = 'status' in req.body && PROJECT_STATUS[req.body.status] ? req.body.status : existing.status;
+  const refusal = projectStatusRefusal(existing.status, nextStatus, !!ownQuote);
+  if (refusal) throw new HttpError(400, refusal);
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
   await transaction(async () => {
     // What the job gives its quote before this save. The quote follows the job, so it is this save changing that
@@ -795,6 +818,12 @@ app.put('/api/projects/:id', route(async (req) => {
       if (before.price !== after.price || !sameLines(before.lines, after.lines)) quoteUpdated = await syncFollowingQuote(existing.id, req.body.confirmQuoteChange === true);
     }
     if (d.status && d.status !== existing.status) {
+      // the job's quote takes the status that goes with the job's (a finished job leaves it as it is)
+      const quoteStatus = PROJECT_TO_QUOTE_STATUS[d.status];
+      if (ownQuote && quoteStatus && ownQuote.status !== quoteStatus) {
+        await db.prepare(`UPDATE quotes SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(quoteStatus, ownQuote.id);
+        await logActivity(req.user.id, `quote_${quoteStatus}`, `ใบเสนอราคา ${ownQuote.code}`, QUOTE_STATUS[quoteStatus]);
+      }
       await logActivity(req.user.id, `project_${d.status}`, `โปรเจ็กต์ ${d.title}`, PROJECT_STATUS[d.status]);
     }
   });
@@ -806,6 +835,8 @@ app.delete('/api/projects/:id', route(async (req) => {
   // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL);
   // a quote that followed the job is an ordinary quote from here on: it keeps the lines it last had, and is free to change them
   await db.prepare('UPDATE quotes SET follows_project = 0, locked_price = NULL WHERE project_id = ? AND follows_project = 1').run(p.id);
+  // the job is not going ahead, so its quotes are cancelled (one the customer turned down stays so), and remember which job it was
+  await db.prepare(`UPDATE quotes SET deleted_project_code = ?, status = CASE WHEN status = 'rejected' THEN status ELSE 'cancelled' END, updated_at = ${NOW} WHERE project_id = ?`).run(p.code, p.id);
   await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
   await logActivity(req.user.id, 'project_deleted', `ลบโปรเจ็กต์ ${p.title}`, 'ลบแล้ว');
   return { ok: true };
@@ -813,9 +844,10 @@ app.delete('/api/projects/:id', route(async (req) => {
 
 // ---------- quotes ----------
 
-const QUOTE_STATUS = { draft: 'ร่าง', sent: 'ส่งแล้ว', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธ', expired: 'หมดอายุ' };
-// keep the linked project's status in step with its quote
-const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', approved: 'approved' };
+const QUOTE_STATUS = { draft: 'ร่าง', sent: 'ส่งแล้ว', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธ', cancelled: 'ยกเลิก', expired: 'หมดอายุ' };
+// a job and its quote keep the same status, both ways; a job that is finished leaves its quote as approved
+const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', approved: 'approved', rejected: 'rejected', cancelled: 'cancelled' };
+const PROJECT_TO_QUOTE_STATUS = { quote_created: 'draft', pending: 'sent', approved: 'approved', rejected: 'rejected', cancelled: 'cancelled' };
 
 async function serializeQuote(q, { withJob = false } = {}) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
@@ -867,6 +899,8 @@ async function serializeQuote(q, { withJob = false } = {}) {
     lockedPrice: q.locked_price,
     /** the quote is tied to its job: its lines and price are the job's, are changed there, and follow it when it is saved */
     followsProject,
+    /** the number of the job this quote belonged to, when that job was deleted */
+    deletedProjectCode: q.deleted_project_code || null,
     ...(job ? { job } : {}),
     status,
     statusText: QUOTE_STATUS[status] || status,
@@ -1010,11 +1044,21 @@ async function replaceQuoteItems(quoteId, items) {
   for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit ?? '', i.unit_price, i.round_up ? 1 : 0, idx);
 }
 
-async function syncProjectStatus(userId, projectId, quoteStatus) {
+/** the job a quote belongs to, when the quote is the one its page opens (an older copy says nothing about the job) */
+async function jobOfQuote(userId, quoteId, projectId) {
+  if (!projectId) return null;
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+  if (!p) return null;
+  const quote = await jobQuote(p);
+  return quote && Number(quote.id) === Number(quoteId) ? p : null;
+}
+
+/** puts the job of a quote in the status that goes with the quote's; a finished job is left as it is */
+async function syncProjectStatus(userId, quoteId, projectId, quoteStatus) {
   const target = QUOTE_TO_PROJECT_STATUS[quoteStatus];
-  if (!projectId || !target) return;
-  await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ? AND user_id = ? AND status NOT IN ('completed', 'cancelled')`)
-    .run(target, projectId, userId);
+  const p = target ? await jobOfQuote(userId, quoteId, projectId) : null;
+  if (!p || p.status === target || p.status === 'completed') return;
+  await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(target, p.id);
 }
 
 app.get('/api/quotes', route(async (req) =>
@@ -1094,7 +1138,7 @@ app.post('/api/quotes', route(async (req, res) => {
         d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status,
         d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, follows ? 1 : 0);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
-    await syncProjectStatus(req.user.id, d.project_id, status);
+    await syncProjectStatus(req.user.id, lastInsertRowid, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
     return await getQuote(req.user.id, lastInsertRowid);
   });
@@ -1129,7 +1173,10 @@ app.put('/api/quotes/:id', route(async (req) => {
         d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
     if (status !== existing.status) {
-      await syncProjectStatus(req.user.id, d.project_id, status);
+      // a finished job keeps its quote as approved: its status is changed at the job first
+      const job = await jobOfQuote(req.user.id, existing.id, d.project_id);
+      if (job?.status === 'completed') throw new HttpError(400, `โปรเจ็กต์ ${job.code} เสร็จสิ้นแล้ว เปลี่ยนสถานะใบเสนอราคาไม่ได้ ถ้าจะเปลี่ยน ให้เปลี่ยนสถานะที่โปรเจ็กต์ก่อน`);
+      await syncProjectStatus(req.user.id, existing.id, d.project_id, status);
       await logActivity(req.user.id, `quote_${status}`, `ใบเสนอราคา ${existing.code}`, QUOTE_STATUS[status]);
     }
   });
@@ -1147,7 +1194,14 @@ app.post('/api/quotes/:id/sync', route(async (req) => {
 
 app.delete('/api/quotes/:id', route(async (req) => {
   const q = await getQuote(req.user.id, req.params.id);
+  const job = await jobOfQuote(req.user.id, q.id, q.project_id);
   await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
+  if (job && !['completed', 'cancelled'].includes(job.status)) {
+    // the job's quote is gone: it takes the status of the quote it opens now (a job made from a quote may have another), or goes back to the draft
+    const next = await jobQuote(job);
+    const status = next ? QUOTE_TO_PROJECT_STATUS[next.status] ?? job.status : 'draft';
+    if (status !== job.status) await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(status, job.id);
+  }
   await logActivity(req.user.id, 'quote_deleted', `ลบใบเสนอราคา ${q.code}`, 'ลบแล้ว');
   return { ok: true };
 }));

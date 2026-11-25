@@ -298,10 +298,19 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   now = (await A.call('GET', `/quotes/${fq.id}`)).data;
   ok('ยืนยันแล้ว → ชื่อบรรทัดในใบเปลี่ยนตามชื่อหัวข้อ ใบยังเป็น "อนุมัติแล้ว"', r.status === 200 && now.items[0].description === 'ซุ้มดอกไม้' && now.status === 'approved' && now.lockedPrice === 1500, JSON.stringify([r.status, now.items, now.status]));
   r = await A.call('PUT', `/projects/${lp.id}`, { status: 'completed' });
-  ok('เปลี่ยนสถานะโปรเจ็กต์อย่างเดียว ไม่ถามยืนยัน', r.status === 200 && r.data.status === 'completed', r.status);
-  await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
+  now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('เปลี่ยนสถานะโปรเจ็กต์อย่างเดียว ไม่ถามยืนยัน · ปิดงานเป็นเสร็จสิ้นแล้วใบยังเป็นอนุมัติแล้ว', r.status === 200 && r.data.status === 'completed' && now.status === 'approved', JSON.stringify([r.status, now.status]));
+  r = await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
+  ok('โปรเจ็กต์เสร็จสิ้นแล้ว: เปลี่ยนสถานะใบเสนอราคาของงานไม่ได้ (บอกให้เปลี่ยนที่โปรเจ็กต์ก่อน)', r.status === 400 && r.data.error.includes(lp.code) && r.data.error.includes('เสร็จสิ้น'), JSON.stringify(r.data));
+  await A.call('PUT', `/projects/${lp.id}`, { status: 'approved' });
+  r = await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
+  job = (await A.call('GET', `/projects/${lp.id}`)).data;
+  ok('ใบเสนอราคาเป็น "ปฏิเสธ" → โปรเจ็กต์เป็น "ลูกค้าปฏิเสธ"', r.status === 200 && job.status === 'rejected' && job.statusText === 'ลูกค้าปฏิเสธ', JSON.stringify([r.status, job.status]));
   r = await A.call('PUT', `/projects/${lp.id}`, { profitMargin: 100 });
-  ok('ใบที่ลูกค้าปฏิเสธ: แก้โปรเจ็กต์แล้วใบเปลี่ยนตามโดยไม่ต้องยืนยัน', r.status === 200 && r.data.quoteUpdated === true, JSON.stringify([r.status, r.data.quoteUpdated]));
+  ok('ใบที่ลูกค้าปฏิเสธ: แก้โปรเจ็กต์แล้วใบเดิมเปลี่ยนตามโดยไม่ต้องยืนยัน (เลขเดิม)', r.status === 200 && r.data.quoteUpdated === true && r.data.quote.code === fq.code, JSON.stringify([r.status, r.data.quoteUpdated, r.data.quote]));
+  r = await A.call('PUT', `/projects/${lp.id}`, { status: 'pending' });
+  now = (await A.call('GET', `/quotes/${fq.id}`)).data;
+  ok('ส่งใหม่: ตั้งโปรเจ็กต์เป็น "รอการอนุมัติ" → ใบเป็น "ส่งแล้ว"', r.status === 200 && now.status === 'sent', JSON.stringify([r.status, now.status]));
 
   r = await A.call('POST', '/projects', { title: 'งานยังไม่มีต้นทุน', projectType: 'อื่นๆ' });
   const empty = r.data;
@@ -321,6 +330,59 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   now = (await A.call('GET', `/quotes/${again.data.id}`)).data;
   r = await A.call('PUT', `/quotes/${again.data.id}`, { items: line(777) });
   ok('ลบโปรเจ็กต์ → ใบยังอยู่พร้อมรายการเดิม ไม่ผูกโปรเจ็กต์แล้ว และกลับมาแก้รายการในใบได้', now.projectId === null && now.followsProject === false && now.items.length === 2 && r.status === 200 && r.data.items.length === 1 && r.data.items[0].unitPrice === 777, JSON.stringify([now.projectId, now.followsProject, now.items.length, r.status, r.data.items]));
+
+  // --- a job and its quote keep the same status, both ways
+  {
+    const sj = (await A.call('POST', '/projects', { title: 'งานสถานะสองทาง', projectType: 'อื่นๆ', profitMargin: 50, costItems: [{ name: 'ดอกไม้', quantity: 1, price: 1000 }] })).data;
+    const st = (s) => A.call('PUT', `/projects/${sj.id}`, { status: s });
+    const q = async () => (await A.call('GET', `/quotes/${sq.id}`)).data;
+    const pj = async () => (await A.call('GET', `/projects/${sj.id}`)).data;
+    for (const s of ['quote_created', 'pending', 'rejected']) {
+      r = await st(s);
+      ok(`โปรเจ็กต์ที่ยังไม่มีใบเสนอราคา: เป็น "${s}" ไม่ได้`, r.status === 400 && r.data.error.includes('ยังไม่มีใบเสนอราคา'), JSON.stringify(r.data));
+    }
+    r = await st('completed');
+    ok('ยังไม่อนุมัติ: ปิดงานเป็น "เสร็จสิ้น" ไม่ได้', r.status === 400 && r.data.error.includes('อนุมัติ'), JSON.stringify(r.data));
+    r = await A.call('POST', '/projects', { title: 'สร้างพร้อมสถานะใบ', projectType: 'อื่นๆ', status: 'pending' });
+    ok('สร้างโปรเจ็กต์ใหม่ในสถานะของใบเสนอราคาไม่ได้', r.status === 400, r.status);
+    const sq = (await make({ projectId: sj.id })).data;
+    ok('สร้างใบเสนอราคาของงาน → โปรเจ็กต์ "สร้างใบเสนอราคาแล้ว"', (await pj()).status === 'quote_created');
+    r = await st('draft');
+    ok('มีใบเสนอราคาแล้ว: เปลี่ยนโปรเจ็กต์กลับเป็น "ร่าง" ไม่ได้', r.status === 400 && r.data.error.includes('มีใบเสนอราคาแล้ว'), JSON.stringify(r.data));
+    const pairs = [['pending', 'sent'], ['approved', 'approved'], ['rejected', 'rejected'], ['quote_created', 'draft'], ['cancelled', 'cancelled']];
+    const fromJob = [];
+    for (const [ps, qs] of pairs) { r = await st(ps); fromJob.push(`${ps}→${(await q()).status}${r.status === 200 ? '' : '!'}`); }
+    ok('เปลี่ยนที่โปรเจ็กต์ → ใบเสนอราคาเปลี่ยนตาม (รออนุมัติ↔ส่งแล้ว · อนุมัติ · ปฏิเสธ · สร้างใบ↔ร่าง · ยกเลิก)', fromJob.join() === pairs.map(([ps, qs]) => `${ps}→${qs}`).join(), fromJob.join());
+    const fromQuote = [];
+    for (const [ps, qs] of [...pairs].reverse()) { r = await A.call('PUT', `/quotes/${sq.id}`, { status: qs }); fromQuote.push(`${qs}→${(await pj()).status}${r.status === 200 ? '' : '!'}`); }
+    ok('เปลี่ยนที่ใบเสนอราคา → โปรเจ็กต์เปลี่ยนตาม (รวม ยกเลิก ↔ ยกเลิก)', fromQuote.join() === [...pairs].reverse().map(([ps, qs]) => `${qs}→${ps}`).join(), fromQuote.join());
+    ok('ใบเสนอราคามีสถานะ "ยกเลิก"', (await A.call('PUT', `/quotes/${sq.id}`, { status: 'cancelled' })).data.statusText === 'ยกเลิก');
+    await st('approved');
+    r = await st('completed');
+    ok('อนุมัติแล้ว → ปิดงานเป็น "เสร็จสิ้น" ได้ ใบยังเป็นอนุมัติแล้ว', r.status === 200 && (await q()).status === 'approved', JSON.stringify([r.status, (await q()).status]));
+    // an older quote of the job says nothing about the job
+    await st('approved');
+    await A.call('POST', `/quotes/${sq.id}/sync`, { confirmQuoteChange: true });
+    await A.call('DELETE', `/quotes/${sq.id}`);
+    r = await pj();
+    ok('ลบใบเสนอราคาของงาน → โปรเจ็กต์กลับเป็น "ร่าง" และไม่มีใบให้เปิด', r.status === 'draft' && r.quote === null, JSON.stringify([r.status, r.quote]));
+    const sq2 = (await make({ projectId: sj.id })).data;
+    await A.call('PUT', `/quotes/${sq2.id}`, { status: 'sent' });
+    await st('cancelled');
+    r = await pj();
+    ok('ยกเลิกโปรเจ็กต์ → ใบเสนอราคายกเลิกด้วย', r.status === 'cancelled' && (await A.call('GET', `/quotes/${sq2.id}`)).data.status === 'cancelled', r.status);
+    await A.call('DELETE', `/quotes/${sq2.id}`);
+    ok('ลบใบของงานที่ยกเลิกแล้ว → โปรเจ็กต์ยังเป็นยกเลิก', (await pj()).status === 'cancelled');
+    // deleting the job: its quotes are cancelled and say which job it was
+    await st('approved');
+    const sq3 = (await make({ projectId: sj.id })).data;
+    await A.call('PUT', `/quotes/${sq3.id}`, { status: 'approved' });
+    await A.call('DELETE', `/projects/${sj.id}`);
+    r = (await A.call('GET', `/quotes/${sq3.id}`)).data;
+    ok('ลบโปรเจ็กต์ → ใบเสนอราคาเป็น "ยกเลิก" และจำเลขโปรเจ็กต์ที่ถูกลบไว้', r.status === 'cancelled' && r.deletedProjectCode === sj.code && r.projectId === null, JSON.stringify([r.status, r.deletedProjectCode, r.projectId]));
+    ok('ใบที่ไม่เคยมีโปรเจ็กต์: ไม่มีเลขโปรเจ็กต์ที่ถูกลบ', (await make({})).data.deletedProjectCode === null);
+    await A.call('DELETE', `/quotes/${sq3.id}`);
+  }
 
   // --- a quote from before jobs and quotes were tied: it keeps its own lines until the job's price changes, or the shop asks
   r = await A.call('POST', '/projects', { title: 'งานของใบเก่า', projectType: 'อื่นๆ', profitMargin: 50, costItems: [{ name: 'ดอกไม้', quantity: 1, price: 1000 }] });

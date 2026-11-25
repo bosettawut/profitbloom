@@ -1,23 +1,16 @@
 import { statusPill } from './ProjectItem';
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X, Check, PencilLine, FileText, Clock, CircleCheck, Flag, Ban, type LucideIcon } from 'lucide-react';
+import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
 import { api, Project, ProjectStatus, type User } from '../lib/api';
 import { LEVEL_STYLE, projectHealth } from '../lib/job';
 import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
+import { PROJECT_STATUS_OPTIONS, projectStatusBlock, StatusDialog } from './StatusDialog';
 
 interface ProjectsProps {
   onProjectSelect: (project: Project, edit?: boolean) => void;
   onNavigate: (page: string) => void;
   user: User;
-}
-
-interface StatusOption {
-  id: string;
-  name: string;
-  description: string;
-  icon: LucideIcon;
-  className: string;
 }
 
 export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
@@ -41,52 +34,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
       .finally(() => setLoading(false));
   }, []);
 
-  const statusOptions: StatusOption[] = [
-    {
-      id: 'draft',
-      name: 'ร่าง',
-      description: 'ยังเตรียมงานอยู่ ยังไม่ได้ส่งราคา',
-      icon: PencilLine,
-      className: 'status-draft'
-    },
-    {
-      id: 'quote_created',
-      name: 'สร้างใบเสนอราคาแล้ว',
-      description: 'มีใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
-      icon: FileText,
-      className: 'status-quote-created'
-    },
-    {
-      id: 'pending',
-      name: 'รอการอนุมัติ',
-      description: 'ส่งใบเสนอราคาแล้ว รอลูกค้าตอบกลับ',
-      icon: Clock,
-      className: 'status-pending'
-    },
-    {
-      id: 'approved',
-      name: 'อนุมัติแล้ว',
-      description: 'ลูกค้าตกลงแล้ว เริ่มทำงานได้',
-      icon: CircleCheck,
-      className: 'status-approved'
-    },
-    {
-      id: 'completed',
-      name: 'เสร็จสิ้น',
-      description: 'จัดงานเสร็จและปิดงานแล้ว',
-      icon: Flag,
-      className: 'status-completed'
-    },
-    {
-      id: 'cancelled',
-      name: 'ยกเลิก',
-      description: 'ลูกค้าไม่ทำต่อ หรือยกเลิกงานนี้',
-      icon: Ban,
-      className: 'status-cancelled'
-    }
-  ];
-
-  const statusOrder: ProjectStatus[] = ['draft', 'quote_created', 'pending', 'approved', 'completed', 'cancelled'];
+  const statusOrder: ProjectStatus[] = PROJECT_STATUS_OPTIONS.map((o) => o.id);
 
   const healthOf = useMemo(() => new Map(projects.map((p) => [p.id, projectHealth(p, user)])), [projects, user]);
 
@@ -140,7 +88,8 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     try {
       const saved = await api.updateProject(selectedProject.id, { status: newStatus as ProjectStatus });
       setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
-      showNotification(`อัปเดตสถานะโปรเจ็กต์ ${saved.code} เรียบร้อยแล้ว`);
+      // the job's quote goes with it
+      showNotification(`อัปเดตสถานะโปรเจ็กต์ ${saved.code} เรียบร้อยแล้ว${saved.quote && newStatus !== 'completed' ? ` ใบเสนอราคา ${saved.quote.code} เป็น "${saved.quote.statusText}"` : ''}`);
     } catch (err) {
       showNotification((err as Error).message);
     }
@@ -211,7 +160,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Status filter chips */}
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1 mb-4 -mx-1 px-1">
-        {[{ id: 'all', label: 'ทั้งหมด', count: projects.length }, { id: 'draft', label: 'ร่าง', count: getStatsByStatus('draft') }, { id: 'quote_created', label: 'มีใบเสนอราคา', count: getStatsByStatus('quote_created') }, { id: 'pending', label: 'รออนุมัติ', count: getStatsByStatus('pending') }, { id: 'approved', label: 'อนุมัติแล้ว', count: getStatsByStatus('approved') }, { id: 'completed', label: 'เสร็จสิ้น', count: getStatsByStatus('completed') }, { id: 'cancelled', label: 'ยกเลิก', count: getStatsByStatus('cancelled') }].map(chip => (
+        {[{ id: 'all', label: 'ทั้งหมด', count: projects.length }, { id: 'draft', label: 'ร่าง', count: getStatsByStatus('draft') }, { id: 'quote_created', label: 'มีใบเสนอราคา', count: getStatsByStatus('quote_created') }, { id: 'pending', label: 'รออนุมัติ', count: getStatsByStatus('pending') }, { id: 'approved', label: 'อนุมัติแล้ว', count: getStatsByStatus('approved') }, { id: 'rejected', label: 'ลูกค้าปฏิเสธ', count: getStatsByStatus('rejected') }, { id: 'completed', label: 'เสร็จสิ้น', count: getStatsByStatus('completed') }, { id: 'cancelled', label: 'ยกเลิก', count: getStatsByStatus('cancelled') }].map(chip => (
           <button
             key={chip.id}
             onClick={() => setStatusFilter(chip.id)}
@@ -275,6 +224,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                 <option value="quote_created">สร้างใบเสนอราคาแล้ว</option>
                 <option value="pending">รอการอนุมัติ</option>
                 <option value="approved">อนุมัติแล้ว</option>
+                <option value="rejected">ลูกค้าปฏิเสธ</option>
                 <option value="completed">เสร็จสิ้น</option>
                 <option value="cancelled">ยกเลิก</option>
               </select>
@@ -486,40 +436,15 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Status Update Modal */}
       {isStatusModalOpen && selectedProject && (
-        <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={closeStatusModal}>
-          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-4 mb-1">
-              <h3 className="text-lg font-semibold text-ink">เปลี่ยนสถานะโปรเจ็กต์</h3>
-              <button type="button" onClick={closeStatusModal} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
-            </div>
-            <p className="text-sm text-ink-muted mb-4 line-clamp-2">{selectedProject.title}</p>
-
-            <div className="flex flex-col gap-1">
-              {statusOptions.map((option) => {
-                const current = selectedProject.status === option.id;
-                const Icon = option.icon;
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => updateProjectStatus(option.id)}
-                    aria-current={current || undefined}
-                    className={`flex items-center gap-3 w-full text-left px-3 py-2.5 rounded-2xl transition-colors ${current ? 'bg-[#F1F0F5]' : 'hover:bg-[#F1F0F5]/60'}`}
-                  >
-                    <span className={`flex items-center justify-center w-9 h-9 shrink-0 rounded-full border ${statusPill(option.id)}`}>
-                      <Icon className="w-4 h-4" />
-                    </span>
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-ink">{option.name}</span>
-                      <span className="block text-xs text-ink-muted">{option.description}</span>
-                    </span>
-                    {current && <Check className="w-4 h-4 shrink-0 text-[#673AB7]" aria-label="สถานะปัจจุบัน" />}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <StatusDialog
+          title="เปลี่ยนสถานะโปรเจ็กต์"
+          subject={selectedProject.title}
+          options={PROJECT_STATUS_OPTIONS}
+          current={selectedProject.status}
+          blocked={projectStatusBlock(selectedProject)}
+          onPick={updateProjectStatus}
+          onClose={closeStatusModal}
+        />
       )}
 
       {/* Notification */}

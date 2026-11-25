@@ -3,8 +3,8 @@ import type { Rounding, VatMode } from '../../shared/quote-math.js';
 
 export type { Rounding, VatMode };
 
-export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'completed' | 'cancelled';
-export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'expired';
+export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'rejected' | 'completed' | 'cancelled';
+export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'cancelled' | 'expired';
 
 export interface User {
   id: number;
@@ -204,6 +204,8 @@ export interface Quote {
   lockedPrice: number | null;
   /** tied to its job: its lines and price are the job's, are changed there, and follow the job when it is saved */
   followsProject?: boolean;
+  /** the number of the job this quote belonged to, when that job was deleted (the quote was cancelled with it) */
+  deletedProjectCode?: string | null;
   /** on a quote read by itself: the job it follows, the job's price now, and whether the quote still holds what the job gives it */
   job?: { id: string; code: string; title: string; price: number | null; inStep: boolean };
   status: QuoteStatus;
