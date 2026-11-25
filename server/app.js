@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { db, NOW, ready, transaction } from './db.js';
 import { passwordResetMail, sendMail } from './mail.js';
 import { emailError, phoneError } from '../shared/contact.js';
-import { DISCOUNT_TYPES, jobPricing, lineAmount, projectPrice, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
+import { DISCOUNT_TYPES, jobPricing, lineAmount, projectPrice, quoteLinesFromJob, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
@@ -578,7 +578,10 @@ async function nextCode(table, userId, prefix) {
 async function serializeProject(p) {
   const items = await db.prepare('SELECT * FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(p.id);
   const groups = await db.prepare('SELECT * FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(p.id);
+  const quote = await followingQuote(p.id);
   return {
+    /** the quote tied to this job: its lines and price are the job's and change when the job is saved (null until one is made) */
+    quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status } : null,
     id: String(p.id),
     code: p.code,
     title: p.title,
@@ -757,8 +760,14 @@ app.post('/api/projects', route(async (req, res) => {
 
 app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
+  /** whether this save changed the quote tied to the job */
+  let quoteUpdated = false;
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
   await transaction(async () => {
+    // What the job gives its quote before this save. The quote follows the job, so it is this save changing that
+    // which changes the quote: a save that leaves it alone (a status, a note, what the job really cost) leaves the
+    // quote alone too, even a quote from before the two were tied that has not caught up with its job yet.
+    const before = ['costItems', 'costGroups', 'profitMargin'].some((k) => k in req.body) ? await jobQuoteLines(existing.id) : null;
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
     await syncCustomerContact(customerId, d.phone, d.email, req.body.updateCustomer === true);
     await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
@@ -770,16 +779,22 @@ app.put('/api/projects/:id', route(async (req) => {
         d.review_applied, existing.id, req.user.id);
     // a caller that sends one markup for the job, and no headings, means it for every heading
     await replaceCosts(existing.id, d, req.body.profitMargin !== undefined && !Array.isArray(req.body.costGroups));
+    if (before) {
+      const after = await jobQuoteLines(existing.id);
+      if (before.price !== after.price || !sameLines(before.lines, after.lines)) quoteUpdated = await syncFollowingQuote(existing.id, req.body.confirmQuoteChange === true);
+    }
     if (d.status && d.status !== existing.status) {
       await logActivity(req.user.id, `project_${d.status}`, `โปรเจ็กต์ ${d.title}`, PROJECT_STATUS[d.status]);
     }
   });
-  return serializeProject(await getProject(req.user.id, existing.id));
+  return { ...(await serializeProject(await getProject(req.user.id, existing.id))), quoteUpdated };
 }));
 
 app.delete('/api/projects/:id', route(async (req) => {
   const p = await getProject(req.user.id, req.params.id);
-  // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL)
+  // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL);
+  // a quote that followed the job is an ordinary quote from here on: it keeps the lines it last had, and is free to change them
+  await db.prepare('UPDATE quotes SET follows_project = 0, locked_price = NULL WHERE project_id = ? AND follows_project = 1').run(p.id);
   await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
   await logActivity(req.user.id, 'project_deleted', `ลบโปรเจ็กต์ ${p.title}`, 'ลบแล้ว');
   return { ok: true };
@@ -791,8 +806,17 @@ const QUOTE_STATUS = { draft: 'ร่าง', sent: 'ส่งแล้ว', app
 // keep the linked project's status in step with its quote
 const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', approved: 'approved' };
 
-async function serializeQuote(q) {
+async function serializeQuote(q, { withJob = false } = {}) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
+  const followsProject = !!q.follows_project && !!q.project_id;
+  // for the quote's own page: which job it follows, and whether it still holds what the job gives it
+  // (a quote from before jobs and quotes were tied can be behind until the job is next saved)
+  let job;
+  if (withJob && followsProject) {
+    const p = await db.prepare('SELECT id, code, title FROM projects WHERE id = ?').get(q.project_id);
+    const fresh = await jobQuoteLines(q.project_id);
+    job = { id: String(p.id), code: p.code, title: p.title, price: fresh.price, inStep: await inStepWithJob(q, fresh) };
+  }
   const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
   // payment falls due so many days after the event
   const dueDate = q.credit_days > 0 && q.event_date ? new Date(Date.parse(q.event_date + 'T00:00:00Z') + q.credit_days * 864e5).toISOString().slice(0, 10) : '';
@@ -830,6 +854,9 @@ async function serializeQuote(q) {
     rounding,
     /** the job's price when the quote was made; the lines must come to this after the discount */
     lockedPrice: q.locked_price,
+    /** the quote is tied to its job: its lines and price are the job's, are changed there, and follow it when it is saved */
+    followsProject,
+    ...(job ? { job } : {}),
     status,
     statusText: QUOTE_STATUS[status] || status,
     createdDate: thaiDate(q.created_at),
@@ -901,6 +928,61 @@ async function lockedPriceOf(projectId) {
   return price > 0 ? price : null;
 }
 
+/** the quote tied to a job: its lines and price are the job's. One per job; a job made from a quote has none. */
+async function followingQuote(projectId) {
+  if (!projectId) return undefined;
+  return db.prepare('SELECT * FROM quotes WHERE project_id = ? AND follows_project = 1').get(projectId);
+}
+
+/** what a job's quote should hold right now: one line per heading, and the price they come to */
+async function jobQuoteLines(projectId) {
+  const p = await db.prepare('SELECT profit_margin FROM projects WHERE id = ?').get(projectId);
+  const items = await db.prepare('SELECT name, quantity, unit, price, is_extra, group_id FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(projectId);
+  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(projectId))
+    .map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount }));
+  return quoteLinesFromJob(items.map((i) => ({ name: i.name, quantity: i.quantity, unit: i.unit, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), groups, p.profit_margin);
+}
+
+const lineRow = (i) => ({ description: i.description, quantity: i.quantity, unit: i.unit ?? '', unit_price: i.unitPrice, round_up: i.roundUp ? 1 : 0 });
+
+/** two lists of quote lines say the same thing */
+const sameLines = (a, b) => a.length === b.length && a.every((x, n) => {
+  const y = b[n];
+  return x.description === y.description && x.quantity === y.quantity && (x.unit ?? '') === (y.unit ?? '') && toSatang(x.unitPrice) === toSatang(y.unitPrice) && !!x.roundUp === !!y.roundUp;
+});
+
+/** whether a quote already holds exactly what its job gives it */
+async function inStepWithJob(quote, fresh) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  return quote.discount_rate === 0 && sameLines(stored.map((i) => ({ description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up })), fresh.lines);
+}
+
+/** the customer has this quote in hand (or has agreed to it), so it is not changed without the shop saying so */
+const QUOTE_IS_OUT = ['sent', 'approved'];
+
+/**
+ * Brings the job's quote into line with the job as it stands, and says whether the quote changed.
+ * A quote that is already sent or approved is only changed when the caller has confirmed it: otherwise the request
+ * is refused with 409 and the details the confirmation needs, and nothing of it is kept.
+ */
+async function syncFollowingQuote(projectId, confirmed) {
+  const quote = await followingQuote(projectId);
+  if (!quote) return false;
+  const fresh = await jobQuoteLines(projectId);
+  if (await inStepWithJob(quote, fresh)) return false;
+  if (QUOTE_IS_OUT.includes(quote.status) && !confirmed) {
+    const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+    const rounding = ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht';
+    const before = quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, rounding }).afterDiscount;
+    const err = new HttpError(409, `ใบเสนอราคา ${quote.code} ${quote.status === 'approved' ? 'ลูกค้าอนุมัติแล้ว' : 'ส่งให้ลูกค้าแล้ว'} การแก้นี้จะเปลี่ยนใบเสนอราคาตามโปรเจ็กต์ ยืนยันก่อนบันทึก`);
+    err.data = { code: 'quote_change', quote: { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status], price: before, newPrice: fresh.price ?? 0 } };
+    throw err;
+  }
+  await replaceQuoteItems(quote.id, fresh.lines.map(lineRow));
+  await db.prepare(`UPDATE quotes SET locked_price = ?, discount_rate = 0, rounding = 'line', updated_at = ${NOW} WHERE id = ?`).run(fresh.price, quote.id);
+  return true;
+}
+
 async function replaceQuoteItems(quoteId, items) {
   await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
   const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -918,7 +1000,7 @@ app.get('/api/quotes', route(async (req) =>
   Promise.all((await db.prepare('SELECT * FROM quotes WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id)).map(serializeQuote)),
 ));
 
-app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(req.user.id, req.params.id))));
+app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(req.user.id, req.params.id), { withJob: true })));
 
 /**
  * Turns a quote that was written on its own into a job, once the client has said yes: the job takes the
@@ -965,22 +1047,38 @@ app.post('/api/quotes', route(async (req, res) => {
     const status = d.status || 'draft';
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
     await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
-    const lockedPrice = await lockedPriceOf(d.project_id);
-    checkLockedPrice(lockedPrice, d, d.items || []);
+    // A quote made for a job follows it: the lines and the price are the job's, whatever the caller sent, and one
+    // quote per job does. A job that was itself made from a quote is the other way round: its price is settled, and
+    // a quote for it is only held to that price.
+    const job = d.project_id ? await db.prepare('SELECT agreed_price FROM projects WHERE id = ?').get(d.project_id) : null;
+    const follows = !!job && job.agreed_price === null;
+    let lockedPrice;
+    if (follows) {
+      const other = await followingQuote(d.project_id);
+      if (other) throw new HttpError(400, `โปรเจ็กต์นี้มีใบเสนอราคา ${other.code} อยู่แล้ว เปิดใบนั้นแทนการสร้างใหม่`);
+      const fresh = await jobQuoteLines(d.project_id);
+      d.items = fresh.lines.map(lineRow);
+      d.discount_rate = 0;
+      d.rounding = 'line';
+      lockedPrice = fresh.price;
+    } else {
+      lockedPrice = await lockedPriceOf(d.project_id);
+      checkLockedPrice(lockedPrice, d, d.items || []);
+    }
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status,
-                                    client_address, client_tax_id, client_branch, reference_no, credit_days, internal_note)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+                                    client_address, client_tax_id, client_branch, reference_no, credit_days, internal_note, follows_project)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
       .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate,
         d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status,
-        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note);
+        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, follows ? 1 : 0);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
     await syncProjectStatus(req.user.id, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
     return await getQuote(req.user.id, lastInsertRowid);
   });
   res.status(201);
-  return serializeQuote(quote);
+  return serializeQuote(quote, { withJob: true });
 }));
 
 app.put('/api/quotes/:id', route(async (req) => {
@@ -993,8 +1091,16 @@ app.put('/api/quotes/:id', route(async (req) => {
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
     await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true);
-    // only a change to the lines or the discount can break the lock; old quotes can still change status
-    if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) checkLockedPrice(existing.locked_price, d, d.items || []);
+    if (existing.follows_project && existing.project_id) {
+      // its lines, discount and job are not the quote's to change: they are the job's, and are changed there
+      d.project_id = existing.project_id;
+      d.items = null;
+      d.discount_rate = existing.discount_rate;
+      d.rounding = existing.rounding;
+    } else if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) {
+      // only a change to the lines or the discount can break the lock; old quotes can still change status
+      checkLockedPrice(existing.locked_price, d, d.items || []);
+    }
     await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, wht_rate=?, vat_mode=?, rounding=?, status=?,
                                     client_address=?, client_tax_id=?, client_branch=?, reference_no=?, credit_days=?, internal_note=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
@@ -1006,7 +1112,16 @@ app.put('/api/quotes/:id', route(async (req) => {
       await logActivity(req.user.id, `quote_${status}`, `ใบเสนอราคา ${existing.code}`, QUOTE_STATUS[status]);
     }
   });
-  return serializeQuote(await getQuote(req.user.id, existing.id));
+  return serializeQuote(await getQuote(req.user.id, existing.id), { withJob: true });
+}));
+
+// A quote tied to its job normally keeps up by itself. One made before the two were tied may still hold its old
+// lines; this brings it into line with the job when the shop asks for that (with the same confirmation as a job save).
+app.post('/api/quotes/:id/sync', route(async (req) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  if (!quote.follows_project || !quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้ไม่ได้ผูกกับโปรเจ็กต์');
+  await transaction(() => syncFollowingQuote(quote.project_id, req.body?.confirmQuoteChange === true));
+  return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
 }));
 
 app.delete('/api/quotes/:id', route(async (req) => {
@@ -1239,5 +1354,6 @@ app.use((err, _req, res, _next) => {
   const badJson = err.type === 'entity.parse.failed' || err instanceof SyntaxError;
   const status = badJson ? 400 : err.status || 500;
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: badJson ? 'ข้อมูลที่ส่งมาไม่ถูกต้อง' : status >= 500 ? 'เกิดข้อผิดพลาดในระบบ' : err.message });
+  // `data`: what the client needs to act on a refusal (for instance the quote a save would change), never on a 500
+  res.status(status).json({ error: badJson ? 'ข้อมูลที่ส่งมาไม่ถูกต้อง' : status >= 500 ? 'เกิดข้อผิดพลาดในระบบ' : err.message, ...(status < 500 && err.data ? err.data : {}) });
 });

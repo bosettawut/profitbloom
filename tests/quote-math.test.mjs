@@ -1,7 +1,7 @@
 // Rounding on a quote: line by line, to the satang, or the old whole-baht rule.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bahtUp, fitToPrice, headingDiscount, jobPricing, lineAmount, markupOf, projectPrice, quoteTotals, toSatang, wholeBaht, wholeBahtShares } from '../shared/quote-math.js';
+import { bahtUp, fitToPrice, headingDiscount, jobPricing, lineAmount, markupOf, projectPrice, quoteLinesFromJob, quoteTotals, toSatang, wholeBaht, wholeBahtShares } from '../shared/quote-math.js';
 
 const lines = [{ quantity: 3, unitPrice: 33.33 }];
 
@@ -160,4 +160,55 @@ test('headings rounded together add up to the job price, and a whole-baht headin
   assert.equal(wholeBahtShares([100, 200], 250), null);
   assert.equal(wholeBahtShares([100.5, 200.25], 300.75), null);
   assert.deepEqual(wholeBahtShares([], 0), []);
+});
+
+test('the quote that follows a job lists its headings at what they sell for, and comes to the job price', () => {
+  const groups = [
+    { id: 1, name: ' ซุ้ม ', markup: 25 },
+    { id: 2, name: '', markup: 100, discountType: 'baht', discount: 100 },
+    { id: 3, name: 'ยังไม่ใส่ราคา', markup: 30 },
+    { id: 4, name: 'ไม่มีรายการ', markup: 30 },
+  ];
+  const items = [
+    { name: 'กุหลาบ', quantity: 10, price: 800, groupId: 1 },
+    { name: 'ค่าแรง', quantity: 2, price: 500, groupId: 2 },
+    { name: 'รอราคา', quantity: 1, price: 0, groupId: 3 },
+    // what went over the plan is not on the quote
+    { name: 'งอก', quantity: 1, price: 900, isExtra: true, groupId: null },
+  ];
+  const { price, lines } = quoteLinesFromJob(items, groups);
+  assert.equal(price, 11900);
+  assert.equal(price, projectPrice(items, 0, groups));
+  // a heading with nothing costed under it is left out; one without a name is called by its place
+  assert.deepEqual(lines, [
+    { description: 'ซุ้ม', quantity: 1, unit: '', unitPrice: 10000, roundUp: true },
+    { description: 'หัวข้อที่ 2', quantity: 1, unit: '', unitPrice: 1900, roundUp: true },
+  ]);
+  assert.equal(quoteTotals({ items: lines, rounding: 'line' }).afterDiscount, price);
+});
+
+test('headings with satang are rounded together, so the lines still add up to the whole-baht job price', () => {
+  const groups = [{ id: 1, name: 'a', markup: 50 }, { id: 2, name: 'b', markup: 50 }, { id: 3, name: 'c', markup: 33.3 }];
+  const items = [{ quantity: 1, price: 67, groupId: 1 }, { quantity: 1, price: 133, groupId: 2 }, { quantity: 3, price: 33.33, groupId: 3 }];
+  const { price, lines } = quoteLinesFromJob(items, groups);
+  assert.ok(Number.isInteger(price));
+  assert.ok(lines.every((l) => Number.isInteger(l.unitPrice)));
+  assert.equal(lines.reduce((s, l) => s + l.unitPrice, 0), price);
+});
+
+test('a job with no costs gives its quote no price; with nothing costed yet, every heading comes at 0', () => {
+  assert.deepEqual(quoteLinesFromJob([], [{ id: 1, name: 'a', markup: 30 }], 30), { price: null, lines: [] });
+  const waiting = quoteLinesFromJob([{ name: 'x', quantity: 1, price: 0, groupId: 1 }], [{ id: 1, name: 'ดอกไม้', markup: 30 }]);
+  assert.equal(waiting.price, null);
+  assert.deepEqual(waiting.lines.map((l) => [l.description, l.unitPrice]), [['ดอกไม้', 0]]);
+});
+
+test('a job made from a quote keeps its settled price, satang and all, and its lines are fitted to it', () => {
+  const groups = [{ id: 1, name: 'รายการต้นทุน', markup: 0 }];
+  const items = [{ name: 'ซุ้ม', quantity: 1, price: 60, groupId: 1 }];
+  const { price, lines } = quoteLinesFromJob(items, groups, 0, 94.99);
+  assert.equal(price, 94.99);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].roundUp, false);
+  assert.equal(quoteTotals({ items: lines, rounding: 'line' }).afterDiscount, 94.99);
 });

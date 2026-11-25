@@ -265,7 +265,9 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
 
   const handleProjectUpdate = async (updatedProject: ProjectInput & { id: string }) => {
     const saved = await api.updateProject(updatedProject.id, updatedProject);
-    setSelectedProject(saved);
+    // `quoteUpdated` says what this one save did; it is not part of the job
+    const { quoteUpdated: _quoteUpdated, ...project } = saved;
+    setSelectedProject(project);
     return saved;
   };
 
@@ -281,6 +283,8 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
   const openQuote = (quoteId: string | null, preview = false) => show({ nav: 'quotes-new', quoteId: quoteId ?? undefined, preview });
 
   const createQuoteFromProject = (project: Project) => {
+    // a job has one quote tied to it: when it is already there, that one opens
+    if (project.quote) return openQuote(project.quote.id);
     setSelectedProject(project);
     show({ nav: 'quotes-new', fromProjectId: project.id });
   };
@@ -305,6 +309,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
           onUpdate={handleProjectUpdate}
           onDelete={handleProjectDelete}
           onCreateQuote={createQuoteFromProject}
+          onOpenQuote={(id) => openQuote(id)}
           startStage={view.edit ? 'quote' : undefined}
         />
       );
@@ -327,6 +332,8 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             fromProject={view.fromProjectId ? selectedProject : null}
             startInPreview={!!view.preview}
             onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
+            // the job held here is the copy from before the quote was saved: read it again, so going back to it shows its quote
+            onProjectChanged={(id) => { api.project(id).then((p) => setSelectedProject((held) => (held?.id === id ? p : held))).catch(() => {}); }}
             onDone={() => navigate('quotes-all')}
           />
         );

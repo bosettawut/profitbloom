@@ -125,6 +125,19 @@ export const LINK_CUSTOMERS = `
  * timestamps are UTC text `YYYY-MM-DD HH:MM:SS`, dates are text `YYYY-MM-DD`, flags are 0/1.
  */
 /**
+ * Ties each job to its quote: of a job's quotes, the newest is the one that follows it from here on; older ones stay
+ * as they are. A job made from a quote (agreed_price set) is the other way round and is left alone.
+ * Used by migration 14 and again after importing the old database, whose quotes arrive untied.
+ */
+export const TIE_QUOTES = `
+  UPDATE quotes q SET follows_project = 1
+   WHERE q.project_id IS NOT NULL AND q.follows_project = 0
+     AND EXISTS (SELECT 1 FROM projects p WHERE p.id = q.project_id AND p.agreed_price IS NULL)
+     AND NOT EXISTS (SELECT 1 FROM quotes f WHERE f.project_id = q.project_id AND f.follows_project = 1)
+     AND q.id = (SELECT q2.id FROM quotes q2 WHERE q2.project_id = q.project_id ORDER BY q2.created_at DESC, q2.id DESC LIMIT 1);
+`;
+
+/**
  * Gives every job that has costs but no heading yet one heading holding all of them, at the job's
  * own markup, so its price stays exactly what it was. Safe to run again.
  */
@@ -384,6 +397,15 @@ const MIGRATIONS = [
   ALTER TABLE quotes ADD COLUMN credit_days INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE quotes ADD COLUMN internal_note TEXT NOT NULL DEFAULT '';
   ALTER TABLE quote_items ADD COLUMN unit TEXT NOT NULL DEFAULT '';
+  `,
+
+  // 14 — a job and its quote are tied together: the quote's lines and price are the job's, and change when the job
+  //      is saved. One quote per job follows it. For jobs that already have quotes it is the newest one; older ones
+  //      stay as they are. A job made from a quote (agreed_price set) is the other way round and is left alone.
+  `
+  ALTER TABLE quotes ADD COLUMN follows_project INTEGER NOT NULL DEFAULT 0;
+  ${TIE_QUOTES}
+  CREATE UNIQUE INDEX idx_quotes_follows ON quotes(project_id) WHERE follows_project = 1;
   `,
 ];
 
