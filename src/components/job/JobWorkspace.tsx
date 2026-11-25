@@ -13,6 +13,7 @@ import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
 import { CustomerPicker } from '../CustomerPicker';
 import { useCustomerContactPrompt } from '../CustomerContactPrompt';
+import { DateField } from '../DateField';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -143,7 +144,11 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const infoField = (label: string, key: keyof Project, type = 'text') => (
     <div>
       <label className="pb-label">{label}</label>
-      <input className="pb-input pb-input-sm" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      {type === 'date' ? (
+        <DateField label={label} className="pb-input-sm" value={(draft[key] as string) ?? ''} onChange={(v) => patch({ [key]: v } as Partial<Project>)} clearable={false} />
+      ) : (
+        <input className="pb-input pb-input-sm" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      )}
     </div>
   );
 

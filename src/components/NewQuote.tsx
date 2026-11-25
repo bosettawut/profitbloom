@@ -5,6 +5,7 @@ import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
+import { DateField } from './DateField';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
 import { useQuoteChangePrompt } from './job/QuoteChangePrompt';
 import { fitToPrice, lineAmount, quoteLinesFromJob, quoteTotals, toSatang } from '../../shared/quote-math.js';
@@ -567,21 +568,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               </div>
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <label className="text-sm font-medium text-ink">ใบเสนอราคาใช้ได้ถึง</label>
-                <input
-                  type="date"
-                  value={quoteData.validUntil}
-                  onChange={(e) => setQuoteData({ ...quoteData, validUntil: e.target.value })}
-                  className="pb-input pb-input-sm"
-                />
+                <DateField label="ใบเสนอราคาใช้ได้ถึง" className="pb-input-sm" value={quoteData.validUntil} onChange={(v) => { touched.current = true; setQuoteData({ ...quoteData, validUntil: v }); }} />
               </div>
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <label className="text-sm font-medium text-ink">วันที่จัดงาน</label>
-                <input
-                  type="date"
-                  value={quoteData.eventDate}
-                  onChange={(e) => setQuoteData({ ...quoteData, eventDate: e.target.value })}
-                  className="pb-input pb-input-sm"
-                />
+                <DateField label="วันที่จัดงาน" className="pb-input-sm" value={quoteData.eventDate} onChange={(v) => { touched.current = true; setQuoteData({ ...quoteData, eventDate: v }); }} />
               </div>
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <label className="text-sm font-medium text-ink">เครดิต (วัน)</label>

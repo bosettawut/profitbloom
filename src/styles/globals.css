@@ -674,7 +674,8 @@ html {
   /* Safari gives text boxes, date boxes and dropdowns three different natural heights,
      so single-line fields get theirs from the same sum instead of from their contents */
   input.pb-input,
-  select.pb-input {
+  select.pb-input,
+  button.pb-input {
     height: calc(1.5em + var(--pb-input-py) * 2 + 2px);
   }
   .pb-input::placeholder { color: #8C879D; }
