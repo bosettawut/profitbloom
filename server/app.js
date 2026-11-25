@@ -1191,6 +1191,20 @@ function monthSeries(rows, months) {
   return series;
 }
 
+/** January to December of one year, for the chart on the reports page */
+function yearSeries(rows, year) {
+  return TH_MONTHS.map((month, i) => {
+    const key = `${year}-${String(i + 1).padStart(2, '0')}`;
+    const inMonth = rows.filter((r) => r.sold && r.month === key);
+    return {
+      key,
+      month,
+      sales: Math.round(inMonth.reduce((s, r) => s + r.sales, 0)),
+      profit: Math.round(inMonth.reduce((s, r) => s + r.profit, 0)),
+    };
+  });
+}
+
 const pctChange = (cur, prev) => (prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100);
 
 app.get('/api/dashboard', route(async (req) => {
@@ -1290,6 +1304,12 @@ app.get('/api/reports', route(async (req) => {
   const sales = await salesReport(req.user.id, rows, date(req.query.from), date(req.query.to));
   const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: rows.filter((r) => r.status === s).length }));
   const sold = rows.filter((r) => r.sold);
+  // the chart shows one calendar year: this year unless another is asked for. The years on offer are
+  // those with sales, and this year
+  const thisYear = bangkokYear();
+  const asked = /^\d{4}$/.test(String(req.query.year ?? '')) ? Number(req.query.year) : thisYear;
+  const chartYears = [...new Set([thisYear, ...sold.map((r) => Number(r.month.slice(0, 4)))])].sort((x, y) => y - x);
+  const chartYear = chartYears.includes(asked) ? asked : thisYear;
   return {
     totals: {
       projects: rows.length,
@@ -1297,7 +1317,9 @@ app.get('/api/reports', route(async (req) => {
       profit: sold.reduce((s, r) => s + r.profit, 0),
       cost: sold.reduce((s, r) => s + r.cost, 0),
     },
-    chart: monthSeries(rows, 12),
+    chart: yearSeries(rows, chartYear),
+    chartYear,
+    chartYears,
     byType: Object.values(byType).sort((a, b) => b.sales - a.sales),
     byStatus,
     sales,

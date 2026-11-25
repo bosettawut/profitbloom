@@ -70,14 +70,16 @@ interface PaginationProps {
   paged: ReturnType<typeof usePaged>;
   /** what the rows are, e.g. "โปรเจ็กต์" */
   unit: string;
+  /** spacing around the bar; by default it sits above the next block of a page */
+  className?: string;
 }
 
 /** "แสดง 1–10 จาก 34" with previous/next and a rows-per-page choice. */
-export function Pagination({ paged, unit }: PaginationProps) {
+export function Pagination({ paged, unit, className = 'mb-6 md:mb-8' }: PaginationProps) {
   if (paged.total === 0) return null;
   const { page, pages, start, pageSize, total } = paged;
   return (
-    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6 md:mb-8 text-sm text-ink-muted">
+    <div className={`flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-ink-muted ${className}`}>
       <p>
         แสดง {start + 1}–{Math.min(start + pageSize, total)} จาก {total} {unit}
       </p>

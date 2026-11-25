@@ -10,6 +10,7 @@
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "make-admin": "node server/make-admin.js",
+    "seed-mock": "node --env-file-if-exists=.env server/seed-mock.js",
     "migrate-data": "node server/migrate-from-sqlite.js",
     "test": "node --test tests/decision.test.ts tests/quote-math.test.mjs && node tests/run.mjs"
   },
