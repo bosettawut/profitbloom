@@ -83,8 +83,10 @@
   --chart-5: #35235e;
   
   /* Typography Scale */
-  --text-xs: 0.8125rem;
-  --text-sm: 0.9375rem;
+  /* 2px over what they were before the type was first enlarged: 14px on a computer (16px on a phone 15px root),
+     12px (13.25px on a phone) */
+  --text-xs: 0.8235rem;
+  --text-sm: 0.9412rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
@@ -161,20 +163,17 @@
 }
 
 @theme {
-  /* The stock breakpoints, moved out in step with the root size below, so each layout still gets the room it was
-     drawn for: a layout needs so many times the text size across, not so many pixels. In those terms the steps
-     are 42.5 / 61.5 / 67.8 / 80 / 96 times the root size (18px on a tablet, 19.5px from md up).
-     Media queries always count a rem as 16px, hence the odd figures: 765 / 1200 / 1320 / 1560 / 1872px.
-     md is where the menu moves to the side and takes 18rem of the width with it, so it starts late enough that
-     a page still has the room it had at sm; a tablet held sideways (1024-1194px) keeps the phone layout. */
-  --breakpoint-sm: 47.8125rem;
-  --breakpoint-md: 75rem;
-  --breakpoint-lg: 82.5rem;
-  /* where the three lists (projects, quotes, customers) change from cards to table rows: 1400px, 71.8 times the
-     root size. Until 2xl the table keeps to the columns that fit, with the lesser details under the name. */
-  --breakpoint-rows: 87.5rem;
-  --breakpoint-xl: 97.5rem;
-  --breakpoint-2xl: 117rem;
+  /* The stock breakpoints (640 / 768 / 1024 / 1280 / 1536px), moved out by as much as the root size grew from what
+     the layouts were drawn at: 15 → 16px below lg, 16 → 17px from lg up. Media queries always count a rem as 16px,
+     hence: 680 / 820 / 1088 / 1360 / 1632px. */
+  --breakpoint-sm: 42.5rem;
+  --breakpoint-md: 51.25rem;
+  --breakpoint-lg: 68rem;
+  /* where the three lists (projects, quotes, customers) change from cards to table rows. Until 2xl the table keeps
+     to the columns that fit, with the lesser details under the name. */
+  --breakpoint-rows: 80rem;
+  --breakpoint-xl: 85rem;
+  --breakpoint-2xl: 102rem;
 }
 
 @theme inline {
@@ -574,42 +573,28 @@
 
 /*
  * Everything in the app is sized from the root (text, boxes and spacing are in rem), so this one figure makes
- * the whole of it larger. It is set generously: most of the people using the app are older and read it more
- * easily at this size (it was 15px on a phone and 16px on a computer). Anything of 16px or more in a box also
- * keeps Safari on a phone from zooming in when the box is tapped.
- * The breakpoints in the theme above are moved by the same proportion, so change them together.
+ * the whole of it larger or smaller. Before the type was first enlarged it was 15px on a phone and 16px from lg up;
+ * the owner settled on 2px more for the everyday text than then (16px on a computer, 15px on a phone), which is
+ * these two figures with the text sizes in the theme. 16px in a box also keeps Safari on a phone from zooming in
+ * when the box is tapped. The breakpoints in the theme above are moved by the same proportion, so change them together.
  */
 html {
   font-size: 16px;
 }
 
-/* A phone's layouts need about 22.5 times the text size across before boxes start to clip, so the size steps
-   up with the width of the phone: 360px → 16px, 390px → 17px, 430px and tablets → 18px. */
-@media (min-width: 23.75rem) {
+/* notebooks and computers (from lg up) */
+@media (min-width: 68rem) {
   html {
     font-size: 17px;
   }
 }
 
-@media (min-width: 26.875rem) {
-  html {
-    font-size: 18px;
-  }
-}
-
-/* From the md breakpoint up (the layout with the menu at the side). 18px was judged too small to be a clear
-   change and 21px too large, so it sits between the two. */
-@media (min-width: 75rem) {
-  html {
-    font-size: 19.5px;
-  }
-}
 /*
  * The menu at the side has to show every entry without scrolling, and at this text size a laptop's window is
  * not tall enough for it. So on a short window the menu alone is drawn a step smaller (its text and its
  * spacing both come from these variables); the pages keep the full size.
  */
-@media (max-height: 770px) {
+@media (max-height: 680px) {
   .pb-sidebar {
     --spacing: 0.2125rem;
     --text-sm: 0.8rem;
@@ -618,7 +603,7 @@ html {
   }
 }
 
-@media (max-height: 660px) {
+@media (max-height: 590px) {
   .pb-sidebar {
     --spacing: 0.1875rem;
     --text-sm: 0.7rem;
@@ -650,7 +635,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9375rem;
+    font-size: 0.9647rem;
     box-shadow: var(--shadow-purple);
     transition: background-color 0.15s ease;
   }
@@ -666,7 +651,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9375rem;
+    font-size: 0.9647rem;
     transition: background-color 0.15s ease;
   }
   .pb-btn-secondary:hover { background: #E8E6EF; }
@@ -715,7 +700,7 @@ html {
   }
   .pb-label {
     display: block;
-    font-size: 0.9375rem;
+    font-size: 0.9412rem;
     font-weight: 600;
     color: var(--ink-muted);
     margin-bottom: 0.4rem;
