@@ -8,8 +8,11 @@ export interface TypedContact {
   name: string;
   phone: string;
   email: string;
-  /** a quote's days of credit (a project has none) */
+  /** a quote's days of credit, and what it says for the customer's paperwork (a project has none of these) */
   creditDays?: number;
+  address?: string;
+  taxId?: string;
+  branch?: string;
 }
 
 interface Difference {
@@ -20,6 +23,8 @@ interface Difference {
 
 const samePhone = (a: string, b: string) => a.replace(/\D/g, '') === b.replace(/\D/g, '');
 const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+/** the same text, however it is spaced or broken into lines */
+const sameText = (a: string, b: string) => a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
 
 /** what the customer's record says differently; a field the customer has empty is not a difference (it is simply filled in) */
 function differences(customer: Customer, typed: TypedContact): Difference[] {
@@ -28,12 +33,21 @@ function differences(customer: Customer, typed: TypedContact): Difference[] {
   if (typed.email.trim() && customer.email && !sameEmail(typed.email, customer.email)) out.push({ label: 'อีเมล', kept: customer.email, typed: typed.email.trim() });
   const credit = typed.creditDays ?? 0;
   if (credit > 0 && customer.creditDays > 0 && credit !== customer.creditDays) out.push({ label: 'เครดิต', kept: `${customer.creditDays} วัน`, typed: `${credit} วัน` });
+  for (const [label, mine, kept] of [
+    ['ที่อยู่', typed.address, customer.address],
+    ['เลขประจำตัวผู้เสียภาษี', typed.taxId, customer.taxId],
+    ['สำนักงาน/สาขา', typed.branch, customer.branch],
+  ] as const) {
+    const value = (mine ?? '').trim();
+    if (value && kept?.trim() && !sameText(value, kept)) out.push({ label, kept: kept.trim(), typed: value });
+  }
   return out;
 }
 
 /**
- * Before saving a project or quote: when its phone number or email (or a quote's days of credit) differs from what
- * the customer's record holds, asks whether the customer should be updated or the new details are for this job only.
+ * Before saving a project or quote: when its phone number or email (or a quote's days of credit, address, tax id or
+ * office/branch) differs from what the customer's record holds, asks whether the customer should be updated or the
+ * new details are for this job only.
  *
  * `ask` resolves to true (update the customer), false (this job only, or nothing to ask) or
  * null (the dialog was closed: do not save). Pass `unchangedFrom` when editing, so a document whose
@@ -46,7 +60,8 @@ export function useCustomerContactPrompt() {
   const ask = async (typed: TypedContact, unchangedFrom?: TypedContact): Promise<boolean | null> => {
     if (
       unchangedFrom && unchangedFrom.customerId === typed.customerId && unchangedFrom.name === typed.name && unchangedFrom.phone === typed.phone && unchangedFrom.email === typed.email &&
-      (unchangedFrom.creditDays ?? 0) === (typed.creditDays ?? 0)
+      (unchangedFrom.creditDays ?? 0) === (typed.creditDays ?? 0) && (unchangedFrom.address ?? '') === (typed.address ?? '') &&
+      (unchangedFrom.taxId ?? '') === (typed.taxId ?? '') && (unchangedFrom.branch ?? '') === (typed.branch ?? '')
     ) return false;
     let customers: Customer[];
     try {
@@ -71,7 +86,7 @@ export function useCustomerContactPrompt() {
   const node = open ? (
     <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={() => answer.current(null)}>
       <div role="dialog" aria-modal="true" aria-label="อัปเดตข้อมูลลูกค้า" className="bg-white rounded-[24px] shadow-soft-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-        <h3 className="text-lg font-semibold text-ink mb-1">{open.diffs.some((d) => d.label === 'เครดิต') ? 'ข้อมูลลูกค้าไม่ตรงกับที่จำไว้' : 'ข้อมูลติดต่อไม่ตรงกับที่จำไว้'}</h3>
+        <h3 className="text-lg font-semibold text-ink mb-1">{open.diffs.every((d) => d.label === 'เบอร์โทรศัพท์' || d.label === 'อีเมล') ? 'ข้อมูลติดต่อไม่ตรงกับที่จำไว้' : 'ข้อมูลลูกค้าไม่ตรงกับที่จำไว้'}</h3>
         <p className="text-sm text-ink-muted mb-4">
           ข้อมูลที่กรอกต่างจากที่บันทึกไว้ของ <span className="font-medium text-ink">{open.customer.name}</span> ต้องการให้จำข้อมูลใหม่กับลูกค้ารายนี้ด้วยหรือไม่
         </p>

@@ -91,6 +91,9 @@ export interface Customer {
   notes: string;
   /** days of credit this customer is given after the event (0 = none): a new quote for them starts with it */
   creditDays: number;
+  /** for the customer's quotes: their tax id and office/branch (a new quote for them starts with these and the address) */
+  taxId: string;
+  branch: string;
   createdDate: string;
 }
 

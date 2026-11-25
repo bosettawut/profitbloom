@@ -11,7 +11,7 @@
 import { createClient } from '@libsql/client';
 import fs from 'node:fs';
 import path from 'node:path';
-import { close, connectionConfig, CUSTOMER_CREDIT, db, GROUP_COSTS, LINK_CUSTOMERS, ready, TIE_QUOTES, transaction, UNLOCK_AGREED } from './db.js';
+import { close, connectionConfig, CUSTOMER_CREDIT, CUSTOMER_FROM_QUOTES, db, GROUP_COSTS, LINK_CUSTOMERS, ready, TIE_QUOTES, transaction, UNLOCK_AGREED } from './db.js';
 
 const flags = new Set(process.argv.slice(2));
 const DRY = flags.has('--dry-run');
@@ -148,6 +148,7 @@ try {
       // the same rules as the database's own steps: customers start with their latest credit, and no quote of a
       // job made from a quote is locked to its price
       await db.exec(CUSTOMER_CREDIT);
+      await db.exec(CUSTOMER_FROM_QUOTES);
       await db.exec(UNLOCK_AGREED);
       customers = await count('customers');
     });

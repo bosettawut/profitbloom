@@ -374,6 +374,9 @@ function serializeCustomer(c) {
     notes: c.notes,
     /** days of credit this customer is given after the event (0 = none): a new quote for them starts with it */
     creditDays: c.credit_days ?? 0,
+    /** for the customer's quotes: their tax id and office/branch (a new quote for them starts with these and the address) */
+    taxId: c.tax_id ?? '',
+    branch: c.branch ?? '',
     createdDate: thaiDate(c.created_at),
   };
 }
@@ -395,6 +398,8 @@ function readCustomerBody(body, existing) {
     address: str(body.address, 1000),
     notes: str(body.notes, 5000),
     credit_days: creditDays(body.creditDays),
+    tax_id: str(body.taxId, 20),
+    branch: str(body.branch, 60),
   };
 }
 
@@ -420,19 +425,25 @@ async function resolveCustomer(userId, customerId, name, phone, email) {
 }
 
 /**
- * Carries the phone number and email typed on a project or quote over to the customer's own record, and the days of
- * credit given on a quote (`credit`; a project has none). An empty field on the customer (no credit: 0) is always
- * filled in; a different value replaces what the customer has only when the shop said so (`overwrite`), because a job
- * is sometimes arranged with someone else, or given a credit just this once.
+ * Carries what a project or quote says about its customer over to the customer's own record: the phone number and
+ * email, and from a quote also the days of credit, the address, the tax id and the office/branch (a project has none
+ * of those). An empty field on the customer (no credit: 0) is always filled in; a different value replaces what the
+ * customer has only when the shop said so (`overwrite`), because a job is sometimes arranged with someone else, or
+ * given a credit just this once. `typed` holds the customer's columns: { phone, email, credit_days, address, tax_id, branch }.
  */
-async function syncCustomerContact(customerId, phone, email, overwrite, credit = 0) {
+async function syncCustomerContact(customerId, typed, overwrite) {
   if (!customerId) return;
-  const c = await db.prepare('SELECT phone, email, credit_days FROM customers WHERE id = ?').get(customerId);
-  const pick = (typed, kept) => (typed && (overwrite || !kept) ? typed : kept);
-  const next = { phone: pick(phone, c.phone), email: pick(email, c.email), credit: pick(credit, c.credit_days) };
-  if (next.phone === c.phone && next.email === c.email && next.credit === c.credit_days) return;
-  await db.prepare(`UPDATE customers SET phone = ?, email = ?, credit_days = ?, updated_at = ${NOW} WHERE id = ?`).run(next.phone, next.email, next.credit, customerId);
+  const c = await db.prepare('SELECT phone, email, credit_days, address, tax_id, branch FROM customers WHERE id = ?').get(customerId);
+  const pick = (value, kept) => (value && (overwrite || !kept) ? value : kept);
+  const columns = Object.keys(typed).filter((k) => k in c);
+  const changed = columns.filter((k) => pick(typed[k], c[k]) !== c[k]);
+  if (!changed.length) return;
+  // the columns are the fixed ones named by the callers, never from the request
+  await db.prepare(`UPDATE customers SET ${changed.map((k) => `${k} = ?`).join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...changed.map((k) => pick(typed[k], c[k])), customerId);
 }
+
+/** what a quote says about its customer, for the customer's own record */
+const quoteCustomer = (d) => ({ phone: d.client_phone, email: d.client_email, credit_days: d.credit_days, address: d.client_address, tax_id: d.client_tax_id, branch: d.client_branch });
 
 /** which customer a save points at: `customerId` in the request picks one, a changed name is looked up again */
 function customerChoice(body, existing, nameKey, existingName) {
@@ -536,8 +547,8 @@ app.get('/api/customers/:id', route(async (req) => {
 app.post('/api/customers', route(async (req, res) => {
   const d = readCustomerBody(req.body);
   const { lastInsertRowid } = await db
-    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes, credit_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id')
-    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days);
+    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes, credit_days, tax_id, branch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, d.tax_id, d.branch);
   await logActivity(req.user.id, 'customer_created', `ลูกค้าใหม่ - ${d.name}`, 'เพิ่มแล้ว');
   res.status(201);
   return serializeCustomer(await getCustomer(req.user.id, lastInsertRowid));
@@ -546,8 +557,8 @@ app.post('/api/customers', route(async (req, res) => {
 app.put('/api/customers/:id', route(async (req) => {
   const existing = await getCustomer(req.user.id, req.params.id);
   const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body }, existing);
-  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, credit_days=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
-    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, existing.id, req.user.id);
+  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, credit_days=?, tax_id=?, branch=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
+    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, d.tax_id, d.branch, existing.id, req.user.id);
   return serializeCustomer(await getCustomer(req.user.id, existing.id));
 }));
 
@@ -817,7 +828,7 @@ app.post('/api/projects', route(async (req, res) => {
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
-    await syncCustomerContact(customerId, d.phone, d.email, req.body.updateCustomer === true);
+    await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
     const { lastInsertRowid } = await db
       .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
                   deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
@@ -850,7 +861,7 @@ app.put('/api/projects/:id', route(async (req) => {
     // quote alone too, even a quote from before the two were tied that has not caught up with its job yet.
     const before = ['costItems', 'costGroups', 'profitMargin'].some((k) => k in req.body) ? await jobQuoteLines(existing.id) : null;
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
-    await syncCustomerContact(customerId, d.phone, d.email, req.body.updateCustomer === true);
+    await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
     await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
                   reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
@@ -1236,7 +1247,7 @@ app.post('/api/quotes', route(async (req, res) => {
     const code = await nextCode('quotes', req.user.id, 'QT');
     const status = d.status || 'draft';
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
-    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true, d.credit_days);
+    await syncCustomerContact(customerId, quoteCustomer(d), req.body.updateCustomer === true);
     // A quote made for a job follows it: the lines and the price are the job's, whatever the caller sent, and one
     // quote per job does. A job that was itself made from a quote is the other way round: its price follows its
     // newest quote, which this one becomes. Either way the quote shares the job's details, and its event date is the job's.
@@ -1284,7 +1295,7 @@ app.put('/api/quotes/:id', route(async (req) => {
   let jobUpdated = false;
   await transaction(async () => {
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
-    await syncCustomerContact(customerId, d.client_phone, d.client_email, req.body.updateCustomer === true, d.credit_days);
+    await syncCustomerContact(customerId, quoteCustomer(d), req.body.updateCustomer === true);
     if (existing.follows_project && existing.project_id) {
       // its lines, discount and job are not the quote's to change: they are the job's, and are changed there
       d.project_id = existing.project_id;
