@@ -126,7 +126,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setStatus(q.status);
         setProjectId(q.projectId);
         setCustomerId(q.customerId);
-        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail, creditDays: q.creditDays ?? 0 };
+        startContact.current = { customerId: q.customerId, name: q.clientName, phone: q.clientPhone, email: q.clientEmail, creditDays: q.creditDays ?? 0, address: q.clientAddress ?? '', taxId: q.clientTaxId ?? '', branch: q.clientBranch ?? '' };
         setCreatedDate(q.createdDate);
         setQuoteData({
           clientName: q.clientName,
@@ -192,7 +192,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       .then((all) => {
         const c = all.find((x) => x.id === fromProject.customerId);
         if (!c || stale) return;
-        setQuoteData((d) => ({ ...d, clientAddress: d.clientAddress || c.address || c.quoteAddress || '', clientTaxId: d.clientTaxId || c.quoteTaxId || '', clientBranch: d.clientBranch || c.quoteBranch || '', creditDays: d.creditDays || c.creditDays || 0 }));
+        setQuoteData((d) => ({ ...d, clientAddress: d.clientAddress || c.address || c.quoteAddress || '', clientTaxId: d.clientTaxId || c.taxId || c.quoteTaxId || '', clientBranch: d.clientBranch || c.branch || c.quoteBranch || '', creditDays: d.creditDays || c.creditDays || 0 }));
       })
       .catch(() => {});
     return () => {
@@ -290,7 +290,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       showNotification(`ยอดรายการยังไม่เท่าราคาที่ล็อกไว้ ${money(lockedPrice ?? 0)} กด "ปรับส่วนต่างอัตโนมัติ"`);
       return null;
     }
-    const contact: TypedContact = { customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail, creditDays: quoteData.creditDays };
+    const contact: TypedContact = {
+      customerId, name: quoteData.clientName, phone: quoteData.clientPhone, email: quoteData.clientEmail,
+      creditDays: quoteData.creditDays, address: quoteData.clientAddress, taxId: quoteData.clientTaxId, branch: quoteData.clientBranch,
+    };
     const updateCustomer = await contactPrompt.ask(contact, startContact.current);
     if (updateCustomer === null) return null;
     setSaving(true);
@@ -536,8 +539,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                     clientEmail: c.email,
                     // what the customer's record or last quote carried; what is already typed stays when they have none
                     clientAddress: c.address || c.quoteAddress || quoteData.clientAddress,
-                    clientTaxId: c.quoteTaxId || quoteData.clientTaxId,
-                    clientBranch: c.quoteBranch || quoteData.clientBranch,
+                    clientTaxId: c.taxId || c.quoteTaxId || quoteData.clientTaxId,
+                    clientBranch: c.branch || c.quoteBranch || quoteData.clientBranch,
                     creditDays: c.creditDays || quoteData.creditDays,
                   });
                 }}

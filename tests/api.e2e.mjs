@@ -1065,6 +1065,25 @@ ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
   ok('ใบให้เครดิตต่างจากของลูกค้า (60) โดยไม่สั่งอัปเดต → ลูกค้ายัง 15 วัน', r.status === 200 && (await A.call('GET', `/customers/${c.id}`)).data.creditDays === 15);
   r = await A.call('PUT', `/quotes/${cq.id}`, { creditDays: 45, updateCustomer: true });
   ok('สั่งอัปเดตข้อมูลลูกค้า → ลูกค้าได้เครดิต 45 วันตามใบ', r.status === 200 && (await A.call('GET', `/customers/${c.id}`)).data.creditDays === 45);
+  // the address, tax id and branch on a quote go to the customer the same way
+  r = await A.call('PUT', `/customers/${c.id}`, { taxId: '0105551234567', branch: 'สำนักงานใหญ่', address: '' });
+  ok('ลูกค้ามีเลขประจำตัวผู้เสียภาษีและสาขา', r.status === 200 && r.data.taxId === '0105551234567' && r.data.branch === 'สำนักงานใหญ่', JSON.stringify(r.data));
+  r = await A.call('PUT', `/customers/${c.id}`, { taxId: '9'.repeat(30), branch: 'b'.repeat(90) });
+  ok('เลขผู้เสียภาษียาวเกิน → 20 ตัว · สาขา → 60 ตัว (เท่ากับในใบ)', r.data.taxId.length === 20 && r.data.branch.length === 60, JSON.stringify([r.data.taxId.length, r.data.branch.length]));
+  await A.call('PUT', `/customers/${c.id}`, { taxId: '0105551234567', branch: 'สำนักงานใหญ่' });
+  r = await A.call('PUT', `/quotes/${cq.id}`, { clientAddress: '99 ถ.สุขุมวิท กรุงเทพฯ', clientTaxId: '0999999999999', clientBranch: 'สาขา 2' });
+  let cc = (await A.call('GET', `/customers/${c.id}`)).data;
+  ok('ใบใส่ที่อยู่ ลูกค้ายังไม่มี → ลูกค้าได้ที่อยู่ · เลขภาษีและสาขาต่างจากของลูกค้าโดยไม่สั่งอัปเดต → ลูกค้าคงเดิม',
+    r.status === 200 && cc.address === '99 ถ.สุขุมวิท กรุงเทพฯ' && cc.taxId === '0105551234567' && cc.branch === 'สำนักงานใหญ่', JSON.stringify([cc.address, cc.taxId, cc.branch]));
+  r = await A.call('PUT', `/quotes/${cq.id}`, { clientAddress: '1 ถ.ใหม่', clientTaxId: '0999999999999', clientBranch: 'สาขา 2', updateCustomer: true });
+  cc = (await A.call('GET', `/customers/${c.id}`)).data;
+  ok('สั่งอัปเดตข้อมูลลูกค้า → ลูกค้าได้ที่อยู่ เลขภาษี และสาขาตามใบ', cc.address === '1 ถ.ใหม่' && cc.taxId === '0999999999999' && cc.branch === 'สาขา 2', JSON.stringify([cc.address, cc.taxId, cc.branch]));
+  r = await A.call('PUT', `/quotes/${cq.id}`, { clientAddress: '', clientTaxId: '', updateCustomer: true });
+  cc = (await A.call('GET', `/customers/${c.id}`)).data;
+  ok('ลบที่อยู่และเลขภาษีในใบ → ของลูกค้าไม่ถูกลบตาม', cc.address === '1 ถ.ใหม่' && cc.taxId === '0999999999999', JSON.stringify([cc.address, cc.taxId]));
+  r = await A.call('POST', '/projects', { title: 'งานไม่มีที่อยู่', projectType: 'อื่นๆ', customerId: c.id, client: c.name, phone: '081-555-0001' });
+  ok('บันทึกโปรเจ็กต์ (ไม่มีช่องที่อยู่) → ที่อยู่ของลูกค้าไม่ถูกแตะ', r.status === 201 && (await A.call('GET', `/customers/${c.id}`)).data.address === '1 ถ.ใหม่');
+  await A.call('DELETE', `/projects/${r.data.id}`);
   await A.call('DELETE', `/quotes/${cq.id}`);
 
   // an ordinary job and its quote: the customer, the job's name both ways; the event date is the job's

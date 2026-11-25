@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CalendarClock, ChevronRight, Edit, FileText, FolderOpen, Mail, MapPin, MessageCircle, Phone, Plus, Search, Trash2, Wallet, X } from 'lucide-react';
+import { ArrowLeft, CalendarClock, ChevronRight, Edit, FileText, FolderOpen, Landmark, Mail, MapPin, MessageCircle, Phone, Plus, Search, Trash2, Wallet, X } from 'lucide-react';
 import { api, baht, type Customer, type CustomerDetail, type CustomerInput, type CustomerSummary, type Project } from '../lib/api';
 import { ProjectItem, statusPill } from './ProjectItem';
 import { StatsCard } from './StatsCard';
@@ -41,6 +41,8 @@ export function CustomerForm({ customer, initialName = '', onClose, onSaved }: C
     address: customer?.address ?? '',
     notes: customer?.notes ?? '',
     creditDays: customer?.creditDays ?? 0,
+    taxId: customer?.taxId ?? '',
+    branch: customer?.branch ?? '',
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -97,6 +99,8 @@ export function CustomerForm({ customer, initialName = '', onClose, onSaved }: C
             <label className="pb-label">ที่อยู่</label>
             <textarea className="pb-input" rows={2} value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} />
           </div>
+          {field('เลขประจำตัวผู้เสียภาษี', 'taxId', 'text', 'เช่น 0105551234567')}
+          {field('สำนักงาน/สาขา', 'branch', 'text', 'เช่น สำนักงานใหญ่')}
           <div className="sm:col-span-2">
             <label className="pb-label">หมายเหตุ</label>
             <textarea className="pb-input" rows={3} placeholder="เช่น สีที่ชอบ งบประมาณ ช่องทางที่สะดวกติดต่อ" value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} />
@@ -334,6 +338,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
     { icon: MessageCircle, label: 'LINE', value: customer.lineId, href: '' },
     { icon: Mail, label: 'อีเมล', value: customer.email, href: customer.email ? `mailto:${customer.email}` : '' },
     { icon: MapPin, label: 'ที่อยู่', value: customer.address, href: '' },
+    { icon: Landmark, label: 'เลขประจำตัวผู้เสียภาษี', value: [customer.taxId, customer.branch].filter(Boolean).join(' · '), href: '' },
     { icon: CalendarClock, label: 'เครดิต', value: customer.creditDays > 0 ? `${customer.creditDays} วัน หลังวันจัดงาน` : 'ไม่มีเครดิต', href: '' },
   ];
 

@@ -150,6 +150,22 @@ export const CUSTOMER_CREDIT = `
 `;
 
 /**
+ * A customer's address, tax id and office/branch start from their latest quote that gave each (a customer that
+ * already has one keeps it). Safe to run again.
+ */
+export const CUSTOMER_FROM_QUOTES = ['client_address:address', 'client_tax_id:tax_id', 'client_branch:branch']
+  .map((pair) => {
+    const [from, to] = pair.split(':');
+    return `
+  UPDATE customers c SET ${to} = q.${from}
+    FROM (SELECT DISTINCT ON (customer_id) customer_id, ${from} FROM quotes
+           WHERE customer_id IS NOT NULL AND ${from} <> ''
+           ORDER BY customer_id, created_at DESC, id DESC) q
+   WHERE c.id = q.customer_id AND c.${to} = '';`;
+  })
+  .join('\n');
+
+/**
  * A job made from a quote takes its price from that quote, so its quotes are no longer held to a locked price: the
  * lines are changed freely on the quote and the job's price follows. Safe to run again.
  */
@@ -454,6 +470,14 @@ const MIGRATIONS = [
   ALTER TABLE customers ADD COLUMN credit_days INTEGER NOT NULL DEFAULT 0;
   ${CUSTOMER_CREDIT}
   ${UNLOCK_AGREED}
+  `,
+
+  // 18 — a customer has a tax id and an office/branch for their quotes, as they have an address; all three start
+  //      from their latest quote that gave each
+  `
+  ALTER TABLE customers ADD COLUMN tax_id TEXT NOT NULL DEFAULT '';
+  ALTER TABLE customers ADD COLUMN branch TEXT NOT NULL DEFAULT '';
+  ${CUSTOMER_FROM_QUOTES}
   `,
 ];
 
