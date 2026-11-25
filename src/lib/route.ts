@@ -7,6 +7,7 @@
  *   /app/projects/12          one job             ?edit=1 opens it on the cost step
  *   /app/quotes               quote list          /app/quotes/new     new quote (?project=12 builds it from a job)
  *   /app/quotes/7             one quote           ?preview=1 opens the preview
+ *   /app/receipts             receipt list        /app/receipts/3     one receipt (made from a quote's page)
  *   /app/customers            customer list       /app/customers/5    one customer
  *   /app/quick-check · /app/reports · /app/settings · /app/packages · /app/admin
  *
@@ -22,6 +23,7 @@ export interface View {
   preview?: boolean;
   fromProjectId?: string;
   customerId?: string;
+  receiptId?: string;
 }
 
 const PAGE_TO_NAV: Record<string, string> = {
@@ -53,6 +55,7 @@ export function parseView(path: string): View {
     return { nav: 'quotes' };
   }
   if (page === 'customers') return { nav: 'customers', customerId: isId(sub) ? sub : undefined };
+  if (page === 'receipts') return { nav: 'receipts', receiptId: isId(sub) ? sub : undefined };
   return { nav: PAGE_TO_NAV[page] ?? 'dashboard' };
 }
 
@@ -70,6 +73,8 @@ export function viewPath(v: View): string {
       return `/app/quotes/new${v.fromProjectId ? `?project=${v.fromProjectId}` : ''}`;
     case 'customers':
       return v.customerId ? `/app/customers/${v.customerId}` : '/app/customers';
+    case 'receipts':
+      return v.receiptId ? `/app/receipts/${v.receiptId}` : '/app/receipts';
     default:
       return NAV_TO_PAGE[v.nav] ? `/app/${NAV_TO_PAGE[v.nav]}` : '/app';
   }

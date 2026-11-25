@@ -1,4 +1,4 @@
-import { statusPill } from './ProjectItem';
+import { statusPill, struck } from './ProjectItem';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
@@ -287,7 +287,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                     <tr key={project.id} onClick={() => handleProjectClick(project)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
                       <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
                       <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
-                        <span className="line-clamp-2">{project.title}</span>
+                        <span className={`line-clamp-2 ${struck(project.status)}`}>{project.title}</span>
                         {project.client && <span className="2xl:hidden block mt-0.5 font-normal text-ink truncate">{project.client}</span>}
                         <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{project.code}</span>
                       </td>
@@ -350,7 +350,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
               <div className="p-4 md:p-6 border-b border-line">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-base md:text-lg text-ink mb-2 line-clamp-2 font-semibold">{project.title}</h3>
+                    <h3 className={`text-base md:text-lg text-ink mb-2 line-clamp-2 font-semibold ${struck(project.status)}`}>{project.title}</h3>
                     <p className="text-sm text-ink-muted">รหัส: {project.code}</p>
                   </div>
                   <button

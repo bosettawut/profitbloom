@@ -26,16 +26,21 @@ export const statusPill = (status: string) => {
       return 'bg-rose-50 text-rose-600';
     case 'expired':
       return 'bg-orange-50 text-orange-700';
+    case 'issued':
+      return 'bg-emerald-50 text-emerald-700';
     default:
       return 'bg-[#F1F0F5] text-ink-muted';
   }
 };
 
+/** a cancelled job, quote or receipt has its name struck through, wherever it is listed */
+export const struck = (status: string) => (status === 'cancelled' ? 'line-through decoration-rose-500/70' : '');
+
 export function ProjectItem({ title, date, budget, status, statusText, onClick }: ProjectItemProps) {
   return (
     <button onClick={onClick} className="w-full flex items-center gap-4 py-3.5 text-left group">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-ink truncate">{title}</p>
+        <p className={`text-sm font-medium text-ink truncate ${struck(status)}`}>{title}</p>
         <p className="flex items-center gap-1.5 text-xs text-ink-muted mt-1">
           <Calendar className="w-3.5 h-3.5" />
           {date}

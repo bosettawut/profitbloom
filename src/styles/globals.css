@@ -687,6 +687,14 @@ html {
     height: calc(1.5em + var(--pb-input-py) * 2 + 2px);
   }
   .pb-input::placeholder { color: #8C879D; }
+  /* a form section locked as a whole (a quote with its receipt issued): its boxes read as fixed, the text still clear */
+  fieldset:disabled .pb-input {
+    background: #F7F6FA;
+    cursor: default;
+    color: var(--ink);
+    -webkit-text-fill-color: var(--ink);
+    opacity: 1;
+  }
   /* number boxes look like the text boxes beside them: Safari otherwise shows stepper arrows all the time */
   input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
   input[type='number']::-webkit-inner-spin-button,

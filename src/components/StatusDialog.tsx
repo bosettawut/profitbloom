@@ -16,7 +16,7 @@ export const PROJECT_STATUS_OPTIONS: StatusOption<ProjectStatus>[] = [
   { id: 'pending', name: 'รอการอนุมัติ', description: 'ส่งใบเสนอราคาแล้ว รอลูกค้าตอบกลับ', icon: Clock },
   { id: 'approved', name: 'อนุมัติแล้ว', description: 'ลูกค้าตกลงแล้ว เริ่มทำงานได้', icon: CircleCheck },
   { id: 'rejected', name: 'ลูกค้าปฏิเสธ', description: 'ลูกค้าไม่ตกลงราคา แก้ราคาที่โปรเจ็กต์แล้วส่งใบเสนอราคาใหม่', icon: ThumbsDown },
-  { id: 'completed', name: 'เสร็จสิ้น', description: 'จัดงานเสร็จและปิดงานแล้ว', icon: Flag },
+  { id: 'completed', name: 'เสร็จสิ้น', description: 'ออกใบเสร็จแล้ว ปิดงาน (เป็นเองเมื่อออกใบเสร็จ)', icon: Flag },
   { id: 'cancelled', name: 'ยกเลิก', description: 'ไม่ทำงานนี้แล้ว (ใบเสนอราคายกเลิกด้วย)', icon: Ban },
 ];
 
@@ -31,15 +31,17 @@ export const QUOTE_STATUS_OPTIONS: StatusOption<QuoteStatus>[] = [
 const QUOTE_STAGE: ProjectStatus[] = ['quote_created', 'pending', 'rejected'];
 
 /**
- * Why a job cannot be put in a status (null when it can), as the server decides it: a job with its quote is past the
- * draft, the quote statuses need a quote, and a job is only finished once the customer has approved it.
+ * Why a job cannot be put in a status (null when it can), as the server decides it: a job with a receipt stays
+ * finished until the receipt is cancelled, a job with its quote is past the draft, the quote statuses need a quote,
+ * and a job is finished by issuing its receipt (on the quote's page), not by choosing the status.
  */
-export const projectStatusBlock = (project: Pick<Project, 'status' | 'quote'>) => (next: ProjectStatus): string | null => {
+export const projectStatusBlock = (project: Pick<Project, 'status' | 'quote' | 'receipt'>) => (next: ProjectStatus): string | null => {
   if (next === project.status) return null;
   const hasQuote = !!project.quote;
+  if (project.receipt) return `ออกใบเสร็จ ${project.receipt.code} แล้ว (ยกเลิกใบเสร็จก่อน)`;
   if (next === 'draft' && hasQuote) return 'มีใบเสนอราคาแล้ว';
   if (QUOTE_STAGE.includes(next) && !hasQuote) return 'ยังไม่มีใบเสนอราคา';
-  if (next === 'completed' && project.status !== 'approved') return 'ได้เมื่อลูกค้าอนุมัติแล้ว';
+  if (next === 'completed') return 'เป็นเองเมื่อออกใบเสร็จที่หน้าใบเสนอราคา';
   return null;
 };
 

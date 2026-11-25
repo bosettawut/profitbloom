@@ -1,4 +1,4 @@
-import { statusPill } from './ProjectItem';
+import { statusPill, struck } from './ProjectItem';
 import React, { useEffect, useRef, useState } from 'react';
 import { Search, Filter, Plus, Eye, Edit, Trash2, Download, Loader2, ChevronDown } from 'lucide-react';
 import { flushSync } from 'react-dom';
@@ -280,12 +280,12 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
                 {paged.rows.map((quote) => (
                   // a row opens the quote itself; only the eye button opens it with the preview showing
                   <tr key={quote.id} onClick={() => onOpenQuote(quote.id)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
-                    <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{quote.code}</td>
+                    <td className={`hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap ${struck(quote.status)}`}>{quote.code}</td>
                     <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
-                      <span className={`line-clamp-2 ${quote.deletedProjectCode ? 'text-rose-600' : ''}`}>{quote.projectTitle || '-'}</span>
+                      <span className={`line-clamp-2 ${quote.deletedProjectCode ? 'text-rose-600' : ''} ${struck(quote.status)}`}>{quote.projectTitle || '-'}</span>
                       {quote.deletedProjectCode && <span className="block mt-0.5 text-xs font-medium text-rose-600">โปรเจ็กต์ {quote.deletedProjectCode} ถูกลบแล้ว</span>}
                       {quote.clientName && <span className="2xl:hidden block mt-0.5 font-normal text-ink truncate">{quote.clientName}</span>}
-                      <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{quote.code}</span>
+                      <span className={`2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap ${struck(quote.status)}`}>{quote.code}</span>
                     </td>
                     <td className="hidden 2xl:table-cell px-3 py-3 text-ink max-w-[10rem] truncate">{quote.clientName}</td>
                     <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{quote.createdDate}</td>
@@ -330,9 +330,9 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
             <div className="p-4 md:p-6 border-b border-line">
               <div className="flex justify-between items-start mb-3">
                 <div className="flex-1 min-w-0">
-                  <h3 className={`text-base md:text-lg mb-1 line-clamp-2 font-semibold ${quote.deletedProjectCode ? 'text-rose-600' : 'text-ink'}`}>{quote.projectTitle}</h3>
+                  <h3 className={`text-base md:text-lg mb-1 line-clamp-2 font-semibold ${quote.deletedProjectCode ? 'text-rose-600' : 'text-ink'} ${struck(quote.status)}`}>{quote.projectTitle}</h3>
                   {quote.deletedProjectCode && <p className="text-xs font-medium text-rose-600 mb-1">โปรเจ็กต์ {quote.deletedProjectCode} ถูกลบแล้ว</p>}
-                  <p className="text-sm text-ink-muted">รหัส: {quote.code}</p>
+                  <p className={`text-sm text-ink-muted ${struck(quote.status)}`}>รหัส: {quote.code}</p>
                 </div>
                 <div className="ml-2 shrink-0">{statusButton(quote, 'md:text-sm')}</div>
               </div>
@@ -399,8 +399,13 @@ export function AllQuotes({ onNavigate, onOpenQuote, onOpenProjectCosts, user }:
           subject={`${statusOf.code} · ${statusOf.projectTitle || statusOf.clientName}`}
           options={QUOTE_STATUS_OPTIONS}
           current={statusOf.status}
-          note={statusOf.status === 'expired' ? 'ใบนี้เลยวันที่ใช้ได้แล้ว (หมดอายุ) เลือกสถานะใหม่ได้ หรือเลื่อนวันที่ใช้ได้ถึงในหน้าใบเสนอราคา' : statusOf.projectId ? 'ใบนี้ผูกกับโปรเจ็กต์ สถานะโปรเจ็กต์จะเปลี่ยนตาม' : undefined}
-          noteTone={statusOf.status === 'expired' ? 'warn' : 'info'}
+          blocked={() => (statusOf.receipt?.status === 'issued' ? 'ออกใบเสร็จแล้ว' : null)}
+          note={
+            statusOf.receipt?.status === 'issued'
+              ? `ออกใบเสร็จ ${statusOf.receipt.code} แล้ว ยกเลิกใบเสร็จก่อนจึงเปลี่ยนสถานะได้`
+              : statusOf.status === 'expired' ? 'ใบนี้เลยวันที่ใช้ได้แล้ว (หมดอายุ) เลือกสถานะใหม่ได้ หรือเลื่อนวันที่ใช้ได้ถึงในหน้าใบเสนอราคา' : statusOf.projectId ? 'ใบนี้ผูกกับโปรเจ็กต์ สถานะโปรเจ็กต์จะเปลี่ยนตาม' : undefined
+          }
+          noteTone={statusOf.status === 'expired' && statusOf.receipt?.status !== 'issued' ? 'warn' : 'info'}
           onPick={(id) => changeStatus(statusOf, id)}
           onClose={() => setStatusOf(null)}
         />

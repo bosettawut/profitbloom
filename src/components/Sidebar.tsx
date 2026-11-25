@@ -1,5 +1,5 @@
 import React from 'react';
-import { ClipboardCheck, Home, FolderOpen, Plus, FileText, BarChart3, Settings, Crown, LogOut, ShieldCheck, Users, ChevronsRight } from 'lucide-react';
+import { ClipboardCheck, Home, FolderOpen, Plus, FileText, BarChart3, Settings, Crown, LogOut, ShieldCheck, Users, ChevronsRight, Receipt } from 'lucide-react';
 import type { User } from '../lib/api';
 import { brandLogo, brandName } from '../lib/brand';
 import { planName, trialDaysLeft } from '../lib/plans';
@@ -19,6 +19,7 @@ const mainItems = [
   { id: 'quick-check', label: 'เช็คก่อนรับงาน', icon: ClipboardCheck },
   { id: 'projects', label: 'โปรเจ็กต์', icon: FolderOpen },
   { id: 'quotes', label: 'ใบเสนอราคา', icon: FileText },
+  { id: 'receipts', label: 'ใบเสร็จ', icon: Receipt },
   { id: 'customers', label: 'ลูกค้า', icon: Users },
   { id: 'reports', label: 'รายงาน', icon: BarChart3 },
   { id: 'settings', label: 'ตั้งค่า', icon: Settings },
