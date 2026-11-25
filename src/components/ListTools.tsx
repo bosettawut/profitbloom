@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronsUpDown } from 'lucide-react';
+import { DateField } from './DateField';
 
 /** which column a list is ordered by, and which way */
 export interface Sort {
@@ -115,9 +116,9 @@ interface DateRangeProps {
 export function DateRange({ from, to, onChange, label }: DateRangeProps) {
   return (
     <div className="flex items-center gap-2 min-w-0">
-      <input type="date" aria-label={`${label} ตั้งแต่`} title={`${label} ตั้งแต่`} className="pb-input text-ink-muted min-w-0 lg:w-44" value={from} max={to || undefined} onChange={(e) => onChange(e.target.value, to)} />
+      <DateField label={`${label} ตั้งแต่`} placeholder="ตั้งแต่" className="text-ink-muted min-w-0 lg:w-48" value={from} max={to || undefined} onChange={(v) => onChange(v, to)} />
       <span className="text-ink-muted shrink-0">–</span>
-      <input type="date" aria-label={`${label} ถึง`} title={`${label} ถึง`} className="pb-input text-ink-muted min-w-0 lg:w-44" value={to} min={from || undefined} onChange={(e) => onChange(from, e.target.value)} />
+      <DateField label={`${label} ถึง`} placeholder="ถึง" className="text-ink-muted min-w-0 lg:w-48" value={to} min={from || undefined} onChange={(v) => onChange(from, v)} />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { useCategoryPrompt } from './job/CategoryPrompt';
 import { blankGroup, blankItem, CostsStage, reserveTempIds } from './job/CostsStage';
 import { HealthPanel } from './job/HealthPanel';
 import { CustomerPicker } from './CustomerPicker';
+import { DateField } from './DateField';
 import { useCustomerContactPrompt } from './CustomerContactPrompt';
 
 interface NewProjectProps {
@@ -227,7 +228,12 @@ export function NewProject({ user, onCreated }: NewProjectProps) {
   const field = (label: string, key: keyof Project, type = 'text', placeholder = '') => (
     <div>
       <label className="pb-label">{label}</label>
-      <input className="pb-input" type={type} placeholder={placeholder} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      {type === 'date' ? (
+        // the event date is required: no "clear" button
+        <DateField label={label.replace(/\s*\*$/, '')} value={(draft[key] as string) ?? ''} onChange={(v) => patch({ [key]: v } as Partial<Project>)} clearable={false} />
+      ) : (
+        <input className="pb-input" type={type} placeholder={placeholder} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      )}
     </div>
   );
 
