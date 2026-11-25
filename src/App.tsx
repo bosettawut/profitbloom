@@ -29,13 +29,15 @@ import {
 import { Sidebar } from './components/Sidebar';
 import { StatsCard } from './components/StatsCard';
 import { ActivityItem } from './components/ActivityItem';
-import { ProjectItem } from './components/ProjectItem';
+import { ProjectItem, struck } from './components/ProjectItem';
 import { SalesChart } from './components/SalesChart';
 import { Projects } from './components/Projects';
 import { JobWorkspace } from './components/job/JobWorkspace';
 import { NewProject } from './components/NewProject';
 import { NewQuote } from './components/NewQuote';
 import { AllQuotes } from './components/AllQuotes';
+import { AllReceipts } from './components/AllReceipts';
+import { ReceiptPage } from './components/ReceiptPage';
 import { Packages } from './components/Packages';
 import { AdminPage } from './components/AdminPage';
 import { QuickCheck } from './components/QuickCheck';
@@ -113,7 +115,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
    */
   const menu: 'full' | 'icons' | 'none' =
     activeNav === 'new-project' || (activeNav === 'quotes-new' && !view.quoteId) ? 'none'
-      : view.projectId || (activeNav === 'quotes-new' && view.quoteId) || (activeNav === 'customers' && view.customerId) ? 'icons'
+      : view.projectId || (activeNav === 'quotes-new' && view.quoteId) || (activeNav === 'customers' && view.customerId) || (activeNav === 'receipts' && view.receiptId) ? 'icons'
         : 'full';
   /** the whole menu called up over a page that has it folded or hidden */
   const [menuShown, setMenuShown] = useState(false);
@@ -300,6 +302,11 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
   const handleBackToProjects = () => show({ nav: 'projects' });
 
   const openQuote = (quoteId: string | null, preview = false) => show({ nav: 'quotes-new', quoteId: quoteId ?? undefined, preview });
+  const openReceipt = (receiptId: string) => show({ nav: 'receipts', receiptId });
+  /** a job named only by its id (from a receipt): fetched, then opened */
+  const openProjectById = (projectId: string) => {
+    api.project(projectId).then((p) => handleProjectSelect(p)).catch(() => {});
+  };
 
   const createQuoteFromProject = (project: Project) => {
     // a job has one quote tied to it: when it is already there, that one opens
@@ -352,10 +359,24 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
             startInPreview={!!view.preview}
             onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
             onOpenProject={(p) => handleProjectSelect(p)}
+            onOpenReceipt={openReceipt}
             // the job held here is the copy from before the quote was saved: read it again, so going back to it shows its quote
             onProjectChanged={(id) => { api.project(id).then((p) => setSelectedProject((held) => (held?.id === id ? p : held))).catch(() => {}); }}
             onDone={() => navigate('quotes-all')}
           />
+        );
+      case 'receipts':
+        return view.receiptId ? (
+          <ReceiptPage
+            key={view.receiptId}
+            receiptId={view.receiptId}
+            user={user}
+            onClose={() => show({ nav: 'receipts' })}
+            onOpenQuote={(id) => openQuote(id)}
+            onOpenProject={openProjectById}
+          />
+        ) : (
+          <AllReceipts user={user} onOpenReceipt={openReceipt} onNavigate={navigate} />
         );
       case 'quick-check':
         return <QuickCheck user={user} onCreated={(p) => handleProjectSelect(p)} />;
@@ -445,7 +466,7 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
                           <span className="text-base font-bold leading-none">{h.score}</span>
                         </span>
                         <span className="min-w-0">
-                          <span className="block text-sm font-semibold text-ink truncate">{p.title}</span>
+                          <span className={`block text-sm font-semibold text-ink truncate ${struck(p.status)}`}>{p.title}</span>
                           <span className="block text-xs text-ink-muted mt-0.5">Margin {h.margin.toFixed(1)}% · {p.statusText}</span>
                           <span className={`block text-xs mt-1 truncate ${h.risks.length ? 'text-rose-600' : 'text-emerald-600'}`}>
                             {h.risks[0]?.title ?? 'ไม่มีจุดเสี่ยง'}

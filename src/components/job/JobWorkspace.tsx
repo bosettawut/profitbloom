@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronDown, FileText, Save, Trash2, X } from 'lucide-react'
 import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
 import { rulesOf, toJob } from '../../lib/job';
-import { statusPill } from '../ProjectItem';
+import { statusPill, struck } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
 import { useCategoryPrompt } from './CategoryPrompt';
 import { useQuoteChangePrompt } from './QuoteChangePrompt';
@@ -163,7 +163,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <p className="text-sm text-ink-muted">{draft.code} · {draft.projectType}</p>
-          <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight truncate">{draft.title}</h1>
+          <h1 className={`text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight truncate ${struck(project.status)}`}>{draft.title}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* the status is chosen in the same dialog as on the projects list; it is saved with the rest of the page */}
@@ -267,8 +267,8 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           applied={draft.reviewApplied}
           onCheckFirst={() => setStage('deliver')}
           onApply={async () => {
-            // the job is closed as finished only once the customer has approved it; the lessons are kept either way
-            if (await save({ reviewApplied: true, ...(['approved', 'completed'].includes(project.status) ? { status: 'completed' as ProjectStatus } : {}) })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
+            // the lessons are kept; the job is finished by its receipt (issued on the quote's page), not here
+            if (await save({ reviewApplied: true })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
           }}
         />
       )}

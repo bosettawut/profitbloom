@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Plus, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { BarChart3, ChevronRight, Crown, ImagePlus, LogOut, MonitorSmartphone, Plus, Receipt, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
 import { api, User, type ShopCategory, type VatMode } from '../lib/api';
 import { brandLogo, resizeLogo } from '../lib/brand';
 import { COST_CATEGORIES, DEFAULT_RULES, withDefaults, type Rules } from '../lib/decision';
@@ -194,6 +194,7 @@ export function AccountSettings({ user, onUserUpdated, onLogout, onLogoutAll, on
         {/* on phones these pages aren't in the bottom bar, so reach them from here */}
         <div className="md:hidden pb-card mb-6 divide-y divide-line overflow-hidden">
           {[
+            { id: 'receipts', label: 'ใบเสร็จ', icon: Receipt },
             { id: 'customers', label: 'ลูกค้า', icon: Users },
             { id: 'reports', label: 'รายงาน', icon: BarChart3 },
             { id: 'subscription', label: 'แพ็กเกจของร้าน', icon: Crown },

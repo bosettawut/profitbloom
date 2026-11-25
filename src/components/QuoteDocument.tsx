@@ -29,9 +29,22 @@ export interface QuoteDocData {
   items: Array<{ description: string; quantity: number; unit?: string; unitPrice: number; roundUp?: boolean }>;
 }
 
+/** what makes the sheet a receipt: its heading, the day the money came in and how, and the quote it was issued from */
+export interface ReceiptDocInfo {
+  /** "ใบเสร็จรับเงิน/ใบกำกับภาษี" (with VAT) or "ใบเสร็จรับเงิน" */
+  title: string;
+  paidDate: string;
+  paymentMethodText: string;
+  quoteCode: string;
+  /** a cancelled receipt carries a stamp saying so */
+  cancelled?: boolean;
+}
+
 interface QuoteDocumentProps {
   user: User;
   quote: QuoteDocData;
+  /** set for a receipt: the same sheet as the quote, headed and signed as a receipt */
+  receipt?: ReceiptDocInfo;
 }
 
 /** a unit price keeps its satang only when it has any */
@@ -41,9 +54,10 @@ const thaiDate = (iso: string) =>
 
 /**
  * The quote as the customer receives it: one A4-width sheet (794px = 210mm at 96dpi).
- * Used for the on-screen preview and rasterised as-is for the PDF.
+ * Used for the on-screen preview and rasterised as-is for the PDF. With `receipt` it is the receipt issued from the
+ * quote: the same sheet, headed as a receipt, with how it was paid, and signed by whoever took the money.
  */
-export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote }, ref) {
+export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(function QuoteDocument({ user, quote, receipt }, ref) {
   const items = quote.items.filter((i) => i.description.trim() || i.quantity * i.unitPrice > 0);
   const { subtotal, discount, beforeVat, vat, total, rate, whtRate, withholding, payable } = quoteTotals({ ...quote, items });
   // amounts show their satang only when some amount on this quote has any
@@ -57,7 +71,12 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
   return (
     // The sheet is a fixed size, so nothing in it may follow the size of the app's text: spacing utilities and the
     // base paragraph size are pinned here to what they are at a 16px root, whatever the screen it is made on.
-    <div ref={ref} className="bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13, '--spacing': '4px', '--text-base': '16px' } as React.CSSProperties}>
+    <div ref={ref} className="relative bg-white text-[#221A33]" style={{ width: 794, minHeight: 1123, padding: '56px 56px 48px', fontSize: 13, '--spacing': '4px', '--text-base': '16px' } as React.CSSProperties}>
+      {receipt?.cancelled && (
+        <div aria-label="ยกเลิกแล้ว" className="absolute pointer-events-none" style={{ top: 300, left: 0, right: 0, textAlign: 'center', transform: 'rotate(-18deg)' }}>
+          <span style={{ display: 'inline-block', border: '5px solid rgba(225, 29, 72, 0.55)', color: 'rgba(225, 29, 72, 0.55)', borderRadius: 16, padding: '6px 36px', fontSize: 64, fontWeight: 800 }}>ยกเลิก</span>
+        </div>
+      )}
       {/* Seller + title */}
       <div className="flex justify-between items-start gap-8 pb-6 border-b-2 border-[#673AB7]">
         <div className="flex gap-4 items-start">
@@ -70,16 +89,20 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
           </div>
         </div>
         <div className="text-right shrink-0">
-          <p style={{ fontSize: 24, fontWeight: 700, color: '#673AB7' }}>ใบเสนอราคา</p>
-          <p className="text-[#5B566D] mb-3">Quotation</p>
+          <p style={{ fontSize: receipt && receipt.title.length > 16 ? 20 : 24, fontWeight: 700, color: '#673AB7' }}>{receipt ? receipt.title : 'ใบเสนอราคา'}</p>
+          <p className="text-[#5B566D] mb-3">{receipt ? (receipt.title.includes('ใบกำกับภาษี') ? 'Receipt / Tax Invoice' : 'Receipt') : 'Quotation'}</p>
           <table className="ml-auto text-left">
             <tbody>
               <tr><td className="pr-3 text-[#5B566D]">เลขที่</td><td style={{ fontWeight: 600 }}>{quote.code || 'ฉบับร่าง'}</td></tr>
               <tr><td className="pr-3 text-[#5B566D]">วันที่</td><td style={{ fontWeight: 600 }}>{quote.createdDate}</td></tr>
-              <tr><td className="pr-3 text-[#5B566D]">ใช้ได้ถึง</td><td style={{ fontWeight: 600 }}>{thaiDate(quote.validUntil)}</td></tr>
+              {receipt ? (
+                <tr><td className="pr-3 text-[#5B566D]">อ้างอิงใบเสนอราคา</td><td style={{ fontWeight: 600 }}>{receipt.quoteCode || '-'}</td></tr>
+              ) : (
+                <tr><td className="pr-3 text-[#5B566D]">ใช้ได้ถึง</td><td style={{ fontWeight: 600 }}>{thaiDate(quote.validUntil)}</td></tr>
+              )}
               {quote.referenceNo && <tr><td className="pr-3 text-[#5B566D]">อ้างอิง</td><td style={{ fontWeight: 600 }}>{quote.referenceNo}</td></tr>}
-              {creditDays > 0 && <tr><td className="pr-3 text-[#5B566D]">เครดิต</td><td style={{ fontWeight: 600 }}>{creditDays} วัน</td></tr>}
-              {dueDate && <tr><td className="pr-3 text-[#5B566D]">ครบกำหนด</td><td style={{ fontWeight: 600 }}>{thaiDate(dueDate)}</td></tr>}
+              {!receipt && creditDays > 0 && <tr><td className="pr-3 text-[#5B566D]">เครดิต</td><td style={{ fontWeight: 600 }}>{creditDays} วัน</td></tr>}
+              {!receipt && dueDate && <tr><td className="pr-3 text-[#5B566D]">ครบกำหนด</td><td style={{ fontWeight: 600 }}>{thaiDate(dueDate)}</td></tr>}
             </tbody>
           </table>
         </div>
@@ -88,7 +111,7 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
       {/* Customer + job */}
       <div className="grid grid-cols-2 gap-6 py-6">
         <div>
-          <p className="text-[#5B566D] mb-1" style={{ fontWeight: 600 }}>เสนอราคาให้</p>
+          <p className="text-[#5B566D] mb-1" style={{ fontWeight: 600 }}>{receipt ? 'ได้รับเงินจาก' : 'เสนอราคาให้'}</p>
           <p style={{ fontSize: 15, fontWeight: 700 }}>{quote.clientName || '-'}</p>
           {quote.clientAddress && <p className="text-[#5B566D] leading-relaxed whitespace-pre-line">{quote.clientAddress}</p>}
           {(quote.clientTaxId || quote.clientBranch) && (
@@ -136,6 +159,12 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
       {/* Totals + notes */}
       <div className="flex justify-between gap-8 mt-6">
         <div className="flex-1">
+          {receipt && (
+            <div className="mb-4">
+              <p className="text-[#5B566D] mb-1" style={{ fontWeight: 600 }}>การชำระเงิน</p>
+              <p>ชำระโดย {receipt.paymentMethodText} · วันที่รับเงิน {thaiDate(receipt.paidDate)}</p>
+            </div>
+          )}
           {quote.notes && (
             <>
               <p className="text-[#5B566D] mb-1" style={{ fontWeight: 600 }}>หมายเหตุ</p>
@@ -177,7 +206,7 @@ export const QuoteDocument = forwardRef<HTMLDivElement, QuoteDocumentProps>(func
 
       {/* Signatures */}
       <div className="grid grid-cols-2 gap-16 text-center" style={{ marginTop: 88 }}>
-        {['ผู้เสนอราคา', 'ผู้อนุมัติ / ลูกค้า'].map((role) => (
+        {(receipt ? ['ผู้รับเงิน', 'ผู้จ่ายเงิน / ลูกค้า'] : ['ผู้เสนอราคา', 'ผู้อนุมัติ / ลูกค้า']).map((role) => (
           <div key={role}>
             <div style={{ borderBottom: '1px solid #BDB8CC', height: 40 }} />
             <p className="mt-2" style={{ fontWeight: 600 }}>{role}</p>

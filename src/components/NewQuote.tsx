@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ChevronDown, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderOpen, FolderPlus } from 'lucide-react';
-import { api, baht, quoteChangeOf, Project, Quote, QuoteStatus, Rounding, User, VatMode } from '../lib/api';
+import { ArrowLeft, ChevronDown, Plus, Trash2, Save, Eye, Download, Link2, Send, X, Lock, FolderOpen, FolderPlus, Receipt as ReceiptIcon } from 'lucide-react';
+import { api, baht, quoteChangeOf, Project, Quote, QuoteStatus, Rounding, User, VatMode, type PaymentMethod } from '../lib/api';
 import { downloadPdf } from '../lib/pdf';
 import { flushSync } from 'react-dom';
 import { FitToWidth, QuoteDocument } from './QuoteDocument';
 import { CustomerPicker } from './CustomerPicker';
 import { DateField, thaiShortDate } from './DateField';
-import { statusPill } from './ProjectItem';
+import { statusPill, struck } from './ProjectItem';
 import { QUOTE_STATUS_OPTIONS, StatusDialog } from './StatusDialog';
 import { useCustomerContactPrompt, type TypedContact } from './CustomerContactPrompt';
 import { useQuoteChangePrompt } from './job/QuoteChangePrompt';
@@ -35,12 +35,14 @@ interface NewQuoteProps {
   onOpenProject?: (project: Project) => void;
   /** a save here changed something about the job (its status, or which quote is tied to it) */
   onProjectChanged?: (projectId: string) => void;
+  /** opens a receipt (one just issued from this quote, or its receipt) */
+  onOpenReceipt?: (receiptId: string) => void;
   onDone: () => void;
 }
 
 const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
-export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onOpenProject, onProjectChanged, onDone }: NewQuoteProps) {
+export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenProjectCosts, onOpenProject, onProjectChanged, onOpenReceipt, onDone }: NewQuoteProps) {
   const [savedId, setSavedId] = useState<string | null>(quoteId);
   const [quoteCode, setQuoteCode] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
@@ -80,6 +82,11 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     fromProject ? { id: fromProject.id, code: fromProject.code, eventDate: fromProject.eventDate, priceFromQuote: fromProject.agreedPrice != null } : null,
   );
   const [statusOpen, setStatusOpen] = useState(false);
+  /** its latest receipt: while one is in force the quote is what the customer paid for, and cannot change */
+  const [receipt, setReceipt] = useState<Quote['receipt'] | null>(null);
+  const locked = receipt?.status === 'issued';
+  /** the receipt being issued: when the money came in and how */
+  const [issuing, setIssuing] = useState<{ paidDate: string; paymentMethod: PaymentMethod; busy: boolean } | null>(null);
   /** the number of the job this quote belonged to, when that job was deleted */
   const [deletedJob, setDeletedJob] = useState<string | null>(null);
   /** something on the form was typed or chosen since it was opened or last saved */
@@ -148,6 +155,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         setFollows(!!q.followsProject);
         setJob(q.job ?? null);
         setLinkedJob(q.linkedJob ?? null);
+        setReceipt(q.receipt ?? null);
         setDeletedJob(q.deletedProjectCode ?? null);
         setTaxRate(q.taxRate);
         setDiscountRate(q.discountRate);
@@ -325,6 +333,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       setFollows(!!saved.followsProject);
       setJob(saved.job ?? null);
       setLinkedJob(saved.linkedJob ?? null);
+      setReceipt(saved.receipt ?? null);
       if (saved.followsProject) setQuoteItems(saved.items);
       // the event date of a job's quote is the job's: the server keeps it so
       if (saved.linkedJob) setQuoteData((d) => ({ ...d, eventDate: saved.eventDate }));
@@ -356,7 +365,8 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
 
   /** Saves first so the PDF always carries a real quote number, then downloads it. */
   const exportPdf = async () => {
-    const saved = await persist();
+    // a quote with a receipt in force cannot change, so there is nothing to save first
+    const saved = locked ? { code: quoteCode, clientName: quoteData.clientName } : await persist();
     if (!saved) return null;
     // render a full-size copy off-screen (with the saved number) and capture that
     flushSync(() => setExporting(true));
@@ -426,7 +436,31 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
     }
   };
 
+  /** the customer has paid for an approved quote: its receipt is issued (saving any change first), and opened */
+  const startReceipt = async () => {
+    if (changed && !(await persist())) return;
+    const d = new Date();
+    // today as the shop sees it (not UTC): the morning in Thailand is still yesterday in UTC
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    setIssuing({ paidDate: today, paymentMethod: 'transfer', busy: false });
+  };
+  const issueReceipt = async () => {
+    if (!issuing || !savedId) return;
+    setIssuing({ ...issuing, busy: true });
+    try {
+      const made = await api.createReceipt(savedId, { paidDate: issuing.paidDate, paymentMethod: issuing.paymentMethod });
+      setIssuing(null);
+      if (projectId) onProjectChanged?.(projectId);
+      if (onOpenReceipt) onOpenReceipt(made.id);
+      else load(savedId);
+    } catch (err) {
+      setIssuing({ ...issuing, busy: false });
+      showNotification((err as Error).message);
+    }
+  };
+
   const handleSend = async () => {
+    if (locked) return;
     if (!(await exportPdf())) return;
     const saved = await persist(status === 'approved' || status === 'rejected' ? status : 'sent');
     if (!saved) return;
@@ -473,7 +507,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       <div className="md:sticky md:top-0 z-20 md:-mt-4 md:pt-4 pb-3 mb-2 md:mb-3 bg-[var(--sheet)] flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight mb-1">
-            {savedId ? <>ใบเสนอราคา <span className="text-[#673AB7]">{quoteCode}</span></> : 'สร้างใบเสนอราคาใหม่'}
+            {savedId ? <>ใบเสนอราคา <span className={`text-[#673AB7] ${struck(status)}`}>{quoteCode}</span></> : 'สร้างใบเสนอราคาใหม่'}
           </h2>
           <p className="text-sm text-ink-muted">
             {follows
@@ -487,12 +521,13 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           <button
             type="button"
             onClick={() => setStatusOpen(true)}
+            disabled={locked}
             aria-label="สถานะใบเสนอราคา"
-            title="เปลี่ยนสถานะ"
-            className={`self-stretch inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ${statusPill(status)}`}
+            title={locked ? 'ออกใบเสร็จแล้ว ยกเลิกใบเสร็จก่อนจึงเปลี่ยนสถานะได้' : 'เปลี่ยนสถานะ'}
+            className={`self-stretch inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium disabled:cursor-default ${statusPill(status)}`}
           >
             {QUOTE_STATUS_OPTIONS.find((o) => o.id === status)?.name ?? 'หมดอายุ'}
-            <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />
+            {!locked && <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />}
           </button>
           <button onClick={onDone} className="pb-btn-secondary">
             <X className="w-4 h-4" />
@@ -505,6 +540,34 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         </div>
       </div>
 
+      {receipt && locked && (
+        <div role="note" aria-label="ออกใบเสร็จแล้ว" className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="min-w-0 text-emerald-800">
+            <p className="font-semibold">ออกใบเสร็จ {receipt.code} แล้ว</p>
+            <p className="text-sm mt-0.5">ใบเสนอราคานี้แก้ไม่ได้ ถ้าจะแก้ ให้ยกเลิกใบเสร็จก่อน (ใบเสนอราคาจะถูกยกเลิกด้วย แล้วสร้างใบใหม่ที่โปรเจ็กต์)</p>
+          </div>
+          {onOpenReceipt && (
+            <button type="button" onClick={() => onOpenReceipt(receipt.id)} className="pb-btn-secondary !py-2 !bg-white shrink-0">
+              <ReceiptIcon className="w-4 h-4" />
+              เปิดใบเสร็จ
+            </button>
+          )}
+        </div>
+      )}
+      {receipt && !locked && status === 'cancelled' && (
+        <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 text-rose-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-semibold">ใบเสร็จ {receipt.code} ถูกยกเลิก ใบเสนอราคานี้จึงถูกยกเลิกด้วย</p>
+            <p className="text-sm mt-0.5">{receipt.projectCode ? `สร้างใบเสนอราคาใหม่ได้ที่โปรเจ็กต์ ${receipt.projectCode}` : 'สร้างใบเสนอราคาใหม่ได้'}</p>
+          </div>
+          {onOpenReceipt && (
+            <button type="button" onClick={() => onOpenReceipt(receipt.id)} className="pb-btn-secondary !py-2 !bg-white shrink-0">
+              <ReceiptIcon className="w-4 h-4" />
+              เปิดใบเสร็จ
+            </button>
+          )}
+        </div>
+      )}
       {deletedJob && (
         <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 mb-4 text-rose-700">
           <p className="font-semibold">โปรเจ็กต์ {deletedJob} ของใบเสนอราคานี้ถูกลบแล้ว</p>
@@ -514,7 +577,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
       <div className="pb-card p-4 md:p-6 xl:p-8" onChange={() => { touched.current = true; }}>
         {/* the customer on the left; the total, what can be done with the quote and its dates on the right */}
         <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] gap-6 lg:gap-12">
-          <div role="group" aria-label="ข้อมูลลูกค้า" className="space-y-4">
+          <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div role="group" aria-label="ข้อมูลลูกค้า" className="space-y-4">
             {linkedJob && (
               <p role="note" className="flex items-start gap-2 text-xs text-ink-muted">
                 <Link2 className="w-4 h-4 text-[#673AB7] shrink-0" />
@@ -604,7 +667,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 />
               </div>
             </div>
-          </div>
+          </div></fieldset>
 
           <div>
             <div className="flex flex-wrap lg:justify-end gap-1 -mx-2 mb-4">
@@ -616,6 +679,12 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 <Download className="w-6 h-6" />
                 {exporting ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF'}
               </button>
+              {savedId && status === 'approved' && !locked && (
+                <button onClick={startReceipt} disabled={saving} className={`${action} !text-[#673AB7]`}>
+                  <ReceiptIcon className="w-6 h-6" />
+                  ออกใบเสร็จ
+                </button>
+              )}
               {savedId && status === 'approved' && !projectId && (
                 <button onClick={makeProject} disabled={saving} className={action}>
                   <FolderPlus className="w-6 h-6" />
@@ -632,7 +701,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
             </div>
             <p className="text-sm font-medium text-ink">จำนวนเงินรวมทั้งสิ้น</p>
             <p className="text-3xl md:text-4xl font-semibold text-[#673AB7] tracking-tight mt-1 mb-4 break-words">{money(grandTotal)}</p>
-            <div className="space-y-2">
+            <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div className="space-y-2">
               <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] items-center gap-3">
                 <span className="text-sm font-medium text-ink">วันที่สร้าง</span>
                 <span className="text-sm text-ink py-2 px-[0.95rem]">{createdDate}</span>
@@ -673,14 +742,14 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                   {dueDate ? `ครบกำหนดชำระ ${dueDate.toLocaleDateString('th-TH')} (${quoteData.creditDays} วันหลังวันจัดงาน)` : 'ใส่วันที่จัดงาน ระบบจะคิดวันครบกำหนดชำระให้'}
                 </p>
               )}
-            </div>
+            </div></fieldset>
           </div>
         </div>
 
         <div className="border-t border-line my-6" />
 
         {/* what the quote is for, and whether its prices carry VAT */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_minmax(0,18rem)] gap-4">
+        <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_minmax(0,18rem)] gap-4">
           <div className="md:col-span-2 xl:col-span-1">
             <label className="pb-label">ชื่อโปรเจ็กต์</label>
             <input
@@ -710,10 +779,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               <option value="none">ไม่มี VAT</option>
             </select>
           </div>
-        </div>
+        </div></fieldset>
 
         {/* Quote items */}
-        <div role="group" aria-label="รายการใบเสนอราคา" className="mt-6">
+        <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div role="group" aria-label="รายการใบเสนอราคา" className="mt-6">
           {follows ? (
             <>
               <div role="note" aria-label="รายการมาจากโปรเจ็กต์" className="rounded-2xl bg-[#F7F6FA] px-4 py-3 mb-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -983,10 +1052,10 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
           )}
             </>
           )}
-        </div>
+        </div></fieldset>
 
         {/* the note on the left; discount, VAT, the total and withholding on the right */}
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-6 lg:gap-12 mt-6">
+        <fieldset disabled={locked} className="min-w-0 m-0 p-0 border-0"><div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] gap-6 lg:gap-12 mt-6">
           <div className="space-y-4">
             <div>
               <label className="pb-label">หมายเหตุ</label>
@@ -1115,7 +1184,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
               </div>
             )}
           </div>
-        </div>
+        </div></fieldset>
       </div>
 
       {/* on a phone the save button sits at the end of the form, where the thumb is */}
@@ -1124,12 +1193,53 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
         {saving ? 'กำลังบันทึก...' : 'บันทึกใบเสนอราคา'}
       </button>
 
+      {issuing && (
+        <div className="fixed inset-0 z-50 bg-[#221A33]/40 backdrop-blur-[2px] flex items-center justify-center p-4" onClick={() => !issuing.busy && setIssuing(null)}>
+          <div role="dialog" aria-modal="true" aria-label="ออกใบเสร็จ" className="bg-white rounded-[24px] shadow-soft-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4 mb-1">
+              <h3 className="text-lg font-semibold text-ink">ออกใบเสร็จ</h3>
+              <button type="button" onClick={() => setIssuing(null)} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-sm text-ink-muted mb-4">จากใบเสนอราคา {quoteCode} · {quoteData.clientName}</p>
+            <div className="rounded-2xl bg-[#F7F6FA] p-4 mb-4 flex items-baseline justify-between gap-3">
+              <span className="text-sm text-ink-muted">{withholding > 0 ? 'ยอดรับชำระ (หลังหัก ณ ที่จ่าย)' : 'ยอดรับชำระ'}</span>
+              <span className="text-xl font-semibold text-[#673AB7]">{money(payable)}</span>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="pb-label">วันที่รับเงิน</label>
+                <DateField label="วันที่รับเงิน" clearable={false} value={issuing.paidDate} onChange={(v) => setIssuing({ ...issuing, paidDate: v || issuing.paidDate })} />
+              </div>
+              <div>
+                <label className="pb-label">วิธีรับเงิน</label>
+                <select className="pb-input" aria-label="วิธีรับเงิน" value={issuing.paymentMethod} onChange={(e) => setIssuing({ ...issuing, paymentMethod: e.target.value as PaymentMethod })}>
+                  <option value="transfer">โอนเงิน</option>
+                  <option value="cash">เงินสด</option>
+                  <option value="cheque">เช็ค</option>
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-ink-muted mt-4">
+              ออกใบเสร็จแล้ว{linkedJob ? ` โปรเจ็กต์ ${linkedJob.code} จะเป็น "เสร็จสิ้น" และ` : ''} ใบเสนอราคานี้จะแก้ไม่ได้จนกว่าจะยกเลิกใบเสร็จ
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2 justify-end mt-6">
+              <button type="button" onClick={() => setIssuing(null)} disabled={issuing.busy} className="pb-btn-secondary">ยกเลิก</button>
+              <button type="button" onClick={issueReceipt} disabled={issuing.busy} className="pb-btn-primary disabled:opacity-60">
+                <ReceiptIcon className="w-4 h-4" />
+                {issuing.busy ? 'กำลังออกใบเสร็จ...' : 'ออกใบเสร็จ'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {statusOpen && (
         <StatusDialog
           title="เปลี่ยนสถานะใบเสนอราคา"
           subject={`${quoteCode || 'ใบเสนอราคาใหม่'} · ${quoteData.projectTitle || quoteData.clientName}`}
           options={QUOTE_STATUS_OPTIONS}
           current={status}
+          blocked={() => (locked ? 'ออกใบเสร็จแล้ว' : null)}
           note={
             status === 'expired'
               ? 'ใบนี้เลยวันที่ใช้ได้แล้ว (หมดอายุ) เลือกสถานะใหม่ได้ หรือเลื่อนวันที่ใช้ได้ถึง'
@@ -1167,7 +1277,7 @@ export function NewQuote({ user, quoteId, fromProject, startInPreview, onOpenPro
                 <Download className="w-4 h-4" />
                 {exporting ? 'กำลังสร้าง PDF...' : 'ดาวน์โหลด PDF'}
               </button>
-              <button onClick={handleSend} disabled={saving || exporting} className="pb-btn-primary disabled:opacity-60">
+              <button onClick={handleSend} disabled={saving || exporting} className={`pb-btn-primary disabled:opacity-60 ${locked ? '!hidden' : ''}`}>
                 <Send className="w-4 h-4" />
                 <span className="hidden sm:inline">ส่งใบเสนอราคา</span>
               </button>

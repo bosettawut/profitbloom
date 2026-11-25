@@ -299,7 +299,9 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
   ok('ยืนยันแล้ว → ชื่อบรรทัดในใบเปลี่ยนตามชื่อหัวข้อ ใบยังเป็น "อนุมัติแล้ว"', r.status === 200 && now.items[0].description === 'ซุ้มดอกไม้' && now.status === 'approved' && now.lockedPrice === 1500, JSON.stringify([r.status, now.items, now.status]));
   r = await A.call('PUT', `/projects/${lp.id}`, { status: 'completed' });
   now = (await A.call('GET', `/quotes/${fq.id}`)).data;
-  ok('เปลี่ยนสถานะโปรเจ็กต์อย่างเดียว ไม่ถามยืนยัน · ปิดงานเป็นเสร็จสิ้นแล้วใบยังเป็นอนุมัติแล้ว', r.status === 200 && r.data.status === 'completed' && now.status === 'approved', JSON.stringify([r.status, now.status]));
+  ok('เลือก "เสร็จสิ้น" เองที่โปรเจ็กต์ไม่ได้ (เสร็จสิ้นเมื่อออกใบเสร็จ) ใบยังเป็นอนุมัติแล้ว', r.status === 400 && r.data.error.includes('ใบเสร็จ') && now.status === 'approved', JSON.stringify([r.status, r.data.error, now.status]));
+  // a job finished before receipts existed: its quote's status is changed at the job first
+  await sql(`UPDATE projects SET status = 'completed' WHERE id = $1`, [lp.id]);
   r = await A.call('PUT', `/quotes/${fq.id}`, { status: 'rejected' });
   ok('โปรเจ็กต์เสร็จสิ้นแล้ว: เปลี่ยนสถานะใบเสนอราคาของงานไม่ได้ (บอกให้เปลี่ยนที่โปรเจ็กต์ก่อน)', r.status === 400 && r.data.error.includes(lp.code) && r.data.error.includes('เสร็จสิ้น'), JSON.stringify(r.data));
   await A.call('PUT', `/projects/${lp.id}`, { status: 'approved' });
@@ -347,9 +349,11 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
       ok(`โปรเจ็กต์ที่ยังไม่มีใบเสนอราคา: เป็น "${s}" ไม่ได้`, r.status === 400 && r.data.error.includes('ยังไม่มีใบเสนอราคา'), JSON.stringify(r.data));
     }
     r = await st('completed');
-    ok('ยังไม่อนุมัติ: ปิดงานเป็น "เสร็จสิ้น" ไม่ได้', r.status === 400 && r.data.error.includes('อนุมัติ'), JSON.stringify(r.data));
+    ok('ยังไม่มีใบเสร็จ: ปิดงานเป็น "เสร็จสิ้น" ไม่ได้ (บอกให้ออกใบเสร็จที่ใบเสนอราคา)', r.status === 400 && r.data.error.includes('ใบเสร็จ'), JSON.stringify(r.data));
     r = await A.call('POST', '/projects', { title: 'สร้างพร้อมสถานะใบ', projectType: 'อื่นๆ', status: 'pending' });
     ok('สร้างโปรเจ็กต์ใหม่ในสถานะของใบเสนอราคาไม่ได้', r.status === 400, r.status);
+    r = await A.call('POST', '/projects', { title: 'สร้างพร้อมเสร็จสิ้น', projectType: 'อื่นๆ', status: 'completed' });
+    ok('สร้างโปรเจ็กต์ใหม่เป็น "เสร็จสิ้น" ไม่ได้ (ต้องออกใบเสร็จ)', r.status === 400 && r.data.error.includes('ใบเสร็จ'), r.status);
     const sq = (await make({ projectId: sj.id })).data;
     ok('สร้างใบเสนอราคาของงาน → โปรเจ็กต์ "สร้างใบเสนอราคาแล้ว"', (await pj()).status === 'quote_created');
     r = await st('draft');
@@ -364,7 +368,7 @@ ok('ใบที่หมดอายุยังอนุมัติได้'
     ok('ใบเสนอราคามีสถานะ "ยกเลิก"', (await A.call('PUT', `/quotes/${sq.id}`, { status: 'cancelled' })).data.statusText === 'ยกเลิก');
     await st('approved');
     r = await st('completed');
-    ok('อนุมัติแล้ว → ปิดงานเป็น "เสร็จสิ้น" ได้ ใบยังเป็นอนุมัติแล้ว', r.status === 200 && (await q()).status === 'approved', JSON.stringify([r.status, (await q()).status]));
+    ok('อนุมัติแล้วก็เลือก "เสร็จสิ้น" เองไม่ได้ ต้องออกใบเสร็จ · ใบยังเป็นอนุมัติแล้ว', r.status === 400 && r.data.error.includes('ใบเสร็จ') && (await q()).status === 'approved', JSON.stringify([r.status, (await q()).status]));
     // an older quote of the job says nothing about the job
     await st('approved');
     await A.call('POST', `/quotes/${sq.id}/sync`, { confirmQuoteChange: true });
@@ -877,8 +881,12 @@ ok('เปิดใช้งานแล้ว ร้าน A login ได้ + 
 {
   const R = client();
   await R.call('POST', '/auth/register', { name: 'ร้านรายงาน', email: 'report@x.test', password: 'password123' });
-  const job = (title, client, eventDate, price, status = 'approved') =>
-    R.call('POST', '/projects', { title, projectType: 'อื่นๆ', client, eventDate, profitMargin: 50, status, costItems: [{ name: 'x', quantity: 1, price }] });
+  // a job is finished by its receipt; here a finished one is made directly in the database
+  const job = async (title, client, eventDate, price, status = 'approved') => {
+    const made = await R.call('POST', '/projects', { title, projectType: 'อื่นๆ', client, eventDate, profitMargin: 50, status: status === 'completed' ? 'approved' : status, costItems: [{ name: 'x', quantity: 1, price }] });
+    if (status === 'completed') await sql(`UPDATE projects SET status = 'completed' WHERE id = $1`, [made.data.id]);
+    return made;
+  };
   await job('ม.ค. 1', 'คุณเอ', '2026-01-10', 1000);
   await job('ม.ค. 2', 'คุณบี', '2026-01-20', 2000, 'completed');
   await job('มี.ค.', 'คุณเอ', '2026-03-05', 4000);
@@ -1151,6 +1159,81 @@ ok('limit ติดลบ ไม่ error', r.status === 200, r.status);
   for (const id of [job.id, made.id]) await A.call('DELETE', `/projects/${id}`);
   for (const id of [tq.id, sq.id]) await A.call('DELETE', `/quotes/${id}`);
   await A.call('DELETE', `/customers/${c.id}`);
+}
+
+// --- receipts: issued from an approved quote, which finishes the job; cancelled, the quote goes with it
+{
+  let r = await A.call('POST', '/projects', { title: 'งานออกใบเสร็จ', projectType: 'อื่นๆ', client: 'คุณจ่ายแล้ว', eventDate: '2031-10-10', profitMargin: 50, costItems: [{ name: 'ดอกไม้', category: 'material', quantity: 1, price: 2000 }] });
+  const job = r.data;
+  r = await A.call('POST', '/quotes', { projectId: job.id, clientName: 'คุณจ่ายแล้ว', clientAddress: '1 ถ.เงิน', clientTaxId: '0105550000001', projectTitle: job.title, vatMode: 'exclusive', taxRate: 7 });
+  const q = r.data;
+  r = await A.call('POST', `/quotes/${q.id}/receipt`, {});
+  ok('ใบเสนอราคายังไม่อนุมัติ → ออกใบเสร็จไม่ได้', r.status === 400 && r.data.error.includes('อนุมัติ'), JSON.stringify(r.data));
+  await A.call('PUT', `/quotes/${q.id}`, { status: 'approved' });
+  ok('ร้านอื่นออกใบเสร็จจากใบของร้านนี้ไม่ได้', (await B.call('POST', `/quotes/${q.id}/receipt`, {})).status === 404);
+  r = await A.call('POST', `/quotes/${q.id}/receipt`, { paidDate: '2031-10-12', paymentMethod: 'cash' });
+  const rc = r.data;
+  ok('ออกใบเสร็จจากใบที่อนุมัติแล้ว: เลข RE-ปี-เลขลำดับ วันที่และวิธีรับเงิน คัดลอกลูกค้า ที่อยู่ เลขภาษี รายการ และยอดจากใบ',
+    r.status === 201 && /^RE-\d{4}-\d{3}$/.test(rc.code) && rc.status === 'issued' && rc.paidDate === '2031-10-12' && rc.paymentMethod === 'cash' && rc.paymentMethodText === 'เงินสด' && rc.quoteCode === q.code && rc.clientName === 'คุณจ่ายแล้ว' && rc.clientAddress === '1 ถ.เงิน' && rc.clientTaxId === '0105550000001' && rc.items.length === 1 && rc.totalAmount === 3210 && rc.projectId === job.id,
+    JSON.stringify(rc).slice(0, 400));
+  ok('ใบมี VAT → หัวเอกสาร "ใบเสร็จรับเงิน/ใบกำกับภาษี"', rc.title === 'ใบเสร็จรับเงิน/ใบกำกับภาษี', rc.title);
+  let p = (await A.call('GET', `/projects/${job.id}`)).data;
+  let qq = (await A.call('GET', `/quotes/${q.id}`)).data;
+  ok('ออกใบเสร็จแล้ว → โปรเจ็กต์เป็นเสร็จสิ้น ใบเสนอราคายังอนุมัติแล้ว และทั้งสองบอกใบเสร็จ', p.status === 'completed' && p.receipt?.code === rc.code && qq.status === 'approved' && qq.receipt?.code === rc.code && qq.receipt.status === 'issued', JSON.stringify([p.status, p.receipt, qq.status, qq.receipt]));
+  r = await A.call('POST', `/quotes/${q.id}/receipt`, {});
+  ok('ออกใบเสร็จซ้ำจากใบเดิมไม่ได้', r.status === 400 && r.data.error.includes(rc.code), JSON.stringify(r.data));
+
+  // what the customer paid for stays as it is until the receipt is cancelled
+  const put = await A.call('PUT', `/quotes/${q.id}`, { notes: 'แก้หลังรับเงิน' });
+  const del = await A.call('DELETE', `/quotes/${q.id}`);
+  ok('มีใบเสร็จแล้ว: แก้หรือลบใบเสนอราคาไม่ได้ (บอกให้ยกเลิกใบเสร็จก่อน)', put.status === 400 && put.data.error.includes(rc.code) && del.status === 400 && del.data.error.includes('ยกเลิกใบเสร็จ'), JSON.stringify([put.data, del.data]));
+  ok('มีใบเสร็จแล้ว: สั่งอัปเดตใบตามโปรเจ็กต์ไม่ได้', (await A.call('POST', `/quotes/${q.id}/sync`, { confirmQuoteChange: true })).status === 400);
+  r = await A.call('PUT', `/projects/${job.id}`, { status: 'approved' });
+  ok('มีใบเสร็จแล้ว: เปลี่ยนสถานะโปรเจ็กต์ไม่ได้', r.status === 400 && r.data.error.includes('ใบเสร็จ'), JSON.stringify(r.data));
+  r = await A.call('PUT', `/projects/${job.id}`, { profitMargin: 80 });
+  const t = await A.call('PUT', `/projects/${job.id}`, { title: 'ชื่อใหม่หลังรับเงิน' });
+  ok('มีใบเสร็จแล้ว: แก้ราคาหรือชื่องานที่โปรเจ็กต์ (ใบจะเปลี่ยน) ไม่ได้', r.status === 400 && r.data.error.includes(rc.code) && t.status === 400, JSON.stringify([r.data, t.status]));
+  r = await A.call('PUT', `/projects/${job.id}`, { costGroups: p.costGroups, costItems: p.costItems.map((i) => ({ ...i, actual: 1800 })), notes: 'ส่งของแล้ว' });
+  ok('มีใบเสร็จแล้ว: กรอกต้นทุนจริงและโน้ต (ไม่อยู่ในใบ) ได้ สถานะยังเสร็จสิ้น', r.status === 200 && r.data.costItems[0].actual === 1800 && r.data.status === 'completed', JSON.stringify([r.status, r.data.error]));
+  r = await A.call('DELETE', `/projects/${job.id}`);
+  ok('มีใบเสร็จแล้ว: ลบโปรเจ็กต์ไม่ได้', r.status === 400 && r.data.error.includes(rc.code), JSON.stringify(r.data));
+  r = await A.call('GET', '/receipts');
+  ok('รายการใบเสร็จมีใบนี้ ร้านอื่นไม่เห็นทั้งรายการและใบ', r.data.some((x) => x.id === rc.id) && !(await B.call('GET', '/receipts')).data.some((x) => x.id === rc.id) && (await B.call('GET', `/receipts/${rc.id}`)).status === 404);
+
+  // cancelled: the quote is cancelled with it and leaves the job, which takes a new quote
+  ok('ร้านอื่นยกเลิกใบเสร็จของร้านนี้ไม่ได้', (await B.call('POST', `/receipts/${rc.id}/cancel`)).status === 404);
+  r = await A.call('POST', `/receipts/${rc.id}/cancel`);
+  p = (await A.call('GET', `/projects/${job.id}`)).data;
+  qq = (await A.call('GET', `/quotes/${q.id}`)).data;
+  ok('ยกเลิกใบเสร็จ → ใบเสร็จยังอยู่ เลขเดิม เป็น "ยกเลิก" · ใบเสนอราคาเป็นยกเลิกและหลุดจากโปรเจ็กต์ · โปรเจ็กต์กลับเป็นร่าง ไม่มีใบให้เปิด',
+    r.status === 200 && r.data.status === 'cancelled' && r.data.code === rc.code && r.data.cancelledDate !== '' && qq.status === 'cancelled' && qq.projectId === null && qq.receipt?.status === 'cancelled' && qq.receipt.projectCode === job.code && p.status === 'draft' && p.quote === null && p.receipt === null,
+    JSON.stringify([r.data.status, qq.status, qq.projectId, qq.receipt, p.status, p.quote]));
+  ok('ยกเลิกใบเสร็จซ้ำไม่ได้', (await A.call('POST', `/receipts/${rc.id}/cancel`)).status === 400);
+  r = await A.call('POST', '/quotes', { projectId: job.id, clientName: 'คุณจ่ายแล้ว', projectTitle: job.title });
+  const q2 = r.data;
+  ok('โปรเจ็กต์เดิมสร้างใบเสนอราคาใหม่ได้ (เลขใหม่ ผูกกับโปรเจ็กต์)', r.status === 201 && q2.code !== q.code && q2.followsProject === true, JSON.stringify([r.status, q2.code]));
+  await A.call('PUT', `/quotes/${q2.id}`, { status: 'approved', vatMode: 'none' });
+  r = await A.call('POST', `/quotes/${q2.id}/receipt`, {});
+  const rc2 = r.data;
+  ok('ใบใหม่ออกใบเสร็จได้ เลขถัดไป · ไม่มี VAT → "ใบเสร็จรับเงิน" · ไม่บอกวันที่และวิธี → วันนี้ / โอนเงิน',
+    r.status === 201 && rc2.code !== rc.code && rc2.title === 'ใบเสร็จรับเงิน' && rc2.paymentMethod === 'transfer' && /^\d{4}-\d{2}-\d{2}$/.test(rc2.paidDate), JSON.stringify(rc2).slice(0, 300));
+  await A.call('POST', `/receipts/${rc2.id}/cancel`);
+  r = await A.call('DELETE', `/quotes/${q.id}`);
+  ok('ใบเสนอราคาที่ยกเลิกไปกับใบเสร็จ ลบได้ · ใบเสร็จยังอยู่พร้อมเนื้อหาเดิม', r.status === 200 && (await A.call('GET', `/receipts/${rc.id}`)).data.quoteCode === q.code && (await A.call('GET', `/receipts/${rc.id}`)).data.items.length === 1);
+
+  // a job made from a quote goes the same way
+  r = await A.call('POST', '/quotes', { clientName: 'คุณใบก่อนรับเงิน', projectTitle: 'งานจากใบ รับเงิน', status: 'approved', items: [{ description: 'ซุ้ม', quantity: 1, unitPrice: 5000 }] });
+  const sq = r.data;
+  const made = (await A.call('POST', `/quotes/${sq.id}/project`)).data;
+  r = await A.call('POST', `/quotes/${sq.id}/receipt`, { paymentMethod: 'cheque' });
+  p = (await A.call('GET', `/projects/${made.id}`)).data;
+  ok('โปรเจ็กต์ที่สร้างจากใบ: ออกใบเสร็จ → เสร็จสิ้น (เช็ค)', r.status === 201 && r.data.paymentMethodText === 'เช็ค' && p.status === 'completed', JSON.stringify([r.status, p.status]));
+  await A.call('POST', `/receipts/${r.data.id}/cancel`);
+  p = (await A.call('GET', `/projects/${made.id}`)).data;
+  ok('ยกเลิกใบเสร็จ → โปรเจ็กต์กลับเป็นร่าง ราคาคงเดิม รอใบเสนอราคาใหม่', p.status === 'draft' && p.quote === null && p.agreedPrice === 5000, JSON.stringify([p.status, p.quote, p.agreedPrice]));
+
+  for (const id of [q2.id, sq.id]) await A.call('DELETE', `/quotes/${id}`);
+  for (const id of [job.id, made.id]) await A.call('DELETE', `/projects/${id}`);
 }
 
 r = await A.call('POST', '/auth/logout');

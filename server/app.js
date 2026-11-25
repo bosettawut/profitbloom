@@ -586,14 +586,16 @@ const PROJECT_STATUS = {
 const QUOTE_STAGE = ['quote_created', 'pending', 'rejected'];
 
 /**
- * Why a job cannot be put in `next` (null when it can). A job with its quote is past the draft; the quote statuses
- * need a quote; a job is only finished once the customer has approved it (until receipts exist, which will be the rule).
+ * Why a job cannot be put in `next` (null when it can). A job whose quote has a receipt in force stays finished until
+ * the receipt is cancelled; a job with its quote is past the draft; the quote statuses need a quote; and a job is
+ * finished by issuing its receipt (on the quote's page), not by choosing the status.
  */
-function projectStatusRefusal(current, next, hasQuote) {
+function projectStatusRefusal(current, next, hasQuote, hasReceipt = false) {
   if (next === current) return null;
+  if (hasReceipt) return 'โปรเจ็กต์นี้ออกใบเสร็จแล้ว จึงเปลี่ยนสถานะไม่ได้ ถ้าจะเปลี่ยน ให้ยกเลิกใบเสร็จก่อน';
   if (next === 'draft' && hasQuote) return 'โปรเจ็กต์นี้มีใบเสนอราคาแล้ว จึงเปลี่ยนกลับเป็นร่างไม่ได้';
   if (QUOTE_STAGE.includes(next) && !hasQuote) return `ยังไม่มีใบเสนอราคา จึงเป็น "${PROJECT_STATUS[next]}" ไม่ได้ สร้างใบเสนอราคาก่อน`;
-  if (next === 'completed' && current !== 'approved') return 'ปิดงานเป็น "เสร็จสิ้น" ได้เมื่อลูกค้าอนุมัติแล้ว';
+  if (next === 'completed') return 'โปรเจ็กต์เป็น "เสร็จสิ้น" เมื่อออกใบเสร็จ ออกใบเสร็จได้ที่หน้าใบเสนอราคาที่ลูกค้าอนุมัติแล้ว';
   return null;
 }
 const TYPE_PREFIX = { 'งานแต่งงาน': 'WD', 'งานหมั้น': 'EN', 'งานวันเกิด': 'BD', 'งานบวช': 'OR', 'งานเปิดร้าน': 'OP' };
@@ -624,7 +626,10 @@ async function serializeProject(p) {
   const items = await db.prepare('SELECT * FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(p.id);
   const groups = await db.prepare('SELECT * FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(p.id);
   const quote = await jobQuote(p);
+  const receipt = quote ? await receiptInForce(quote.id) : null;
   return {
+    /** the receipt in force for the job's quote: while there is one the job is finished, and its quote cannot change */
+    receipt: receipt ? { id: String(receipt.id), code: receipt.code } : null,
     /** the quote the job's page opens (null until there is one): see jobQuote */
     // `follows`: the quote is tied to the job (its lines change when the job is saved), not one the job was made from
     quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status, follows: !!quote.follows_project } : null,
@@ -823,8 +828,11 @@ app.get('/api/projects/:id', route(async (req) => serializeProject(await getProj
 
 app.post('/api/projects', route(async (req, res) => {
   const d = readProjectBody(req.body, undefined, await allowedCategories(req.user.id));
-  // a new job has no quote, so it cannot start in a status that describes one
-  if (d.status && QUOTE_STAGE.includes(d.status)) throw new HttpError(400, `ยังไม่มีใบเสนอราคา จึงเป็น "${PROJECT_STATUS[d.status]}" ไม่ได้ สร้างใบเสนอราคาก่อน`);
+  // a new job has no quote, so it cannot start in a status that describes one, nor finished (that takes a receipt)
+  if (d.status) {
+    const refusal = projectStatusRefusal('draft', d.status, false);
+    if (refusal) throw new HttpError(400, refusal);
+  }
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
     const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
@@ -850,7 +858,7 @@ app.put('/api/projects/:id', route(async (req) => {
   /** the quote the job's page opens; its status goes with the job's */
   const ownQuote = await jobQuote(existing);
   const nextStatus = 'status' in req.body && PROJECT_STATUS[req.body.status] ? req.body.status : existing.status;
-  const refusal = projectStatusRefusal(existing.status, nextStatus, !!ownQuote);
+  const refusal = projectStatusRefusal(existing.status, nextStatus, !!ownQuote, !!(ownQuote && (await receiptInForce(ownQuote.id))));
   if (refusal) throw new HttpError(400, refusal);
   const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
   /** what this save changes that the job's quote shows too (its customer, its name, its date) */
@@ -896,6 +904,8 @@ app.put('/api/projects/:id', route(async (req) => {
 
 app.delete('/api/projects/:id', route(async (req) => {
   const p = await getProject(req.user.id, req.params.id);
+  const paid = await db.prepare(`SELECT code FROM receipts WHERE project_id = ? AND status = 'issued' LIMIT 1`).get(p.id);
+  if (paid) throw new HttpError(400, `โปรเจ็กต์นี้ออกใบเสร็จ ${paid.code} แล้ว จึงลบไม่ได้ ถ้าจะลบ ให้ยกเลิกใบเสร็จก่อน`);
   // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL);
   // a quote that followed the job is an ordinary quote from here on: it keeps the lines it last had, and is free to change them
   await db.prepare('UPDATE quotes SET follows_project = 0, locked_price = NULL WHERE project_id = ? AND follows_project = 1').run(p.id);
@@ -932,6 +942,9 @@ async function serializeQuote(q, { withJob = false } = {}) {
     if (own && Number(own.id) === Number(q.id)) linkedJob = { id: String(p.id), code: p.code, eventDate: p.event_date || '', priceFromQuote: p.agreed_price !== null };
   }
   const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  const receipt = await db
+    .prepare('SELECT r.id, r.code, r.status, r.project_id, p.code AS project_code FROM receipts r LEFT JOIN projects p ON p.id = r.project_id WHERE r.quote_id = ? ORDER BY r.id DESC LIMIT 1')
+    .get(q.id);
   // payment falls due so many days after the event
   const dueDate = q.credit_days > 0 && q.event_date ? new Date(Date.parse(q.event_date + 'T00:00:00Z') + q.credit_days * 864e5).toISOString().slice(0, 10) : '';
   const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
@@ -972,6 +985,11 @@ async function serializeQuote(q, { withJob = false } = {}) {
     followsProject,
     /** the number of the job this quote belonged to, when that job was deleted */
     deletedProjectCode: q.deleted_project_code || null,
+    /**
+     * Its latest receipt: in force ('issued': the quote cannot change until it is cancelled), or cancelled (the quote
+     * was cancelled with it and left its job, `projectCode`, which takes a new quote).
+     */
+    receipt: receipt ? { id: String(receipt.id), code: receipt.code, status: receipt.status, statusText: RECEIPT_STATUS[receipt.status], projectId: receipt.project_id ? String(receipt.project_id) : null, projectCode: receipt.project_code ?? '' } : null,
     ...(job ? { job } : {}),
     /**
      * On a quote read by itself: the job whose page opens it. The customer's name, phone and email and the job's name
@@ -1101,6 +1119,8 @@ async function syncJobQuote(quote, { changes = [], lines = false, customerId = n
   const fresh = lines && quote.follows_project ? await jobQuoteLines(quote.project_id) : null;
   const newLines = fresh && !(await inStepWithJob(quote, fresh)) ? fresh : null;
   if (!newLines && changes.length === 0) return none;
+  const paid = await receiptInForce(quote.id);
+  if (paid) throw new HttpError(400, `ใบเสนอราคา ${quote.code} ออกใบเสร็จ ${paid.code} แล้ว การแก้นี้จะเปลี่ยนใบเสนอราคา (ราคา รายการ ข้อมูลลูกค้า ชื่องาน หรือวันจัดงาน) จึงบันทึกไม่ได้ ถ้าจะแก้ ให้ยกเลิกใบเสร็จก่อน`);
   if (QUOTE_IS_OUT.includes(quote.status) && !confirmed) {
     const price = await quotePrice(quote);
     const err = new HttpError(409, `ใบเสนอราคา ${quote.code} ${quote.status === 'approved' ? 'ลูกค้าอนุมัติแล้ว' : 'ส่งให้ลูกค้าแล้ว'} การแก้นี้จะเปลี่ยนใบเสนอราคาตามโปรเจ็กต์ ยืนยันก่อนบันทึก`);
@@ -1283,6 +1303,7 @@ app.post('/api/quotes', route(async (req, res) => {
 
 app.put('/api/quotes/:id', route(async (req) => {
   const existing = await getQuote(req.user.id, req.params.id);
+  await refuseIfPaid(existing, 'แก้');
   const merged = { ...(await serializeQuote(existing)), ...req.body };
   if (!('status' in req.body)) merged.status = existing.status;
   const d = await readQuoteBody(req.user.id, merged, existing);
@@ -1333,6 +1354,7 @@ app.put('/api/quotes/:id', route(async (req) => {
 app.post('/api/quotes/:id/sync', route(async (req) => {
   const quote = await getQuote(req.user.id, req.params.id);
   if (!quote.follows_project || !quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้ไม่ได้ผูกกับโปรเจ็กต์');
+  await refuseIfPaid(quote, 'อัปเดต');
   await transaction(async () => {
     const synced = await syncJobQuote(quote, { lines: true, confirmed: req.body?.confirmQuoteChange === true });
     if (synced.lines && quote.status === 'rejected') await reviseRejected(req.user.id, quote.project_id);
@@ -1342,21 +1364,164 @@ app.post('/api/quotes/:id/sync', route(async (req) => {
 
 app.delete('/api/quotes/:id', route(async (req) => {
   const q = await getQuote(req.user.id, req.params.id);
+  await refuseIfPaid(q, 'ลบ');
   const job = await jobOfQuote(req.user.id, q.id, q.project_id);
   await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
-  if (job && !['completed', 'cancelled'].includes(job.status)) {
-    // the job's quote is gone: it takes the status of the quote it opens now (a job made from a quote may have another), or goes back to the draft
-    const next = await jobQuote(job);
-    const status = next ? QUOTE_TO_PROJECT_STATUS[next.status] ?? job.status : 'draft';
-    if (status !== job.status) await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(status, job.id);
-    // and a job made from a quote takes the price of the quote it opens now (with none left, it keeps the last one)
-    if (next && job.agreed_price !== null) {
-      const price = await quotePrice(next);
-      if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) await applyAgreedPrice(job.id, price);
-    }
-  }
+  if (job && !['completed', 'cancelled'].includes(job.status)) await jobLostItsQuote(job);
   await logActivity(req.user.id, 'quote_deleted', `ลบใบเสนอราคา ${q.code}`, 'ลบแล้ว');
   return { ok: true };
+}));
+
+/**
+ * A job whose quote has gone (deleted, or cancelled with its receipt): it takes the status of the quote its page
+ * opens now (a job made from a quote may have another), or goes back to the draft; and a job made from a quote takes
+ * the price of that quote (with none left, it keeps the last one).
+ */
+async function jobLostItsQuote(job) {
+  const next = await jobQuote(job);
+  const status = next ? QUOTE_TO_PROJECT_STATUS[next.status] ?? job.status : 'draft';
+  if (status !== job.status) await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(status, job.id);
+  if (next && job.agreed_price !== null) {
+    const price = await quotePrice(next);
+    if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) await applyAgreedPrice(job.id, price);
+  }
+}
+
+// ---------- receipts ----------
+
+const RECEIPT_STATUS = { issued: 'ออกแล้ว', cancelled: 'ยกเลิก' };
+const PAYMENT_METHODS = { transfer: 'โอนเงิน', cash: 'เงินสด', cheque: 'เช็ค' };
+const BANGKOK_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** the day it is in Thailand, YYYY-MM-DD */
+const bangkokToday = () => BANGKOK_DAY.format(new Date());
+/** a receipt for a quote with VAT is the tax invoice too, and says so */
+const receiptTitle = (r) => (r.vat_mode !== 'none' && r.tax_rate > 0 ? 'ใบเสร็จรับเงิน/ใบกำกับภาษี' : 'ใบเสร็จรับเงิน');
+
+/** the receipt in force for a quote (issued, not cancelled), if there is one */
+const receiptInForce = (quoteId) => db.prepare(`SELECT * FROM receipts WHERE quote_id = ? AND status = 'issued'`).get(quoteId);
+
+/** a quote with a receipt in force is what the customer paid for: it is not changed, nor deleted, until the receipt is cancelled */
+async function refuseIfPaid(quote, verb) {
+  const paid = await receiptInForce(quote.id);
+  if (paid) throw new HttpError(400, `ใบเสนอราคา ${quote.code} ออกใบเสร็จ ${paid.code} แล้ว จึง${verb}ไม่ได้ ถ้าจะ${verb} ให้ยกเลิกใบเสร็จก่อน`);
+}
+
+async function getReceipt(userId, id) {
+  const r = await db.prepare('SELECT * FROM receipts WHERE id = ? AND user_id = ?').get(rowId(id), userId);
+  if (!r) throw new HttpError(404, 'ไม่พบใบเสร็จ');
+  return r;
+}
+
+async function serializeReceipt(r) {
+  const items = await db.prepare('SELECT * FROM receipt_items WHERE receipt_id = ? ORDER BY sort, id').all(r.id);
+  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  const rounding = ROUNDINGS.includes(r.rounding) ? r.rounding : 'baht';
+  const totals = quoteTotals({ items: lines, discountRate: r.discount_rate, taxRate: r.tax_rate, vatMode: r.vat_mode, rounding, whtRate: r.wht_rate });
+  const project = r.project_id ? await db.prepare('SELECT id, code FROM projects WHERE id = ?').get(r.project_id) : null;
+  return {
+    id: String(r.id),
+    code: r.code,
+    status: r.status,
+    statusText: RECEIPT_STATUS[r.status] || r.status,
+    /** the heading printed on it: "ใบเสร็จรับเงิน/ใบกำกับภาษี" with VAT, "ใบเสร็จรับเงิน" without */
+    title: receiptTitle(r),
+    quoteId: r.quote_id ? String(r.quote_id) : null,
+    quoteCode: r.quote_code,
+    projectId: project ? String(project.id) : null,
+    projectCode: project?.code ?? '',
+    customerId: r.customer_id ? String(r.customer_id) : null,
+    clientName: r.client_name,
+    clientPhone: r.client_phone,
+    clientEmail: r.client_email,
+    clientAddress: r.client_address,
+    clientTaxId: r.client_tax_id,
+    clientBranch: r.client_branch,
+    projectTitle: r.project_title,
+    referenceNo: r.reference_no,
+    eventDate: r.event_date || '',
+    notes: r.notes,
+    taxRate: r.tax_rate,
+    discountRate: r.discount_rate,
+    whtRate: totals.whtRate,
+    vatMode: r.vat_mode,
+    rounding,
+    paidDate: r.paid_date || '',
+    paidDateText: thaiDate(r.paid_date),
+    paymentMethod: r.payment_method,
+    paymentMethodText: PAYMENT_METHODS[r.payment_method] || r.payment_method,
+    createdDate: thaiDate(r.created_at),
+    createdAt: r.created_at,
+    cancelledDate: thaiDate(r.cancelled_at),
+    itemCount: items.length,
+    totalAmount: totals.total,
+    withholding: totals.withholding,
+    payableAmount: totals.payable,
+    items: lines.map((i) => ({ ...i, total: lineAmount(i, rounding) })),
+  };
+}
+
+app.get('/api/receipts', route(async (req) =>
+  Promise.all((await db.prepare('SELECT * FROM receipts WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id)).map(serializeReceipt)),
+));
+
+app.get('/api/receipts/:id', route(async (req) => serializeReceipt(await getReceipt(req.user.id, req.params.id))));
+
+/**
+ * Issues the receipt for an approved quote: it copies everything the quote prints, with the day the money came in and
+ * how. The job of the quote is then finished, and the quote stays as it is until the receipt is cancelled.
+ */
+app.post('/api/quotes/:id/receipt', route(async (req, res) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  if (quote.status !== 'approved') throw new HttpError(400, 'ออกใบเสร็จได้เมื่อใบเสนอราคาอนุมัติแล้ว');
+  const issued = await receiptInForce(quote.id);
+  if (issued) throw new HttpError(400, `ใบเสนอราคานี้ออกใบเสร็จ ${issued.code} แล้ว`);
+  if (!((await quotePrice(quote)) > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนออกใบเสร็จ');
+  const paidDate = date(req.body?.paidDate) || bangkokToday();
+  const method = PAYMENT_METHODS[req.body?.paymentMethod] ? req.body.paymentMethod : 'transfer';
+  const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
+  const receipt = await transaction(async () => {
+    const code = await nextCode('receipts', req.user.id, 'RE');
+    const { lastInsertRowid } = await db
+      .prepare(`INSERT INTO receipts (user_id, code, quote_id, project_id, customer_id, quote_code, client_name, client_phone, client_email, client_address, client_tax_id, client_branch,
+                  project_title, reference_no, event_date, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, paid_date, payment_method)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, quote.id, quote.project_id, quote.customer_id, quote.code, quote.client_name, quote.client_phone, quote.client_email, quote.client_address, quote.client_tax_id, quote.client_branch,
+        quote.project_title, quote.reference_no, quote.event_date, quote.notes, quote.tax_rate, quote.discount_rate, quote.wht_rate, quote.vat_mode, ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht', paidDate, method);
+    const receiptId = Number(lastInsertRowid);
+    const ins = db.prepare('INSERT INTO receipt_items (receipt_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const [idx, i] of items.entries()) await ins.run(receiptId, i.description, i.quantity, i.unit ?? '', i.unit_price, i.round_up ? 1 : 0, idx);
+    // the money is in: the job is finished
+    if (job && job.status !== 'completed') {
+      await db.prepare(`UPDATE projects SET status = 'completed', updated_at = ${NOW} WHERE id = ?`).run(job.id);
+      await logActivity(req.user.id, 'project_completed', `โปรเจ็กต์ ${job.title}`, `${PROJECT_STATUS.completed} (ใบเสร็จ ${code})`);
+    }
+    await logActivity(req.user.id, 'receipt_created', `ใบเสร็จ ${code}`, `จากใบเสนอราคา ${quote.code}`);
+    return getReceipt(req.user.id, receiptId);
+  });
+  res.status(201);
+  return serializeReceipt(receipt);
+}));
+
+/**
+ * Cancels a receipt. It stays, with its number, marked cancelled. Its quote is cancelled with it and leaves its job,
+ * which goes back to the draft (or the status of another quote it has), ready for a new quote.
+ */
+app.post('/api/receipts/:id/cancel', route(async (req) => {
+  const r = await getReceipt(req.user.id, req.params.id);
+  if (r.status === 'cancelled') throw new HttpError(400, `ใบเสร็จ ${r.code} ถูกยกเลิกแล้ว`);
+  await transaction(async () => {
+    await db.prepare(`UPDATE receipts SET status = 'cancelled', cancelled_at = ${NOW}, updated_at = ${NOW} WHERE id = ?`).run(r.id);
+    const quote = r.quote_id ? await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(r.quote_id, req.user.id) : null;
+    if (quote) {
+      const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
+      await db.prepare(`UPDATE quotes SET status = 'cancelled', follows_project = 0, project_id = NULL, updated_at = ${NOW} WHERE id = ?`).run(quote.id);
+      await logActivity(req.user.id, 'quote_cancelled', `ใบเสนอราคา ${quote.code}`, `${QUOTE_STATUS.cancelled} (ยกเลิกใบเสร็จ ${r.code})`);
+      if (job) await jobLostItsQuote(job);
+    }
+    await logActivity(req.user.id, 'receipt_cancelled', `ใบเสร็จ ${r.code}`, 'ยกเลิกแล้ว');
+  });
+  return serializeReceipt(await getReceipt(req.user.id, r.id));
 }));
 
 // ---------- dashboard / reports ----------

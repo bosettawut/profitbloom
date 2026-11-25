@@ -5,6 +5,9 @@ export type { Rounding, VatMode };
 
 export type ProjectStatus = 'draft' | 'quote_created' | 'pending' | 'approved' | 'rejected' | 'completed' | 'cancelled';
 export type QuoteStatus = 'draft' | 'sent' | 'approved' | 'rejected' | 'cancelled' | 'expired';
+/** a receipt in force, or cancelled (it stays, with its number) */
+export type ReceiptStatus = 'issued' | 'cancelled';
+export type PaymentMethod = 'transfer' | 'cash' | 'cheque';
 
 export interface User {
   id: number;
@@ -152,6 +155,8 @@ export interface Project {
    * For a job made from a quote it is that quote (the newest for the job): its price settled the job's, it is not tied.
    */
   quote?: { id: string; code: string; status: QuoteStatus; statusText: string; /** tied to the job: saving the job's prices changes it */ follows?: boolean } | null;
+  /** the receipt in force for the job's quote: while there is one the job is finished, and its quote cannot change */
+  receipt?: { id: string; code: string } | null;
   depositPct: number;
   setupDays: number;
   eventDays: number;
@@ -221,6 +226,11 @@ export interface Quote {
   linkedJob?: { id: string; code: string; eventDate: string; priceFromQuote: boolean };
   /** on the answer to a save: the save changed the job too (the details they share, or its price) */
   jobUpdated?: boolean;
+  /**
+   * Its latest receipt: in force ('issued': the quote cannot change until it is cancelled), or cancelled (the quote
+   * was cancelled with it and left its job, `projectCode`, which takes a new quote).
+   */
+  receipt?: { id: string; code: string; status: ReceiptStatus; statusText: string; projectId: string | null; projectCode: string } | null;
   status: QuoteStatus;
   statusText: string;
   createdDate: string;
@@ -232,6 +242,49 @@ export interface Quote {
   whtRate: number;
   withholding: number;
   /** what the customer actually transfers: totalAmount less withholding */
+  payableAmount: number;
+  items: QuoteItem[];
+}
+
+/** a receipt: a copy of everything its quote printed when it was issued, with the day the money came in and how */
+export interface Receipt {
+  id: string;
+  code: string;
+  status: ReceiptStatus;
+  statusText: string;
+  /** "ใบเสร็จรับเงิน/ใบกำกับภาษี" for a quote with VAT, "ใบเสร็จรับเงิน" without */
+  title: string;
+  quoteId: string | null;
+  quoteCode: string;
+  projectId: string | null;
+  projectCode: string;
+  customerId: string | null;
+  clientName: string;
+  clientPhone: string;
+  clientEmail: string;
+  clientAddress: string;
+  clientTaxId: string;
+  clientBranch: string;
+  projectTitle: string;
+  referenceNo: string;
+  eventDate: string;
+  notes: string;
+  taxRate: number;
+  discountRate: number;
+  whtRate: number;
+  vatMode: VatMode;
+  rounding: Rounding;
+  paidDate: string;
+  paidDateText: string;
+  paymentMethod: PaymentMethod;
+  paymentMethodText: string;
+  createdDate: string;
+  /** UTC timestamp `YYYY-MM-DD HH:MM:SS` */
+  createdAt: string;
+  cancelledDate: string;
+  itemCount: number;
+  totalAmount: number;
+  withholding: number;
   payableAmount: number;
   items: QuoteItem[];
 }
@@ -391,6 +444,10 @@ export const api = {
   quote: (id: string) => request<Quote>('GET', `/quotes/${id}`),
   /** makes a job out of a quote written on its own; the job's price is the quote's */
   createProjectFromQuote: (quoteId: string) => request<Project>('POST', `/quotes/${quoteId}/project`),
+  createReceipt: (quoteId: string, body: { paidDate?: string; paymentMethod?: PaymentMethod }) => request<Receipt>('POST', `/quotes/${quoteId}/receipt`, body),
+  receipts: () => request<Receipt[]>('GET', '/receipts'),
+  receipt: (id: string) => request<Receipt>('GET', `/receipts/${id}`),
+  cancelReceipt: (id: string) => request<Receipt>('POST', `/receipts/${id}/cancel`),
   createQuote: (body: QuoteInput) => request<Quote>('POST', '/quotes', body),
   updateQuote: (id: string, body: QuoteInput) => request<Quote>('PUT', `/quotes/${id}`, body),
   /** brings a quote tied to a job into line with the job as it stands (for one made before the two were tied) */

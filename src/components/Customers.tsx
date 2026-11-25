@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, CalendarClock, ChevronRight, Edit, FileText, FolderOpen, Landmark, Mail, MapPin, MessageCircle, Phone, Plus, Search, Trash2, Wallet, X } from 'lucide-react';
 import { api, baht, type Customer, type CustomerDetail, type CustomerInput, type CustomerSummary, type Project } from '../lib/api';
-import { ProjectItem, statusPill } from './ProjectItem';
+import { ProjectItem, statusPill, struck } from './ProjectItem';
 import { StatsCard } from './StatsCard';
 import { salePrice } from '../lib/job';
 import { nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
@@ -422,7 +422,7 @@ export function CustomerPage({ customerId, onBack, onGone, onOpenProject, onOpen
               {customer.quotes.map((q) => (
                 <button key={q.id} onClick={() => onOpenQuote(q.id)} className="w-full flex items-center gap-4 py-3.5 text-left group">
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-ink truncate">{q.projectTitle || q.code}</p>
+                    <p className={`text-sm font-medium text-ink truncate ${struck(q.status)}`}>{q.projectTitle || q.code}</p>
                     <p className="flex items-center gap-1.5 text-xs text-ink-muted mt-1">
                       <FileText className="w-3.5 h-3.5" />
                       {q.code} · {q.createdDate}
