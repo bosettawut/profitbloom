@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ArrowRight, Save, X } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { health, learnings, marginToMarkup } from '../lib/decision';
-import { rulesOf, toJob } from '../lib/job';
+import { PROJECT_TYPES, rulesOf, toJob } from '../lib/job';
 import { emailError, phoneError } from '../../shared/contact.js';
 import { useCategoryPrompt } from './job/CategoryPrompt';
 import { blankGroup, blankItem, CostsStage, reserveTempIds } from './job/CostsStage';
@@ -18,7 +18,6 @@ interface NewProjectProps {
   onClose: () => void;
 }
 
-const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
 const steps = [
   { id: 1, title: 'ข้อมูลงาน' },

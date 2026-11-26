@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertOctagon, CheckCircle2, ChevronDown, CircleAlert, FolderPlus } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { canTakeJob, fmt, type QuickAnswers } from '../lib/decision';
-import { rulesOf } from '../lib/job';
+import { PROJECT_TYPES, rulesOf } from '../lib/job';
 
 interface Props {
   user: User;
@@ -15,7 +15,6 @@ const VERDICT = {
   risky: { title: 'เสี่ยงขาดทุน', text: 'กำไรต่ำ เงินสดไม่พอ หรือมีต้นทุนตกหล่น', icon: AlertOctagon, cls: 'bg-rose-50 text-rose-700 ring-rose-200' },
 } as const;
 
-const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
 /** Can I Take This Job? — a quick answer for owners who aren't comfortable with accounts. */
 export function QuickCheck({ user, onCreated }: Props) {
