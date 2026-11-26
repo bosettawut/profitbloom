@@ -1,14 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, FileText, Trash2, X } from 'lucide-react';
-import { api, type Project, type ProjectStatus, type User } from '../../lib/api';
+import { ArrowLeft, ChevronDown, FileText, Save, Trash2, X } from 'lucide-react';
+import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
-import { rulesOf, toJob } from '../../lib/job';
-import { statusPill } from '../ProjectItem';
+import { PROJECT_TYPES, rulesOf, toJob } from '../../lib/job';
+import { statusPill, struck } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
+import { useCategoryPrompt } from './CategoryPrompt';
+import { useQuoteChangePrompt } from './QuoteChangePrompt';
 import { CostsStage } from './CostsStage';
 import { SimulateStage } from './SimulateStage';
 import { DeliverStage } from './DeliverStage';
 import { ReviewStage } from './ReviewStage';
+import { CustomerPicker } from '../CustomerPicker';
+import { useCustomerContactPrompt } from '../CustomerContactPrompt';
+import { DateField } from '../DateField';
+import { PROJECT_STATUS_OPTIONS, projectStatusBlock, StatusDialog } from '../StatusDialog';
 
 export type Stage = 'check' | 'quote' | 'simulate' | 'deliver' | 'review';
 
@@ -20,33 +26,27 @@ const STAGES: Array<{ id: Stage; step: string; title: string; hint: string }> = 
   { id: 'review', step: '5', title: 'สรุปหลังงาน', hint: 'Review' },
 ];
 
-const STATUSES: Array<[ProjectStatus, string]> = [
-  ['draft', 'ร่าง'],
-  ['quote_created', 'สร้างใบเสนอราคาแล้ว'],
-  ['pending', 'รอการอนุมัติ'],
-  ['approved', 'อนุมัติแล้ว'],
-  ['completed', 'เสร็จสิ้น'],
-  ['cancelled', 'ยกเลิก'],
-];
 
-const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
 interface Props {
   project: Project;
   user: User;
   onBack: () => void;
-  onUpdate: (p: Project) => Promise<Project>;
+  onUpdate: (p: Project & { updateCustomer?: boolean; confirmQuoteChange?: boolean }) => Promise<SavedProject>;
   onDelete: (id: string) => Promise<void>;
   onCreateQuote: (p: Project) => void;
+  /** opens the quote tied to this job */
+  onOpenQuote: (quoteId: string) => void;
   startStage?: Stage;
 }
 
-export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCreateQuote, startStage }: Props) {
+export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCreateQuote, onOpenQuote, startStage }: Props) {
   const [draft, setDraft] = useState<Project>(project);
   const [stage, setStage] = useState<Stage>(startStage ?? (['approved', 'completed'].includes(project.status) ? 'deliver' : 'check'));
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState('');
   const [quoteCheck, setQuoteCheck] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [history, setHistory] = useState<Project[]>([]);
 
   useEffect(() => setDraft(project), [project]);
@@ -59,6 +59,8 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const h = useMemo(() => health(job, rules), [job, rules]);
   const lessons = useMemo(() => learnings(history.filter((p) => p.reviewApplied && p.id !== draft.id).map(toJob)), [history, draft.id]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(project);
+  /** what the save buttons say: the job's quote changes with it (its customer, name and date, and a tied quote's lines), so the button says so */
+  const saveLabel = project.quote ? 'บันทึกและอัปเดตใบเสนอราคา' : 'บันทึกการเปลี่ยนแปลง';
 
   const patch = (p: Partial<Project>) => setDraft((d) => ({ ...d, ...p }));
   const flash = (t: string) => {
@@ -66,12 +68,42 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
     setTimeout(() => setToast(''), 3000);
   };
 
+  const contactPrompt = useCustomerContactPrompt();
+  const categoryPrompt = useCategoryPrompt();
+  const quoteChangePrompt = useQuoteChangePrompt();
+
   const save = async (override?: Partial<Project>) => {
     if (!draft.title.trim()) return flash('กรุณากรอกชื่องาน');
+    // filled-in cost rows with no category: a dialog asks whether to go back and choose (on the costs tab), or to save all the same
+    if (!(await categoryPrompt.ask(draft.costItems, 'บันทึกเลย'))) {
+      setStage('quote');
+      return false;
+    }
+    const contact = (p: Project) => ({ customerId: p.customerId, name: p.client, phone: p.phone, email: p.email });
+    const updateCustomer = await contactPrompt.ask(contact(draft), contact(project));
+    if (updateCustomer === null) return false;
+    const send = (confirmQuoteChange = false) => onUpdate({ ...draft, ...override, updateCustomer, ...(confirmQuoteChange ? { confirmQuoteChange } : {}) });
     setSaving(true);
     try {
-      await onUpdate({ ...draft, ...override });
-      flash('บันทึกแล้ว');
+      let saved: SavedProject;
+      try {
+        saved = await send();
+      } catch (err) {
+        // the job's quote is already with the customer and this save would change it: nothing was saved, and the user decides
+        const change = quoteChangeOf(err);
+        if (!change) throw err;
+        setSaving(false);
+        if (!(await quoteChangePrompt.ask(change))) return false;
+        setSaving(true);
+        saved = await send(true);
+      }
+      flash(
+        saved.quoteUpdated && saved.quote
+          ? project.status === 'rejected' && saved.status === 'quote_created'
+            ? `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามราคาใหม่ สถานะกลับเป็น "สร้างใบเสนอราคาแล้ว" รอส่งใหม่`
+            : `บันทึกแล้ว ใบเสนอราคา ${saved.quote.code} เปลี่ยนตามแล้ว`
+          : 'บันทึกแล้ว',
+      );
       return true;
     } catch (err) {
       flash((err as Error).message);
@@ -98,6 +130,12 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
 
   /** Quote Health Check runs before every quote. */
   const startQuote = () => setQuoteCheck(true);
+  /** the job already has its quote: unsaved changes are saved first, so the quote that opens is up to date */
+  const openQuote = async () => {
+    if (!project.quote) return;
+    if (dirty && !(await save())) return;
+    onOpenQuote(project.quote.id);
+  };
   const continueToQuote = async () => {
     if (dirty && !(await save())) return;
     setQuoteCheck(false);
@@ -107,7 +145,11 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
   const infoField = (label: string, key: keyof Project, type = 'text') => (
     <div>
       <label className="pb-label">{label}</label>
-      <input className="pb-input !py-2" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      {type === 'date' ? (
+        <DateField label={label} className="pb-input-sm" value={(draft[key] as string) ?? ''} onChange={(v) => patch({ [key]: v } as Partial<Project>)} clearable={false} />
+      ) : (
+        <input className="pb-input pb-input-sm" type={type} value={(draft[key] as string) ?? ''} onChange={(e) => patch({ [key]: e.target.value } as Partial<Project>)} />
+      )}
     </div>
   );
 
@@ -120,20 +162,40 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-6">
         <div className="min-w-0">
           <p className="text-sm text-ink-muted">{draft.code} · {draft.projectType}</p>
-          <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight truncate">{draft.title}</h1>
+          <h1 className={`text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight truncate ${struck(project.status)}`}>{draft.title}</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={draft.status}
-            onChange={(e) => patch({ status: e.target.value as ProjectStatus })}
+          {/* the status is chosen in the same dialog as on the projects list; it is saved with the rest of the page */}
+          <button
+            type="button"
+            onClick={() => setStatusOpen(true)}
             aria-label="สถานะงาน"
-            className={`rounded-full px-3 py-2 text-sm font-medium outline-none ${statusPill(draft.status)}`}
+            title="เปลี่ยนสถานะ"
+            className={`self-stretch inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium ${statusPill(draft.status)}`}
           >
-            {STATUSES.map(([id, t]) => <option key={id} value={id}>{t}</option>)}
-          </select>
-          <button onClick={startQuote} className="pb-btn-primary !py-2">
-            <FileText className="w-4 h-4" /> สร้างใบเสนอราคา
+            {PROJECT_STATUS_OPTIONS.find((o) => o.id === draft.status)?.name ?? draft.statusText}
+            <ChevronDown className="w-4 h-4 opacity-60" aria-hidden />
           </button>
+          {/* while something is unsaved, saving it is the main thing to do here, beside the quote */}
+          {dirty && (
+            <>
+              <button onClick={() => setDraft(project)} disabled={saving} className="pb-btn-secondary !py-2 disabled:opacity-60">
+                <X className="w-4 h-4" /> ยกเลิกการแก้ไข
+              </button>
+              <button onClick={() => save()} disabled={saving} className="pb-btn-primary !py-2 disabled:opacity-60">
+                <Save className="w-4 h-4" /> {saving ? 'กำลังบันทึก...' : saveLabel}
+              </button>
+            </>
+          )}
+          {project.quote ? (
+            <button onClick={openQuote} disabled={saving} title={`${project.quote.code} · ${project.quote.statusText}`} className={`${dirty ? 'pb-btn-secondary' : 'pb-btn-primary'} !py-2 disabled:opacity-60`}>
+              <FileText className="w-4 h-4" /> เปิดใบเสนอราคา
+            </button>
+          ) : (
+            <button onClick={startQuote} className={`${dirty ? 'pb-btn-secondary' : 'pb-btn-primary'} !py-2`}>
+              <FileText className="w-4 h-4" /> สร้างใบเสนอราคา
+            </button>
+          )}
           <button onClick={remove} aria-label="ลบงาน" title="ลบงาน" className="p-2.5 rounded-full text-ink-muted hover:text-rose-600 hover:bg-rose-50">
             <Trash2 className="w-4 h-4" />
           </button>
@@ -153,7 +215,7 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           >
             <span className={`w-6 h-6 rounded-full text-xs font-semibold flex items-center justify-center ${stage === s.id ? 'bg-[#673AB7] text-white' : 'bg-[#F1F0F5]'}`}>{s.step}</span>
             <span className="text-sm font-medium whitespace-nowrap">{s.title}</span>
-            <span className="hidden xl:inline text-xs text-ink-muted">{s.hint}</span>
+            <span className="hidden 2xl:inline text-xs text-ink-muted whitespace-nowrap">{s.hint}</span>
           </button>
         ))}
       </nav>
@@ -167,14 +229,22 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="pb-label">ประเภทงาน</label>
-                <select className="pb-input !py-2" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
+                <select className="pb-input pb-input-sm" value={draft.projectType} onChange={(e) => patch({ projectType: e.target.value })}>
                   {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
                 </select>
               </div>
               {infoField('วันที่จัดงาน', 'eventDate', 'date')}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              {infoField('ลูกค้า', 'client')}
+              <div>
+                <label className="pb-label">ลูกค้า</label>
+                <CustomerPicker
+                  className="pb-input pb-input-sm"
+                  value={draft.client}
+                  onChange={(client) => patch({ client, customerId: null })}
+                  onPick={(c) => patch({ customerId: c.id, client: c.name, phone: c.phone, email: c.email })}
+                />
+              </div>
               {infoField('เบอร์โทร', 'phone', 'tel')}
             </div>
             {infoField('อีเมลลูกค้า', 'email', 'email')}
@@ -196,18 +266,25 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
           applied={draft.reviewApplied}
           onCheckFirst={() => setStage('deliver')}
           onApply={async () => {
-            if (await save({ reviewApplied: true, status: 'completed' })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
+            // the lessons are kept; the job is finished by its receipt (issued on the quote's page), not here
+            if (await save({ reviewApplied: true })) flash('บันทึกบทเรียนแล้ว งานถัดไประบบจะช่วยเตือนให้เผื่อต้นทุน');
           }}
         />
       )}
 
       {/* Unsaved changes bar */}
       {dirty && (
-        <div className="fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 md:left-[calc(50%+8.5rem)] z-40 flex items-center gap-3 bg-ink text-white rounded-full pl-5 pr-2 py-2 shadow-soft-xl">
-          <span className="text-sm whitespace-nowrap">มีการแก้ไขที่ยังไม่บันทึก</span>
-          <button onClick={() => setDraft(project)} className="px-3 py-1.5 text-sm text-white/70 hover:text-white">ยกเลิก</button>
-          <button onClick={() => save()} disabled={saving} className="px-4 py-1.5 rounded-full bg-white text-ink text-sm font-semibold disabled:opacity-60">
-            {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+        // on a phone the bar spans the screen and the save button takes the room left; on wider screens (sm and up) it sits centred under the page
+        <div role="status" aria-label="มีการแก้ไขที่ยังไม่บันทึก" className="fixed bottom-24 md:bottom-6 left-3 right-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:left-[calc(50%+var(--content-shift,8rem))] z-40 flex items-center gap-1 sm:gap-2 md:gap-3 bg-ink text-white rounded-full pl-2 sm:pl-4 md:pl-6 pr-2 py-2 shadow-soft-xl">
+          <span className="hidden sm:inline text-base font-medium whitespace-nowrap">มีการแก้ไขที่ยังไม่บันทึก</span>
+          <button onClick={() => setDraft(project)} disabled={saving} aria-label="ยกเลิกการแก้ไข" className="shrink-0 px-3 py-2 text-sm text-white/75 hover:text-white whitespace-nowrap disabled:opacity-60">
+            <span className="sm:hidden">ยกเลิก</span>
+            <span className="hidden sm:inline">ยกเลิกการแก้ไข</span>
+          </button>
+          <button onClick={() => save()} disabled={saving} className="flex-1 sm:flex-none min-w-0 inline-flex items-center justify-center gap-2 px-3 min-[360px]:px-4 sm:px-5 py-2.5 rounded-full bg-[#673AB7] hover:bg-[#5b32a3] text-white text-sm sm:text-base font-semibold leading-tight text-center sm:whitespace-nowrap shadow-[0_6px_16px_-6px_rgba(103,58,183,0.8)] disabled:opacity-60">
+            {/* below 360px the icon makes way, so the label stays on one line */}
+            <Save className="hidden min-[360px]:block w-4 h-4 shrink-0" />
+            {saving ? 'กำลังบันทึก...' : saveLabel}
           </button>
         </div>
       )}
@@ -253,6 +330,25 @@ export function JobWorkspace({ project, user, onBack, onUpdate, onDelete, onCrea
         </div>
       )}
 
+      {contactPrompt.node}
+      {quoteChangePrompt.node}
+      {statusOpen && (
+        <StatusDialog
+          title="เปลี่ยนสถานะโปรเจ็กต์"
+          subject={draft.title}
+          options={PROJECT_STATUS_OPTIONS}
+          current={draft.status}
+          // what can be chosen depends on the job as saved (its quote, its status), as the server decides on save
+          blocked={(id) => (id === project.status ? null : projectStatusBlock(project)(id))}
+          note={project.quote ? `ใบเสนอราคา ${project.quote.code} จะเปลี่ยนสถานะตามเมื่อบันทึก` : undefined}
+          onPick={(id) => {
+            patch({ status: id as ProjectStatus });
+            setStatusOpen(false);
+          }}
+          onClose={() => setStatusOpen(false)}
+        />
+      )}
+      {categoryPrompt.node}
       {toast && <div className="fixed top-5 left-1/2 -translate-x-1/2 bg-ink text-white px-5 py-3 rounded-full shadow-soft-xl z-50 animate-toast text-sm">{toast}</div>}
     </div>
   );

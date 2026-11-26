@@ -70,7 +70,7 @@ export function RiskList({ risks, empty = 'ไม่พบจุดเสี่�
 export function HealthPanel({ h, budget }: { h: Health; budget?: number }) {
   const metrics = [
     { label: 'Margin', value: `${h.margin.toFixed(1)}%`, hint: `กำไร ${fmt(h.profit)} บาท จากราคา ${fmt(h.price)}` },
-    { label: 'เงินสดที่ต้องสำรอง', value: `${fmt(h.cashRequired)} บาท`, hint: `ก่อนงาน · มัดจำได้ ${fmt(h.deposit)}` },
+    { label: 'เงินสดที่ต้องสำรอง', value: `${fmt(h.cashRequired)} บาท`, hint: `ต้นทุนทั้งหมด − มัดจำ ${fmt(h.deposit)}` },
     { label: 'ราคาคุ้มทุน (Break-even)', value: `${fmt(h.breakEven)} บาท`, hint: 'ต่ำกว่านี้คือขาดทุน' },
     { label: 'ช่วงราคาแนะนำ', value: `${fmt(h.recommended[0])}–${fmt(h.recommended[1])}`, hint: budget ? `งบลูกค้า ${fmt(budget)} บาท` : 'ตาม Margin เป้าหมายของร้าน' },
   ];
@@ -86,12 +86,12 @@ export function HealthPanel({ h, budget }: { h: Health; budget?: number }) {
           </span>
         </div>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 2xl:grid-cols-4 gap-3 mb-6">
         {metrics.map((m) => (
           <div key={m.label} className="rounded-2xl bg-[#F7F6FA] p-4">
             <p className="text-xs text-ink-muted">{m.label}</p>
             <p className="text-lg md:text-xl font-semibold text-ink mt-1 whitespace-nowrap">{m.value}</p>
-            <p className="text-[11px] text-ink-muted mt-1 leading-snug">{m.hint}</p>
+            <p className="text-xs text-ink-muted mt-1 leading-snug">{m.hint}</p>
           </div>
         ))}
       </div>

@@ -11,13 +11,13 @@ interface Props {
   patch: (p: Partial<Project>) => void;
 }
 
-const input = 'pb-input !py-2';
+const input = 'pb-input pb-input-sm';
 
 /** Track the budget during the job: actual cost per line, plus anything bought on the day. */
 export function DeliverStage({ draft, job, rules, patch }: Props) {
   const r = review(job, rules);
   const setItem = (id: number, change: Partial<CostItem>) => patch({ costItems: draft.costItems.map((i) => (i.id === id ? { ...i, ...change } : i)) });
-  const addExtra = () => patch({ costItems: [...draft.costItems, { ...blankItem('other'), name: '', quantity: 0, price: 0, total: 0, actual: 0, isExtra: true, paidBefore: false }] });
+  const addExtra = () => patch({ costItems: [...draft.costItems, { ...blankItem('other'), name: '', quantity: 0, price: 0, total: 0, actual: 0, isExtra: true }] });
   const remove = (id: number) => patch({ costItems: draft.costItems.filter((i) => i.id !== id) });
   const planned = draft.costItems.filter((i) => !i.isExtra);
   const extras = draft.costItems.filter((i) => i.isExtra);

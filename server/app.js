@@ -1,11 +1,15 @@
 import express from 'express';
 import crypto from 'node:crypto';
-import { db, ready, transaction } from './db.js';
+import { db, NOW, ready, transaction } from './db.js';
+import { passwordResetMail, sendMail } from './mail.js';
+import { emailError, phoneError } from '../shared/contact.js';
+import { DISCOUNT_TYPES, jobPricing, lineAmount, quoteLinesFromJob, quoteTotals, ROUNDINGS, toSatang, VAT_MODES, wholeBaht } from '../shared/quote-math.js';
 
 const IS_PROD = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 const SESSION_COOKIE = 'pb_session';
 const SESSION_DAYS = 30;
 const TRIAL_DAYS = 30;
+const RESET_MINUTES = 60;
 
 export const app = express();
 // behind Vercel's proxy: trust X-Forwarded-For so req.ip is the visitor, not the proxy
@@ -36,7 +40,26 @@ const num = (v, { min = -Infinity, max = Infinity } = {}) => {
   if (!Number.isFinite(n)) return 0;
   return Math.min(max, Math.max(min, n));
 };
+/** A phone number from a form. A number that was already stored is left alone, so old records can still be saved. */
+const phone = (v, stored = '') => {
+  const value = str(v, 50);
+  const error = value === stored ? '' : phoneError(value);
+  if (error) throw new HttpError(400, error);
+  return value;
+};
+/** A customer's email address from a form; like phone(), an address that was already stored is left alone. */
+const contactEmail = (v, stored = '') => {
+  const value = str(v, 200);
+  const error = value === stored ? '' : emailError(value);
+  if (error) throw new HttpError(400, error);
+  return value;
+};
 const date = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+/** a row id from the URL or the request body; anything that isn't a plain positive integer is null */
+const rowId = (v) => {
+  const n = Number(v);
+  return Number.isInteger(n) && n > 0 && n <= 2147483647 ? n : null;
+};
 
 const thaiDate = (iso) =>
   iso ? new Date(iso.replace(' ', 'T') + (iso.length > 10 ? 'Z' : '')).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -65,6 +88,14 @@ function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(hash, Buffer.from(hashHex, 'hex'));
 }
 
+// checked when the email is unknown, so "no such account" takes as long as "wrong password"
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+/** Signs the user out on every device. */
+const endAllSessions = (userId) => db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+
 async function startSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5);
@@ -72,7 +103,7 @@ async function startSession(res, userId) {
   res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: IS_PROD, expires, path: '/' });
 }
 
-const publicUser = (u) => ({
+const publicUser = async (u) => ({
   id: u.id,
   name: u.name,
   email: u.email,
@@ -86,7 +117,22 @@ const publicUser = (u) => ({
   trialEndsAt: u.trial_ends_at,
   role: u.role,
   rules: parseRules(u.rules),
+  // how new quotes treat VAT unless changed on the quote itself
+  vatMode: u.vat_mode,
+  // cost categories this shop added to the built-in ones
+  costCategories: await customCategories(u.id),
 });
+
+/** The built-in cost categories. owner_labor and teardown also answer two of the job conditions. */
+const COST_CATEGORIES = ['material', 'rental', 'labor', 'owner_labor', 'transport', 'teardown', 'other'];
+const BUILT_IN_CATEGORY_NAMES = ['ดอกไม้/วัสดุ', 'เช่าอุปกรณ์/พร็อพ', 'ค่าแรง', 'ค่าแรงเจ้าของ', 'ขนส่ง/รถ', 'เก็บงาน/ขนส่งกลับ', 'อื่น ๆ'];
+const MAX_CUSTOM_CATEGORIES = 30;
+/** how a cost item refers to a category the shop added */
+const categoryKey = (id) => `c${id}`;
+const customCategories = async (userId) =>
+  (await db.prepare('SELECT id, name FROM cost_categories WHERE user_id = ? ORDER BY id').all(userId)).map((c) => ({ id: categoryKey(c.id), name: c.name }));
+/** every category a shop's cost items may use */
+const allowedCategories = async (userId) => [...COST_CATEGORIES, ...(await customCategories(userId)).map((c) => c.id)];
 
 // business rules for the decision engine; anything missing falls back to the app defaults
 const RULE_LIMITS = {
@@ -107,30 +153,32 @@ function parseRules(text) {
   }
 }
 
-// In-memory brute-force guard. Only failures count, keyed per IP + email, so people sharing
-// one shop network don't lock each other out. Sign-ups are capped per IP separately.
-const failures = new Map();
+// Brute-force guard. Only failures count, keyed per IP + email, so people sharing one shop
+// network don't lock each other out; a second, higher limit per account stops guessing spread
+// over many addresses. Attempts live in the database because serverless instances share no memory.
+// Keys are stored hashed: the table never holds an IP address or an email.
 const WINDOW = 15 * 60e3;
-function recent(key, max) {
-  const now = Date.now();
-  const list = (failures.get(key) || []).filter((t) => now - t < WINDOW);
-  if (list.length) failures.set(key, list);
-  else failures.delete(key);
-  return list.length >= max;
+const windowStart = () => new Date(Date.now() - WINDOW).toISOString();
+async function recent(key, max) {
+  const { n } = await db.prepare('SELECT COUNT(*) AS n FROM auth_attempts WHERE key = ? AND created_at > ?').get(sha256(key), windowStart());
+  return n >= max;
 }
-function record(key) {
-  failures.set(key, [...(failures.get(key) || []), Date.now()]);
-}
+const record = (key) => db.prepare('INSERT INTO auth_attempts (key, created_at) VALUES (?, ?)').run(sha256(key), new Date().toISOString());
+const forget = (key) => db.prepare('DELETE FROM auth_attempts WHERE key = ?').run(sha256(key));
 const TOO_MANY = 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่';
+const TOO_MANY_REQUESTS = 'ทำรายการบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่';
 
 let cleaned = false;
 app.use((req, _res, next) => loadSession(req).then(() => next(), next));
 async function loadSession(req) {
-  await ready;
+  await ready();
   if (!cleaned) {
-    // clear expired sessions once per server start
+    // clear what has expired once per server start
     cleaned = true;
-    await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(new Date().toISOString());
+    const now = new Date().toISOString();
+    await db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(now);
+    await db.prepare('DELETE FROM password_resets WHERE expires_at <= ?').run(now);
+    await db.prepare('DELETE FROM auth_attempts WHERE created_at <= ?').run(windowStart());
   }
   const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
   if (token) {
@@ -145,8 +193,8 @@ async function loadSession(req) {
 }
 
 app.post('/api/auth/register', route(async (req, res) => {
-  if (recent(`signup:${req.ip}`, 20)) throw new HttpError(429, TOO_MANY);
-  record(`signup:${req.ip}`);
+  if (await recent(`signup:${req.ip}`, 20)) throw new HttpError(429, TOO_MANY);
+  await record(`signup:${req.ip}`);
   const name = str(req.body.name, 100);
   const email = str(req.body.email, 200).toLowerCase();
   const password = typeof req.body.password === 'string' ? req.body.password : '';
@@ -156,26 +204,28 @@ app.post('/api/auth/register', route(async (req, res) => {
   if (await db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new HttpError(409, 'อีเมลนี้ถูกใช้งานแล้ว');
   const trialEnds = new Date(Date.now() + TRIAL_DAYS * 864e5).toISOString();
   const { lastInsertRowid } = await db
-    .prepare("INSERT INTO users (name, email, password_hash, plan, trial_ends_at) VALUES (?, ?, ?, 'trial', ?)")
+    .prepare("INSERT INTO users (name, email, password_hash, plan, trial_ends_at) VALUES (?, ?, ?, 'trial', ?) RETURNING id")
     .run(name, email, hashPassword(password), trialEnds);
   await startSession(res, Number(lastInsertRowid));
-  return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid)) };
+  return { user: await publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(lastInsertRowid)) };
 }));
 
 app.post('/api/auth/login', route(async (req, res) => {
   const email = str(req.body.email, 200).toLowerCase();
   const key = `login:${req.ip}:${email}`;
-  if (recent(key, 10)) throw new HttpError(429, TOO_MANY);
+  const accountKey = `login-account:${email}`;
+  if ((await recent(key, 10)) || (await recent(accountKey, 50))) throw new HttpError(429, TOO_MANY);
   const password = typeof req.body.password === 'string' ? req.body.password : '';
   const user = await db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-  if (!user || !verifyPassword(password, user.password_hash)) {
-    record(key);
+  if (!verifyPassword(password, user ? user.password_hash : DUMMY_HASH) || !user) {
+    await record(key);
+    await record(accountKey);
     throw new HttpError(401, 'อีเมลหรือรหัสผ่านไม่ถูกต้อง');
   }
-  failures.delete(key);
+  await forget(key);
   if (user.disabled) throw new HttpError(403, 'บัญชีนี้ถูกระงับการใช้งาน กรุณาติดต่อทีม ProfitBloom');
   await startSession(res, user.id);
-  return { user: publicUser(user) };
+  return { user: await publicUser(user) };
 }));
 
 app.post('/api/auth/logout', route(async (req, res) => {
@@ -184,10 +234,85 @@ app.post('/api/auth/logout', route(async (req, res) => {
   return { ok: true };
 }));
 
-app.get('/api/auth/me', route(async (req) => ({ user: req.user ? publicUser(req.user) : null })));
+app.get('/api/auth/me', route(async (req) => ({ user: req.user ? await publicUser(req.user) : null })));
+
+// ---------- forgotten password ----------
+
+/** Where the web app lives, for links in emails. Never taken from the request in production (the Host header can be forged). */
+function appUrl(req) {
+  if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '');
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  if (IS_PROD) throw new Error('ต้องตั้งค่า APP_URL เพื่อส่งลิงก์ตั้งรหัสผ่านใหม่');
+  return req.get('origin') || `${req.protocol}://${req.get('host')}`;
+}
+
+async function findReset(token) {
+  if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) return null;
+  return db
+    .prepare('SELECT r.token_hash, u.* FROM password_resets r JOIN users u ON u.id = r.user_id WHERE r.token_hash = ? AND r.expires_at > ? AND u.disabled = 0')
+    .get(sha256(token), new Date().toISOString());
+}
+const RESET_EXPIRED = 'ลิงก์นี้ใช้ไม่ได้แล้วหรือหมดอายุ กรุณาขอลิงก์ใหม่';
+
+// Always answers the same way, whether or not the email belongs to an account.
+app.post('/api/auth/forgot', route(async (req) => {
+  const email = str(req.body.email, 200).toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'รูปแบบอีเมลไม่ถูกต้อง');
+  const ipKey = `forgot:${req.ip}`;
+  const emailKey = `forgot-email:${email}`;
+  if (await recent(ipKey, 10)) throw new HttpError(429, TOO_MANY_REQUESTS);
+  await record(ipKey);
+  // at most three emails per address per window, however many people ask
+  const quiet = await recent(emailKey, 3);
+  const user = quiet ? null : await db.prepare('SELECT * FROM users WHERE email = ? AND disabled = 0').get(email);
+  if (user) {
+    await record(emailKey);
+    const token = crypto.randomBytes(32).toString('hex');
+    const link = `${appUrl(req)}/reset?token=${token}`;
+    await transaction(async () => {
+      // only the newest link works, and only its hash is stored
+      await db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(user.id);
+      await db.prepare('INSERT INTO password_resets (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
+        .run(sha256(token), user.id, new Date(Date.now() + RESET_MINUTES * 60e3).toISOString());
+    });
+    await sendMail({ to: user.email, ...passwordResetMail({ name: user.name, link, minutes: RESET_MINUTES }) });
+  }
+  return { ok: true };
+}));
+
+app.post('/api/auth/reset/check', route(async (req) => ({ valid: !!(await findReset(req.body.token)) })));
+
+app.post('/api/auth/reset', route(async (req, res) => {
+  const ipKey = `reset:${req.ip}`;
+  if (await recent(ipKey, 20)) throw new HttpError(429, TOO_MANY_REQUESTS);
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (password.length < 8) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
+  const user = await findReset(req.body.token);
+  if (!user) {
+    await record(ipKey);
+    throw new HttpError(400, RESET_EXPIRED);
+  }
+  await transaction(async () => {
+    // the link is spent the moment it is used; a second request with it finds nothing
+    const { changes } = await db.prepare('DELETE FROM password_resets WHERE token_hash = ?').run(user.token_hash);
+    if (!changes) throw new HttpError(400, RESET_EXPIRED);
+    await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), user.id);
+    // whoever knew the old password is signed out everywhere
+    await endAllSessions(user.id);
+  });
+  await forget(`login-account:${user.email}`);
+  await startSession(res, user.id);
+  return { user: await publicUser(user) };
+}));
 
 // everything below requires login
 app.use('/api', (req, _res, next) => (req.user ? next() : next(new HttpError(401, 'กรุณาเข้าสู่ระบบ'))));
+
+app.post('/api/auth/logout-all', route(async (req, res) => {
+  await endAllSessions(req.user.id);
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+  return { ok: true };
+}));
 
 app.put('/api/account', route(async (req) => {
   const name = str(req.body.name, 100);
@@ -196,7 +321,7 @@ app.put('/api/account', route(async (req) => {
     name,
     str(req.body.businessName, 200),
     str(req.body.businessAddress, 500),
-    str(req.body.businessPhone, 50),
+    phone(req.body.businessPhone, req.user.business_phone),
     str(req.body.businessTaxId, 50),
     req.user.id,
   );
@@ -211,6 +336,7 @@ app.put('/api/account', route(async (req) => {
       throw new HttpError(400, 'Margin ขั้นต่ำ ต้องไม่มากกว่า Margin ที่ดี');
     await db.prepare('UPDATE users SET rules = ? WHERE id = ?').run(JSON.stringify(rules), req.user.id);
   }
+  if (VAT_MODES.includes(req.body.vatMode)) await db.prepare('UPDATE users SET vat_mode = ? WHERE id = ?').run(req.body.vatMode, req.user.id);
   if ('businessLogo' in req.body) {
     const logo = typeof req.body.businessLogo === 'string' ? req.body.businessLogo : '';
     // logos arrive pre-shrunk from the browser as a data URL; cap at ~300 KB
@@ -221,12 +347,227 @@ app.put('/api/account', route(async (req) => {
   const { currentPassword, newPassword } = req.body;
   if (newPassword) {
     if (typeof newPassword !== 'string' || newPassword.length < 8) throw new HttpError(400, 'รหัสผ่านใหม่ต้องมีอย่างน้อย 8 ตัวอักษร');
-    if (typeof currentPassword !== 'string' || !verifyPassword(currentPassword, req.user.password_hash))
+    const key = `password:${req.user.id}`;
+    if (await recent(key, 10)) throw new HttpError(429, TOO_MANY_REQUESTS);
+    if (typeof currentPassword !== 'string' || !verifyPassword(currentPassword, req.user.password_hash)) {
+      await record(key);
       throw new HttpError(400, 'รหัสผ่านปัจจุบันไม่ถูกต้อง');
+    }
+    await forget(key);
+    await db.prepare('DELETE FROM password_resets WHERE user_id = ?').run(req.user.id);
     await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), req.user.id);
     await db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?').run(req.user.id, req.sessionToken);
   }
-  return { user: publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) };
+  return { user: await publicUser(await db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) };
+}));
+
+// ---------- customers ----------
+
+function serializeCustomer(c) {
+  return {
+    id: String(c.id),
+    name: c.name,
+    phone: c.phone,
+    email: c.email,
+    lineId: c.line_id,
+    address: c.address,
+    notes: c.notes,
+    /** days of credit this customer is given after the event (0 = none): a new quote for them starts with it */
+    creditDays: c.credit_days ?? 0,
+    /** for the customer's quotes: their tax id and office/branch (a new quote for them starts with these and the address) */
+    taxId: c.tax_id ?? '',
+    branch: c.branch ?? '',
+    createdDate: thaiDate(c.created_at),
+  };
+}
+
+async function getCustomer(userId, id) {
+  const c = await db.prepare('SELECT * FROM customers WHERE id = ? AND user_id = ?').get(rowId(id), userId);
+  if (!c) throw new HttpError(404, 'ไม่พบลูกค้า');
+  return c;
+}
+
+function readCustomerBody(body, existing) {
+  const name = str(body.name, 200);
+  if (!name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
+  return {
+    name,
+    phone: phone(body.phone, existing?.phone),
+    email: contactEmail(body.email, existing?.email),
+    line_id: str(body.lineId, 100),
+    address: str(body.address, 1000),
+    notes: str(body.notes, 5000),
+    credit_days: creditDays(body.creditDays),
+    tax_id: str(body.taxId, 20),
+    branch: str(body.branch, 60),
+  };
+}
+
+/** days of credit from a form: a whole number of days, 0 to 365 */
+const creditDays = (v) => Math.round(num(v ?? 0, { min: 0, max: 365 }));
+
+/**
+ * The customer a project or quote belongs to. A customer picked from the list wins; otherwise the
+ * typed name is matched against the shop's customers (ignoring case) and a new customer is created
+ * when there is none, so every job with a client name shows up under a customer.
+ */
+async function resolveCustomer(userId, customerId, name, phone, email) {
+  if (customerId) return (await getCustomer(userId, customerId)).id;
+  if (!name) return null;
+  // one at a time per shop: two saves arriving together must not both create the customer
+  await db.prepare('SELECT pg_advisory_xact_lock(?::bigint)').get(userId);
+  const found = await db.prepare('SELECT id FROM customers WHERE user_id = ? AND lower(name) = lower(?) ORDER BY id LIMIT 1').get(userId, name);
+  if (found) return found.id;
+  const { lastInsertRowid } = await db
+    .prepare('INSERT INTO customers (user_id, name, phone, email) VALUES (?, ?, ?, ?) RETURNING id')
+    .run(userId, name, phone, email);
+  return Number(lastInsertRowid);
+}
+
+/**
+ * Carries what a project or quote says about its customer over to the customer's own record: the phone number and
+ * email, and from a quote also the days of credit, the address, the tax id and the office/branch (a project has none
+ * of those). An empty field on the customer (no credit: 0) is always filled in; a different value replaces what the
+ * customer has only when the shop said so (`overwrite`), because a job is sometimes arranged with someone else, or
+ * given a credit just this once. `typed` holds the customer's columns: { phone, email, credit_days, address, tax_id, branch }.
+ */
+async function syncCustomerContact(customerId, typed, overwrite) {
+  if (!customerId) return;
+  const c = await db.prepare('SELECT phone, email, credit_days, address, tax_id, branch FROM customers WHERE id = ?').get(customerId);
+  const pick = (value, kept) => (value && (overwrite || !kept) ? value : kept);
+  const columns = Object.keys(typed).filter((k) => k in c);
+  const changed = columns.filter((k) => pick(typed[k], c[k]) !== c[k]);
+  if (!changed.length) return;
+  // the columns are the fixed ones named by the callers, never from the request
+  await db.prepare(`UPDATE customers SET ${changed.map((k) => `${k} = ?`).join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...changed.map((k) => pick(typed[k], c[k])), customerId);
+}
+
+/** what a quote says about its customer, for the customer's own record */
+const quoteCustomer = (d) => ({ phone: d.client_phone, email: d.client_email, credit_days: d.credit_days, address: d.client_address, tax_id: d.client_tax_id, branch: d.client_branch });
+
+/** which customer a save points at: `customerId` in the request picks one, a changed name is looked up again */
+function customerChoice(body, existing, nameKey, existingName) {
+  if ('customerId' in body) return body.customerId ? rowId(body.customerId) ?? -1 : null;
+  if (existing && (!(nameKey in body) || str(body[nameKey], 200).toLowerCase() === existingName.toLowerCase())) return existing.customer_id;
+  return null;
+}
+
+/** every customer of the shop with how much they have bought; sales count as in the reports */
+async function customerSummaries(userId) {
+  const customers = await db.prepare('SELECT * FROM customers WHERE user_id = ? ORDER BY name, id').all(userId);
+  const projects = await projectFinancials(userId);
+  const quotes = await db.prepare('SELECT customer_id, COUNT(*) AS n FROM quotes WHERE user_id = ? AND customer_id IS NOT NULL GROUP BY customer_id').all(userId);
+  const quoteCount = new Map(quotes.map((q) => [q.customer_id, q.n]));
+  // the address, tax id and branch written on each customer's latest quote that had any: a new quote starts from them
+  const written = await db
+    .prepare(`SELECT DISTINCT ON (customer_id) customer_id, client_address, client_tax_id, client_branch FROM quotes
+              WHERE user_id = ? AND customer_id IS NOT NULL AND (client_address <> '' OR client_tax_id <> '' OR client_branch <> '')
+              ORDER BY customer_id, id DESC`)
+    .all(userId);
+  const lastWritten = new Map(written.map((q) => [q.customer_id, q]));
+  return customers.map((c) => {
+    const mine = projects.filter((p) => p.customer_id === c.id);
+    const sold = mine.filter((p) => p.sold);
+    const last = lastWritten.get(c.id);
+    return {
+      ...serializeCustomer(c),
+      quoteAddress: last?.client_address ?? '',
+      quoteTaxId: last?.client_tax_id ?? '',
+      quoteBranch: last?.client_branch ?? '',
+      projectCount: mine.length,
+      quoteCount: quoteCount.get(c.id) ?? 0,
+      soldCount: sold.length,
+      totalSales: sold.reduce((s, p) => s + p.sales, 0),
+      lastEventDate: mine.map((p) => p.event_date || '').sort().pop() || '',
+    };
+  });
+}
+
+// ---------- cost categories the shop adds ----------
+
+async function readCategoryName(userId, body, selfId = null) {
+  const name = str(body.name, 50);
+  if (!name) throw new HttpError(400, 'กรุณากรอกชื่อหมวด');
+  const taken = [...BUILT_IN_CATEGORY_NAMES, ...(await db.prepare('SELECT id, name FROM cost_categories WHERE user_id = ?').all(userId)).filter((c) => c.id !== selfId).map((c) => c.name)];
+  if (taken.some((t) => t.toLowerCase() === name.toLowerCase())) throw new HttpError(400, `มีหมวด "${name}" อยู่แล้ว`);
+  return name;
+}
+async function getCategory(userId, key) {
+  const id = /^c\d+$/.test(String(key)) ? Number(String(key).slice(1)) : 0;
+  const c = id && (await db.prepare('SELECT * FROM cost_categories WHERE id = ? AND user_id = ?').get(id, userId));
+  if (!c) throw new HttpError(404, 'ไม่พบหมวดนี้');
+  return c;
+}
+
+app.get('/api/cost-categories', route(async (req) => customCategories(req.user.id)));
+
+app.post('/api/cost-categories', route(async (req, res) => {
+  const name = await readCategoryName(req.user.id, req.body);
+  const { n } = await db.prepare('SELECT COUNT(*) AS n FROM cost_categories WHERE user_id = ?').get(req.user.id);
+  if (n >= MAX_CUSTOM_CATEGORIES) throw new HttpError(400, `เพิ่มหมวดได้ไม่เกิน ${MAX_CUSTOM_CATEGORIES} หมวด`);
+  const { lastInsertRowid } = await db.prepare('INSERT INTO cost_categories (user_id, name) VALUES (?, ?) RETURNING id').run(req.user.id, name);
+  res.status(201);
+  return { id: categoryKey(lastInsertRowid), name };
+}));
+
+app.put('/api/cost-categories/:id', route(async (req) => {
+  const existing = await getCategory(req.user.id, req.params.id);
+  const name = await readCategoryName(req.user.id, req.body, existing.id);
+  await db.prepare('UPDATE cost_categories SET name = ? WHERE id = ?').run(name, existing.id);
+  return { id: categoryKey(existing.id), name };
+}));
+
+// costs filed under a removed category move to "อื่น ๆ", so no job loses a cost line
+app.delete('/api/cost-categories/:id', route(async (req) => {
+  const existing = await getCategory(req.user.id, req.params.id);
+  let moved = 0;
+  await transaction(async () => {
+    ({ changes: moved } = await db
+      .prepare("UPDATE cost_items SET category = 'other' WHERE category = ? AND project_id IN (SELECT id FROM projects WHERE user_id = ?)")
+      .run(categoryKey(existing.id), req.user.id));
+    await db.prepare('DELETE FROM cost_categories WHERE id = ?').run(existing.id);
+  });
+  return { ok: true, moved };
+}));
+
+app.get('/api/customers', route(async (req) => customerSummaries(req.user.id)));
+
+app.get('/api/customers/:id', route(async (req) => {
+  const c = await getCustomer(req.user.id, req.params.id);
+  const summary = (await customerSummaries(req.user.id)).find((x) => x.id === String(c.id));
+  const projects = await db.prepare('SELECT * FROM projects WHERE user_id = ? AND customer_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id, c.id);
+  const quotes = await db.prepare('SELECT * FROM quotes WHERE user_id = ? AND customer_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id, c.id);
+  return {
+    ...summary,
+    projects: await Promise.all(projects.map(serializeProject)),
+    quotes: await Promise.all(quotes.map(serializeQuote)),
+  };
+}));
+
+app.post('/api/customers', route(async (req, res) => {
+  const d = readCustomerBody(req.body);
+  const { lastInsertRowid } = await db
+    .prepare('INSERT INTO customers (user_id, name, phone, email, line_id, address, notes, credit_days, tax_id, branch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .run(req.user.id, d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, d.tax_id, d.branch);
+  await logActivity(req.user.id, 'customer_created', `ลูกค้าใหม่ - ${d.name}`, 'เพิ่มแล้ว');
+  res.status(201);
+  return serializeCustomer(await getCustomer(req.user.id, lastInsertRowid));
+}));
+
+app.put('/api/customers/:id', route(async (req) => {
+  const existing = await getCustomer(req.user.id, req.params.id);
+  const d = readCustomerBody({ ...serializeCustomer(existing), ...req.body }, existing);
+  await db.prepare(`UPDATE customers SET name=?, phone=?, email=?, line_id=?, address=?, notes=?, credit_days=?, tax_id=?, branch=?, updated_at=${NOW} WHERE id = ? AND user_id = ?`)
+    .run(d.name, d.phone, d.email, d.line_id, d.address, d.notes, d.credit_days, d.tax_id, d.branch, existing.id, req.user.id);
+  return serializeCustomer(await getCustomer(req.user.id, existing.id));
+}));
+
+app.delete('/api/customers/:id', route(async (req) => {
+  const c = await getCustomer(req.user.id, req.params.id);
+  // their projects and quotes stay, with the name still on them; the database clears the link
+  await db.prepare('DELETE FROM customers WHERE id = ?').run(c.id);
+  await logActivity(req.user.id, 'customer_deleted', `ลบลูกค้า ${c.name}`, 'ลบแล้ว');
+  return { ok: true };
 }));
 
 // ---------- projects ----------
@@ -236,35 +577,80 @@ const PROJECT_STATUS = {
   quote_created: 'สร้างใบเสนอราคาแล้ว',
   pending: 'รอการอนุมัติ',
   approved: 'อนุมัติแล้ว',
+  // the customer turned the quote down: the job's prices are changed and the same quote sent again
+  rejected: 'ลูกค้าปฏิเสธ',
   completed: 'เสร็จสิ้น',
   cancelled: 'ยกเลิก',
 };
+/** statuses that describe a job's quote, so a job without one cannot have them */
+const QUOTE_STAGE = ['quote_created', 'pending', 'rejected'];
+
+/**
+ * Why a job cannot be put in `next` (null when it can). A job whose quote has a receipt in force stays finished until
+ * the receipt is cancelled; a job with its quote is past the draft; the quote statuses need a quote; and a job is
+ * finished by issuing its receipt (on the quote's page), not by choosing the status.
+ */
+function projectStatusRefusal(current, next, hasQuote, hasReceipt = false) {
+  if (next === current) return null;
+  if (hasReceipt) return 'โปรเจ็กต์นี้ออกใบเสร็จแล้ว จึงเปลี่ยนสถานะไม่ได้ ถ้าจะเปลี่ยน ให้ยกเลิกใบเสร็จก่อน';
+  if (next === 'draft' && hasQuote) return 'โปรเจ็กต์นี้มีใบเสนอราคาแล้ว จึงเปลี่ยนกลับเป็นร่างไม่ได้';
+  if (QUOTE_STAGE.includes(next) && !hasQuote) return `ยังไม่มีใบเสนอราคา จึงเป็น "${PROJECT_STATUS[next]}" ไม่ได้ สร้างใบเสนอราคาก่อน`;
+  if (next === 'completed') return 'โปรเจ็กต์เป็น "เสร็จสิ้น" เมื่อออกใบเสร็จ ออกใบเสร็จได้ที่หน้าใบเสนอราคาที่ลูกค้าอนุมัติแล้ว';
+  return null;
+}
 const TYPE_PREFIX = { 'งานแต่งงาน': 'WD', 'งานหมั้น': 'EN', 'งานวันเกิด': 'BD', 'งานบวช': 'OR', 'งานเปิดร้าน': 'OP' };
 
+const BANGKOK_YEAR = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Bangkok', year: 'numeric' });
+/** the year as it is in Thailand: the server's clock is UTC, seven hours behind on the night of 31 December */
+const bangkokYear = (at = new Date()) => Number(BANGKOK_YEAR.format(at));
+
+/**
+ * The next number for a shop's document, like QT-2026-013: one run per shop, per kind (prefix) and per year, starting
+ * at 001. A number is never given twice, even after its document is deleted: the last one handed out is kept in
+ * doc_counters, and the numbers in use count too (for documents from before that table, or brought in from the old system).
+ */
 async function nextCode(table, userId, prefix) {
-  const year = new Date().getFullYear();
-  const like = `${prefix}-${year}-%`;
-  const row = await db.prepare(`SELECT code FROM ${table} WHERE user_id = ? AND code LIKE ? ORDER BY id DESC LIMIT 1`).get(userId, like);
-  const n = row ? Number(row.code.split('-').pop()) + 1 : 1;
+  // always called inside a transaction: one shop's codes are handed out one at a time, so two
+  // requests arriving together can't be given the same number
+  await db.prepare('SELECT pg_advisory_xact_lock(?::bigint)').get(userId);
+  const year = bangkokYear();
+  const inUse = await db.prepare(`SELECT MAX(CAST(split_part(code, '-', 3) AS INTEGER)) AS n FROM ${table} WHERE user_id = ? AND code ~ ?`).get(userId, `^${prefix}-${year}-[0-9]+$`);
+  const given = await db.prepare('SELECT last_n FROM doc_counters WHERE user_id = ? AND prefix = ? AND year = ?').get(userId, prefix, year);
+  const n = Math.max(inUse?.n ?? 0, given?.last_n ?? 0) + 1;
+  await db.prepare('INSERT INTO doc_counters (user_id, prefix, year, last_n) VALUES (?, ?, ?, ?) ON CONFLICT (user_id, prefix, year) DO UPDATE SET last_n = EXCLUDED.last_n')
+    .run(userId, prefix, year, n);
   return `${prefix}-${year}-${String(n).padStart(3, '0')}`;
 }
 
 async function serializeProject(p) {
   const items = await db.prepare('SELECT * FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(p.id);
+  const groups = await db.prepare('SELECT * FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(p.id);
+  const quote = await jobQuote(p);
+  const receipt = quote ? await receiptInForce(quote.id) : null;
   return {
+    /** the receipt in force for the job's quote: while there is one the job is finished, and its quote cannot change */
+    receipt: receipt ? { id: String(receipt.id), code: receipt.code } : null,
+    /** the quote the job's page opens (null until there is one): see jobQuote */
+    // `follows`: the quote is tied to the job (its lines change when the job is saved), not one the job was made from
+    quote: quote ? { id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status] || quote.status, follows: !!quote.follows_project } : null,
     id: String(p.id),
     code: p.code,
     title: p.title,
     projectType: p.project_type,
+    customerId: p.customer_id ? String(p.customer_id) : null,
     client: p.client,
     phone: p.phone,
     email: p.email,
     eventDate: p.event_date || '',
     budget: p.budget,
     notes: p.notes,
+    /** for the shop's own eyes: shared with the internal note of the job's quote, never printed */
+    internalNote: p.internal_note ?? '',
     status: p.status,
     statusText: PROJECT_STATUS[p.status] || p.status,
     profitMargin: p.profit_margin,
+    // set when the job was made from an accepted quote: the price is fixed and the margin follows from the costs
+    agreedPrice: p.agreed_price,
     depositPct: p.deposit_pct,
     setupDays: p.setup_days,
     eventDays: p.event_days,
@@ -276,14 +662,16 @@ async function serializeProject(p) {
     reviewedAt: p.reviewed_at,
     createdDate: thaiDate(p.created_at),
     updatedAt: p.updated_at,
+    costGroups: groups.map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount })),
     costItems: items.map((i) => ({
       id: i.id,
+      groupId: i.group_id,
       name: i.name,
       category: i.category,
       quantity: i.quantity,
+      unit: i.unit,
       price: i.price,
       total: i.quantity * i.price,
-      paidBefore: !!i.paid_before,
       actual: i.actual,
       isExtra: !!i.is_extra,
     })),
@@ -291,12 +679,12 @@ async function serializeProject(p) {
 }
 
 async function getProject(userId, id) {
-  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(Number(id), userId);
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(rowId(id), userId);
   if (!p) throw new HttpError(404, 'ไม่พบโปรเจ็กต์');
   return p;
 }
 
-function readProjectBody(body) {
+function readProjectBody(body, existing, categories = COST_CATEGORIES) {
   const title = str(body.title, 200);
   if (!title) throw new HttpError(400, 'กรุณากรอกชื่อโปรเจ็กต์');
   const status = body.status && PROJECT_STATUS[body.status] ? body.status : undefined;
@@ -304,11 +692,12 @@ function readProjectBody(body) {
     title,
     project_type: str(body.projectType, 50) || 'อื่นๆ',
     client: str(body.client, 200),
-    phone: str(body.phone, 50),
-    email: str(body.email, 200),
+    phone: phone(body.phone, existing?.phone),
+    email: contactEmail(body.email, existing?.email),
     event_date: date(body.eventDate),
     budget: num(body.budget, { min: 0 }),
     notes: str(body.notes, 5000),
+    internal_note: str(body.internalNote, 2000),
     profit_margin: num(body.profitMargin ?? 30, { min: 0, max: 1000 }),
     deposit_pct: num(body.depositPct ?? 30, { min: 0, max: 100 }),
     setup_days: num(body.setupDays ?? 1, { min: 0, max: 60 }),
@@ -319,13 +708,22 @@ function readProjectBody(body) {
     teardown: optBool(body.teardown),
     review_applied: body.reviewApplied ? 1 : 0,
     status,
+    groups: Array.isArray(body.costGroups)
+      ? body.costGroups.slice(0, 100).map((g) => {
+          const discountType = DISCOUNT_TYPES.includes(g?.discountType) ? g.discountType : 'percent';
+          // a share cannot be more than all of the price; an amount is capped at the heading's price when it is worked out
+          return { id: g?.id, name: str(g?.name, 200), markup: num(g?.markup, { min: -100, max: 1000 }), discountType, discount: num(g?.discount, { min: 0, max: discountType === 'percent' ? 100 : 1e12 }) };
+        })
+      : null,
     items: Array.isArray(body.costItems)
       ? body.costItems.slice(0, 500).map((i) => ({
+          group: i.groupId,
           name: str(i.name, 200),
-          category: COST_CATEGORIES.includes(i.category) ? i.category : 'material',
+          // '' = no category chosen yet (the form asks for one before a filled-in row is saved)
+          category: categories.includes(i.category) ? i.category : i.category === '' ? '' : 'material',
           quantity: num(i.quantity, { min: 0 }),
+          unit: str(i.unit, 30),
           price: num(i.price, { min: 0 }),
-          paid_before: i.paidBefore === false ? 0 : 1,
           actual: i.actual === null || i.actual === undefined || i.actual === '' ? null : num(i.actual, { min: 0 }),
           is_extra: i.isExtra ? 1 : 0,
         }))
@@ -333,7 +731,6 @@ function readProjectBody(body) {
   };
 }
 
-const COST_CATEGORIES = ['material', 'rental', 'labor', 'transport', 'other'];
 function optNum(v, min, max) {
   if (v === null || v === undefined || v === '') return null;
   return num(v, { min, max });
@@ -342,12 +739,96 @@ function optBool(v) {
   return v === null || v === undefined ? null : v ? 1 : 0;
 }
 
-async function replaceCostItems(projectId, items) {
+/**
+ * Saves a job's headings and the cost items under them, replacing what was there. Planned items that
+ * name no heading go under the first one (a job always gets one once it has costs); unplanned extras
+ * have none. `oneMarkup` sets every heading to the job's markup — for callers that still send a single
+ * markup for the whole job. Keeps projects.profit_margin as the job's overall markup, so
+ * cost × (1 + profit_margin) is its price everywhere.
+ */
+async function replaceCosts(projectId, d, oneMarkup = false) {
+  const groups = (d.groups || []).map((g) => ({ ...g, markup: oneMarkup ? d.profit_margin : g.markup }));
+  const items = d.items || [];
+  const known = new Set(groups.map((g) => g.id).filter((id) => id !== null && id !== undefined));
+  if (groups.length === 0 && items.some((i) => !i.is_extra)) groups.push({ id: undefined, name: 'รายการต้นทุน', markup: d.profit_margin });
+
   await db.prepare('DELETE FROM cost_items WHERE project_id = ?').run(projectId);
-  const ins = db.prepare(
-    'INSERT INTO cost_items (project_id, name, category, quantity, price, paid_before, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  );
-  for (const [idx, i] of items.entries()) await ins.run(projectId, i.name, i.category, i.quantity, i.price, i.paid_before, i.actual, i.is_extra, idx);
+  await db.prepare('DELETE FROM cost_groups WHERE project_id = ?').run(projectId);
+  const newId = new Map();
+  const saved = [];
+  for (const [idx, g] of groups.entries()) {
+    const discountType = g.discountType ?? 'percent';
+    const discount = g.discount ?? 0;
+    const { lastInsertRowid } = await db.prepare('INSERT INTO cost_groups (project_id, name, markup, discount_type, discount, sort) VALUES (?, ?, ?, ?, ?, ?) RETURNING id').run(projectId, g.name, g.markup, discountType, discount, idx);
+    const id = Number(lastInsertRowid);
+    if (known.has(g.id)) newId.set(g.id, id);
+    saved.push({ id, name: g.name, markup: g.markup, discountType, discount });
+  }
+  const ins = db.prepare('INSERT INTO cost_items (project_id, group_id, name, category, quantity, unit, price, actual, is_extra, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const priced = [];
+  for (const [idx, i] of items.entries()) {
+    const groupId = i.is_extra ? null : newId.get(i.group) ?? saved[0].id;
+    await ins.run(projectId, groupId, i.name, i.category, i.quantity, i.unit ?? '', i.price, i.actual, i.is_extra, idx);
+    priced.push({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId });
+  }
+  const { cost, price } = jobPricing(priced, saved);
+  const { agreed_price: agreed } = await db.prepare('SELECT agreed_price FROM projects WHERE id = ?').get(projectId);
+  if (agreed !== null && cost > 0) return holdToAgreedPrice(projectId, agreed, cost);
+  const overall = cost > 0 ? (price / cost - 1) * 100 : saved[0]?.markup ?? d.profit_margin;
+  await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(overall, projectId);
+}
+
+/**
+ * A job whose price was settled with the customer (made from a quote): every heading gets the one markup that makes
+ * the costs come to the price (negative when the costs are more than it). A discount has no meaning under a settled
+ * price, so none is kept.
+ */
+async function holdToAgreedPrice(projectId, agreed, cost) {
+  const markup = (agreed / cost - 1) * 100;
+  await db.prepare('UPDATE cost_groups SET markup = ?, discount = 0 WHERE project_id = ?').run(markup, projectId);
+  await db.prepare('UPDATE projects SET profit_margin = ? WHERE id = ?').run(markup, projectId);
+}
+
+/** a job made from a quote takes that quote's new price (after its discount, before VAT); its margin follows from its costs */
+async function applyAgreedPrice(projectId, price) {
+  await db.prepare(`UPDATE projects SET agreed_price = ?, updated_at = ${NOW} WHERE id = ?`).run(price, projectId);
+  const items = await db.prepare('SELECT quantity, price, is_extra, group_id FROM cost_items WHERE project_id = ?').all(projectId);
+  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ?').all(projectId)).map(groupRow);
+  const { cost } = jobPricing(items.map((i) => ({ quantity: i.quantity, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), groups);
+  if (cost > 0) await holdToAgreedPrice(projectId, price, cost);
+}
+
+const groupRow = (g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount });
+
+/**
+ * What a job and the quote its page opens share, both ways: the customer's name, phone number and email, and the
+ * job's name. [the job's column, the quote's column, what it is called, whether it is never left empty]
+ * The customer's name (a quote needs one) and the job's name (a job needs one) are not emptied through the other.
+ */
+const SHARED_DETAILS = [
+  ['client', 'client_name', 'ชื่อลูกค้า', true],
+  ['phone', 'client_phone', 'เบอร์โทรศัพท์', false],
+  ['email', 'client_email', 'อีเมล', false],
+  ['title', 'project_title', 'ชื่อโปรเจ็กต์', true],
+];
+/** and the event date, which is the job's: it is changed on the job, and the quote takes it */
+const JOB_DETAILS = [...SHARED_DETAILS, ['event_date', 'event_date', 'วันที่จัดงาน', false]];
+const detail = (v) => v ?? '';
+
+/**
+ * The note for the shop's own eyes, shared by a job and the quote its page opens. It is never printed, so it moves
+ * between them without asking, whatever the quote's status, and even while the quote has a receipt in force.
+ */
+async function shareInternalNote(table, id, note) {
+  await db.prepare(`UPDATE ${table === 'quotes' ? 'quotes' : 'projects'} SET internal_note = ?, updated_at = ${NOW} WHERE id = ?`).run(note, id);
+}
+
+/** the details a save of a job changed that its quote does not hold yet, as the quote is to take them */
+function jobDetailChanges(existing, d, quote) {
+  if (!quote) return [];
+  const shown = (column, v) => (column === 'event_date' ? thaiDate(v) : detail(v));
+  return JOB_DETAILS.filter(([pk, qk, , required]) => (!required || detail(d[pk])) && detail(d[pk]) !== detail(existing[pk]) && detail(quote[qk]) !== detail(d[pk]))
+    .map(([pk, qk, label]) => ({ column: qk, value: d[pk], label, from: shown(qk, quote[qk]), to: shown(qk, d[pk]) }));
 }
 
 app.get('/api/projects', route(async (req) =>
@@ -357,16 +838,23 @@ app.get('/api/projects', route(async (req) =>
 app.get('/api/projects/:id', route(async (req) => serializeProject(await getProject(req.user.id, req.params.id))));
 
 app.post('/api/projects', route(async (req, res) => {
-  const d = readProjectBody(req.body);
+  const d = readProjectBody(req.body, undefined, await allowedCategories(req.user.id));
+  // a new job has no quote, so it cannot start in a status that describes one, nor finished (that takes a receipt)
+  if (d.status) {
+    const refusal = projectStatusRefusal('draft', d.status, false);
+    if (refusal) throw new HttpError(400, refusal);
+  }
   const project = await transaction(async () => {
     const code = await nextCode('projects', req.user.id, TYPE_PREFIX[d.project_type] || 'EV');
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client, d.phone, d.email);
+    await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO projects (user_id, code, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
-                  deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(req.user.id, code, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
-        d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown);
-    await replaceCostItems(Number(lastInsertRowid), d.items || []);
+      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, budget, notes, status, profit_margin,
+                  deposit_pct, setup_days, event_days, labor_days, team_size, owner_labor, teardown, internal_note)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || 'draft', d.profit_margin,
+        d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.internal_note);
+    await replaceCosts(Number(lastInsertRowid), d);
     await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่ - ${d.title}`, 'เพิ่มแล้ว');
     return await getProject(req.user.id, lastInsertRowid);
   });
@@ -376,164 +864,710 @@ app.post('/api/projects', route(async (req, res) => {
 
 app.put('/api/projects/:id', route(async (req) => {
   const existing = await getProject(req.user.id, req.params.id);
-  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body });
+  /** whether this save changed the quote tied to the job */
+  let quoteUpdated = false;
+  /** the quote the job's page opens; its status goes with the job's */
+  const ownQuote = await jobQuote(existing);
+  const nextStatus = 'status' in req.body && PROJECT_STATUS[req.body.status] ? req.body.status : existing.status;
+  const refusal = projectStatusRefusal(existing.status, nextStatus, !!ownQuote, !!(ownQuote && (await receiptInForce(ownQuote.id))));
+  if (refusal) throw new HttpError(400, refusal);
+  const d = readProjectBody({ ...(await serializeProject(existing)), ...req.body }, existing, await allowedCategories(req.user.id));
+  /** what this save changes that the job's quote shows too (its customer, its name, its date) */
+  const detailChanges = jobDetailChanges(existing, d, ownQuote);
   await transaction(async () => {
-    await db.prepare(`UPDATE projects SET title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, status=?, profit_margin=?,
+    // What the job gives its quote before this save. The quote follows the job, so it is this save changing that
+    // which changes the quote: a save that leaves it alone (a status, a note, what the job really cost) leaves the
+    // quote alone too, even a quote from before the two were tied that has not caught up with its job yet.
+    const before = ['costItems', 'costGroups', 'profitMargin'].some((k) => k in req.body) ? await jobQuoteLines(existing.id) : null;
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'client', existing.client), d.client, d.phone, d.email);
+    await syncCustomerContact(customerId, { phone: d.phone, email: d.email }, req.body.updateCustomer === true);
+    await db.prepare(`UPDATE projects SET customer_id=?, title=?, project_type=?, client=?, phone=?, email=?, event_date=?, budget=?, notes=?, internal_note=?, status=?, profit_margin=?,
                   deposit_pct=?, setup_days=?, event_days=?, labor_days=?, team_size=?, owner_labor=?, teardown=?, review_applied=?,
-                  reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN datetime('now') ELSE reviewed_at END, updated_at=datetime('now')
+                  reviewed_at=CASE WHEN ? = 1 AND review_applied = 0 THEN ${NOW} ELSE reviewed_at END, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.status || existing.status, d.profit_margin,
+      .run(customerId, d.title, d.project_type, d.client, d.phone, d.email, d.event_date, d.budget, d.notes, d.internal_note, d.status || existing.status, d.profit_margin,
         d.deposit_pct, d.setup_days, d.event_days, d.labor_days, d.team_size, d.owner_labor, d.teardown, d.review_applied,
         d.review_applied, existing.id, req.user.id);
-    if (d.items) await replaceCostItems(existing.id, d.items);
+    // a caller that sends one markup for the job, and no headings, means it for every heading
+    await replaceCosts(existing.id, d, req.body.profitMargin !== undefined && !Array.isArray(req.body.costGroups));
+    const after = before && (await jobQuoteLines(existing.id));
+    const synced = await syncJobQuote(ownQuote, {
+      changes: detailChanges,
+      lines: !!before && (before.price !== after.price || !sameLines(before.lines, after.lines)),
+      customerId,
+      confirmed: req.body.confirmQuoteChange === true,
+    });
+    quoteUpdated = synced.changed;
+    if (ownQuote && detail(d.internal_note) !== detail(existing.internal_note) && detail(ownQuote.internal_note) !== detail(d.internal_note)) await shareInternalNote('quotes', ownQuote.id, d.internal_note);
+    // the customer turned the quote down and the job's prices have now been changed: it is a new offer, not yet sent
+    if (synced.lines && existing.status === 'rejected' && nextStatus === 'rejected') await reviseRejected(req.user.id, existing.id);
     if (d.status && d.status !== existing.status) {
+      // the job's quote takes the status that goes with the job's (a finished job leaves it as it is)
+      const quoteStatus = PROJECT_TO_QUOTE_STATUS[d.status];
+      if (ownQuote && quoteStatus && ownQuote.status !== quoteStatus) {
+        await db.prepare(`UPDATE quotes SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(quoteStatus, ownQuote.id);
+        await logActivity(req.user.id, `quote_${quoteStatus}`, `ใบเสนอราคา ${ownQuote.code}`, QUOTE_STATUS[quoteStatus]);
+      }
       await logActivity(req.user.id, `project_${d.status}`, `โปรเจ็กต์ ${d.title}`, PROJECT_STATUS[d.status]);
     }
   });
-  return serializeProject(await getProject(req.user.id, existing.id));
+  return { ...(await serializeProject(await getProject(req.user.id, existing.id))), quoteUpdated };
 }));
 
 app.delete('/api/projects/:id', route(async (req) => {
   const p = await getProject(req.user.id, req.params.id);
-  // foreign keys aren't enforced, so clean up the children by hand
-  await transaction(async () => {
-    await db.prepare('DELETE FROM cost_items WHERE project_id = ?').run(p.id);
-    await db.prepare('UPDATE quotes SET project_id = NULL WHERE project_id = ?').run(p.id);
-    await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
-  });
+  const paid = await db.prepare(`SELECT code FROM receipts WHERE project_id = ? AND status = 'issued' LIMIT 1`).get(p.id);
+  if (paid) throw new HttpError(400, `โปรเจ็กต์นี้ออกใบเสร็จ ${paid.code} แล้ว จึงลบไม่ได้ ถ้าจะลบ ให้ยกเลิกใบเสร็จก่อน`);
+  // the database removes its cost items and unlinks its quotes (ON DELETE CASCADE / SET NULL);
+  // a quote that followed the job is an ordinary quote from here on: it keeps the lines it last had, and is free to change them
+  await db.prepare('UPDATE quotes SET follows_project = 0, locked_price = NULL WHERE project_id = ? AND follows_project = 1').run(p.id);
+  // the job is not going ahead, so its quotes are cancelled (one the customer turned down stays so), and remember which job it was
+  await db.prepare(`UPDATE quotes SET deleted_project_code = ?, status = CASE WHEN status = 'rejected' THEN status ELSE 'cancelled' END, updated_at = ${NOW} WHERE project_id = ?`).run(p.code, p.id);
+  await db.prepare('DELETE FROM projects WHERE id = ?').run(p.id);
   await logActivity(req.user.id, 'project_deleted', `ลบโปรเจ็กต์ ${p.title}`, 'ลบแล้ว');
   return { ok: true };
 }));
 
 // ---------- quotes ----------
 
-const QUOTE_STATUS = { draft: 'ร่าง', sent: 'ส่งแล้ว', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธ', expired: 'หมดอายุ' };
-// keep the linked project's status in step with its quote
-const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', approved: 'approved' };
+const QUOTE_STATUS = { draft: 'ร่าง', sent: 'ส่งแล้ว', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธ', cancelled: 'ยกเลิก', expired: 'หมดอายุ' };
+// a job and its quote keep the same status, both ways; a job that is finished leaves its quote as approved
+const QUOTE_TO_PROJECT_STATUS = { draft: 'quote_created', sent: 'pending', approved: 'approved', rejected: 'rejected', cancelled: 'cancelled' };
+const PROJECT_TO_QUOTE_STATUS = { quote_created: 'draft', pending: 'sent', approved: 'approved', rejected: 'rejected', cancelled: 'cancelled' };
 
-async function serializeQuote(q) {
+async function serializeQuote(q, { withJob = false } = {}) {
   const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
-  const subtotal = items.reduce((s, i) => s + i.quantity * i.unit_price, 0);
-  const afterDiscount = subtotal * (1 - q.discount_rate / 100);
-  const totalAmount = afterDiscount * (1 + q.tax_rate / 100);
+  const followsProject = !!q.follows_project && !!q.project_id;
+  // for the quote's own page: which job it follows, and whether it still holds what the job gives it
+  // (a quote from before jobs and quotes were tied can be behind until the job is next saved)
+  let job;
+  if (withJob && followsProject) {
+    const p = await db.prepare('SELECT id, code, title FROM projects WHERE id = ?').get(q.project_id);
+    const fresh = await jobQuoteLines(q.project_id);
+    job = { id: String(p.id), code: p.code, title: p.title, price: fresh.price, inStep: await inStepWithJob(q, fresh) };
+  }
+  // the job this quote shares its customer, name and event date with: the job whose page opens it (an older copy has none)
+  let linkedJob;
+  if (withJob && q.project_id) {
+    const p = await db.prepare('SELECT * FROM projects WHERE id = ?').get(q.project_id);
+    const own = p && (await jobQuote(p));
+    if (own && Number(own.id) === Number(q.id)) linkedJob = { id: String(p.id), code: p.code, eventDate: p.event_date || '', priceFromQuote: p.agreed_price !== null };
+  }
+  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  const receipt = await db
+    .prepare('SELECT r.id, r.code, r.status, r.project_id, p.code AS project_code FROM receipts r LEFT JOIN projects p ON p.id = r.project_id WHERE r.quote_id = ? ORDER BY r.id DESC LIMIT 1')
+    .get(q.id);
+  // payment falls due so many days after the event
+  const dueDate = q.credit_days > 0 && q.event_date ? new Date(Date.parse(q.event_date + 'T00:00:00Z') + q.credit_days * 864e5).toISOString().slice(0, 10) : '';
+  const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
+  const totals = quoteTotals({ items: lines, discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding, whtRate: q.wht_rate });
   const today = new Date().toISOString().slice(0, 10);
   const status = ['draft', 'sent'].includes(q.status) && q.valid_until && q.valid_until < today ? 'expired' : q.status;
   return {
     id: String(q.id),
     code: q.code,
     projectId: q.project_id ? String(q.project_id) : null,
+    customerId: q.customer_id ? String(q.customer_id) : null,
     clientName: q.client_name,
     clientPhone: q.client_phone,
     clientEmail: q.client_email,
+    clientAddress: q.client_address,
+    clientTaxId: q.client_tax_id,
+    clientBranch: q.client_branch,
     projectTitle: q.project_title,
+    referenceNo: q.reference_no,
     eventDate: q.event_date || '',
     validUntil: q.valid_until || '',
     validUntilText: thaiDate(q.valid_until),
+    /** days the customer has to pay after the event (0 = not stated), and the day that comes to */
+    creditDays: q.credit_days,
+    dueDate,
+    dueDateText: thaiDate(dueDate),
     notes: q.notes,
+    /** for the shop only: never printed on the quote */
+    internalNote: q.internal_note,
     taxRate: q.tax_rate,
     discountRate: q.discount_rate,
+    vatMode: q.vat_mode,
+    /** 'line': each line chooses to round up to a whole baht, sums keep the satang; 'baht': an older quote, whole baht throughout */
+    rounding,
+    /** the job's price when the quote was made; the lines must come to this after the discount */
+    lockedPrice: q.locked_price,
+    /** the quote is tied to its job: its lines and price are the job's, are changed there, and follow it when it is saved */
+    followsProject,
+    /** the number of the job this quote belonged to, when that job was deleted */
+    deletedProjectCode: q.deleted_project_code || null,
+    /**
+     * Its latest receipt: in force ('issued': the quote cannot change until it is cancelled), or cancelled (the quote
+     * was cancelled with it and left its job, `projectCode`, which takes a new quote).
+     */
+    receipt: receipt ? { id: String(receipt.id), code: receipt.code, status: receipt.status, statusText: RECEIPT_STATUS[receipt.status], projectId: receipt.project_id ? String(receipt.project_id) : null, projectCode: receipt.project_code ?? '' } : null,
+    ...(job ? { job } : {}),
+    /**
+     * On a quote read by itself: the job whose page opens it. The customer's name, phone and email and the job's name
+     * are the same on both, changed on either; the event date is the job's. `priceFromQuote`: a job made from a quote,
+     * whose price follows this quote's lines (an ordinary job's quote follows the job instead).
+     */
+    ...(linkedJob ? { linkedJob } : {}),
     status,
     statusText: QUOTE_STATUS[status] || status,
     createdDate: thaiDate(q.created_at),
+    createdAt: q.created_at,
     itemCount: items.length,
-    totalAmount,
-    items: items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unitPrice: i.unit_price, total: i.quantity * i.unit_price })),
+    totalAmount: totals.total,
+    /** withholding tax: the % the customer holds back from the price without VAT, the amount, and what is left to transfer */
+    whtRate: totals.whtRate,
+    withholding: totals.withholding,
+    payableAmount: totals.payable,
+    items: lines.map((i) => ({ ...i, total: lineAmount(i, rounding) })),
   };
 }
 
 async function getQuote(userId, id) {
-  const q = await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(Number(id), userId);
+  const q = await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(rowId(id), userId);
   if (!q) throw new HttpError(404, 'ไม่พบใบเสนอราคา');
   return q;
 }
 
-async function readQuoteBody(userId, body) {
-  let projectId = body.projectId ? Number(body.projectId) : null;
-  if (projectId) await getProject(userId, projectId);
+async function readQuoteBody(userId, body, existing) {
+  const projectId = body.projectId ? rowId(body.projectId) : null;
+  if (body.projectId) await getProject(userId, projectId);
   return {
     project_id: projectId,
     client_name: str(body.clientName, 200),
-    client_phone: str(body.clientPhone, 50),
-    client_email: str(body.clientEmail, 200),
+    client_phone: phone(body.clientPhone, existing?.client_phone),
+    client_email: contactEmail(body.clientEmail, existing?.client_email),
+    client_address: str(body.clientAddress, 500),
+    client_tax_id: str(body.clientTaxId, 20),
+    client_branch: str(body.clientBranch, 60),
+    reference_no: str(body.referenceNo, 60),
+    credit_days: creditDays(body.creditDays),
+    internal_note: str(body.internalNote, 2000),
     project_title: str(body.projectTitle, 200),
     event_date: date(body.eventDate),
     valid_until: date(body.validUntil),
     notes: str(body.notes, 5000),
     tax_rate: num(body.taxRate ?? 7, { min: 0, max: 100 }),
     discount_rate: num(body.discountRate ?? 0, { min: 0, max: 100 }),
+    wht_rate: num(body.whtRate ?? 0, { min: 0, max: 100 }),
+    vat_mode: VAT_MODES.includes(body.vatMode) ? body.vatMode : undefined,
+    rounding: ROUNDINGS.includes(body.rounding) ? body.rounding : undefined,
     status: body.status && QUOTE_STATUS[body.status] && body.status !== 'expired' ? body.status : undefined,
     items: Array.isArray(body.items)
-      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit_price: num(i.unitPrice, { min: 0 }) }))
+      ? body.items.slice(0, 500).map((i) => ({ description: str(i.description, 500), quantity: num(i.quantity, { min: 0 }), unit: str(i.unit, 30), unit_price: num(i.unitPrice, { min: 0 }), round_up: i.roundUp === true ? 1 : 0 }))
       : null,
   };
 }
 
-async function replaceQuoteItems(quoteId, items) {
-  await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
-  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit_price, sort) VALUES (?, ?, ?, ?, ?)');
-  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit_price, idx);
+/** a quote made from a job must come to the job's price, so the profit worked out for the job holds */
+function checkLockedPrice(lockedPrice, d, items) {
+  if (lockedPrice === null || lockedPrice === undefined) return;
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: d.discount_rate, rounding: d.rounding });
+  if (afterDiscount !== toSatang(lockedPrice)) {
+    const baht = (n) => `฿${n.toLocaleString('th-TH')}`;
+    throw new HttpError(400, `ยอดรวมรายการ ${baht(afterDiscount)} ไม่เท่ากับราคาโปรเจ็กต์ที่ล็อกไว้ ${baht(lockedPrice)} กด "ปรับส่วนต่างอัตโนมัติ" หรือแก้รายการให้ยอดตรงกัน`);
+  }
 }
 
-async function syncProjectStatus(userId, projectId, quoteStatus) {
+/** the quote tied to a job: its lines and price are the job's. One per job; a job made from a quote has none. */
+async function followingQuote(projectId) {
+  if (!projectId) return undefined;
+  return db.prepare('SELECT * FROM quotes WHERE project_id = ? AND follows_project = 1').get(projectId);
+}
+
+/**
+ * The quote a job's page opens instead of offering to make one. For an ordinary job it is the quote tied to it.
+ * A job made from a quote has none tied to it: its price was settled by that quote, so it is the newest quote for
+ * the job, which is as a rule the one it was made from. Null when the job has no quote (it was never made, or deleted).
+ */
+async function jobQuote(p) {
+  if (p.agreed_price === null) return followingQuote(p.id);
+  return db.prepare('SELECT * FROM quotes WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(p.id);
+}
+
+/** what a job's quote should hold right now: one line per heading, and the price they come to */
+async function jobQuoteLines(projectId) {
+  const p = await db.prepare('SELECT profit_margin FROM projects WHERE id = ?').get(projectId);
+  const items = await db.prepare('SELECT name, quantity, unit, price, is_extra, group_id FROM cost_items WHERE project_id = ? ORDER BY sort, id').all(projectId);
+  const groups = (await db.prepare('SELECT id, name, markup, discount_type, discount FROM cost_groups WHERE project_id = ? ORDER BY sort, id').all(projectId))
+    .map((g) => ({ id: g.id, name: g.name, markup: g.markup, discountType: g.discount_type, discount: g.discount }));
+  return quoteLinesFromJob(items.map((i) => ({ name: i.name, quantity: i.quantity, unit: i.unit, price: i.price, isExtra: !!i.is_extra, groupId: i.group_id })), groups, p.profit_margin);
+}
+
+const lineRow = (i) => ({ description: i.description, quantity: i.quantity, unit: i.unit ?? '', unit_price: i.unitPrice, round_up: i.roundUp ? 1 : 0 });
+
+/** two lists of quote lines say the same thing */
+const sameLines = (a, b) => a.length === b.length && a.every((x, n) => {
+  const y = b[n];
+  return x.description === y.description && x.quantity === y.quantity && (x.unit ?? '') === (y.unit ?? '') && toSatang(x.unitPrice) === toSatang(y.unitPrice) && !!x.roundUp === !!y.roundUp;
+});
+
+/** whether a quote already holds exactly what its job gives it */
+async function inStepWithJob(quote, fresh) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  return quote.discount_rate === 0 && sameLines(stored.map((i) => ({ description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up })), fresh.lines);
+}
+
+/** the customer has this quote in hand (or has agreed to it), so it is not changed without the shop saying so */
+const QUOTE_IS_OUT = ['sent', 'approved'];
+
+/** what a quote's lines come to after its discount, before VAT: the price a job made from it takes */
+async function quotePrice(quote) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const rounding = ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht';
+  return quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding }).afterDiscount;
+}
+
+/**
+ * Brings the quote a job's page opens into line with a save of the job: the details the two share that the save
+ * changed (`changes`, from jobDetailChanges), and for a quote tied to the job its lines and price (`lines`: the save
+ * changed what the job gives its quote). Says whether the quote changed, and whether its lines did.
+ * A quote that is already sent or approved is only changed when the caller has confirmed it: otherwise the request
+ * is refused with 409 and what the confirmation needs to show, and nothing of it is kept.
+ */
+async function syncJobQuote(quote, { changes = [], lines = false, customerId = null, confirmed = false }) {
+  const none = { changed: false, lines: false };
+  if (!quote) return none;
+  const fresh = lines && quote.follows_project ? await jobQuoteLines(quote.project_id) : null;
+  const newLines = fresh && !(await inStepWithJob(quote, fresh)) ? fresh : null;
+  if (!newLines && changes.length === 0) return none;
+  const paid = await receiptInForce(quote.id);
+  if (paid) throw new HttpError(400, `ใบเสนอราคา ${quote.code} ออกใบเสร็จ ${paid.code} แล้ว การแก้นี้จะเปลี่ยนใบเสนอราคา (ราคา รายการ ข้อมูลลูกค้า ชื่องาน หรือวันจัดงาน) จึงบันทึกไม่ได้ ถ้าจะแก้ ให้ยกเลิกใบเสร็จก่อน`);
+  if (QUOTE_IS_OUT.includes(quote.status) && !confirmed) {
+    const price = await quotePrice(quote);
+    const err = new HttpError(409, `ใบเสนอราคา ${quote.code} ${quote.status === 'approved' ? 'ลูกค้าอนุมัติแล้ว' : 'ส่งให้ลูกค้าแล้ว'} การแก้นี้จะเปลี่ยนใบเสนอราคาตามโปรเจ็กต์ ยืนยันก่อนบันทึก`);
+    err.data = {
+      code: 'quote_change',
+      quote: {
+        id: String(quote.id), code: quote.code, status: quote.status, statusText: QUOTE_STATUS[quote.status],
+        price, newPrice: newLines ? newLines.price ?? 0 : price, lines: !!newLines,
+        details: changes.map(({ label, from, to }) => ({ label, from, to })),
+      },
+    };
+    throw err;
+  }
+  if (changes.length) {
+    // the columns are the fixed ones of JOB_DETAILS, never from the request
+    const sets = changes.map((c) => `${c.column} = ?`);
+    const values = changes.map((c) => c.value);
+    if (changes.some((c) => c.column === 'client_name')) {
+      sets.push('customer_id = ?');
+      values.push(customerId);
+    }
+    await db.prepare(`UPDATE quotes SET ${sets.join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...values, quote.id);
+  }
+  if (newLines) {
+    await replaceQuoteItems(quote.id, newLines.lines.map(lineRow));
+    await db.prepare(`UPDATE quotes SET locked_price = ?, discount_rate = 0, rounding = 'line', updated_at = ${NOW} WHERE id = ?`).run(newLines.price, quote.id);
+  }
+  return { changed: true, lines: !!newLines };
+}
+
+/**
+ * A save of the quote a job's page opens: the details the two share that this save changed go to the job too (for a
+ * new quote, `before` is null: the ones it was given that differ from the job's); and a job made from a quote takes
+ * the quote's price, since it is changed on the quote. Says whether the job changed, and whether its price did.
+ */
+async function syncJobFromQuote(job, quoteId, before, d, customerId) {
+  const changes = [...SHARED_DETAILS, ['internal_note', 'internal_note', 'โน้ตภายใน', false]].filter(([pk, qk, , required]) =>
+    ((required || !before) ? !!detail(d[qk]) : true) && (!before || detail(d[qk]) !== detail(before[qk])) && detail(job[pk]) !== detail(d[qk]));
+  const sets = changes.map(([pk]) => `${pk} = ?`);
+  const values = changes.map(([, qk]) => d[qk]);
+  if (changes.some(([pk]) => pk === 'client')) {
+    sets.push('customer_id = ?');
+    values.push(customerId);
+  }
+  if (sets.length) await db.prepare(`UPDATE projects SET ${sets.join(', ')}, updated_at = ${NOW} WHERE id = ?`).run(...values, job.id);
+  let priced = false;
+  if (job.agreed_price !== null) {
+    // a quote with nothing on it yet (being written) does not take the job's price down to nothing
+    const price = await quotePrice(await db.prepare('SELECT * FROM quotes WHERE id = ?').get(quoteId));
+    if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) {
+      await applyAgreedPrice(job.id, price);
+      priced = true;
+    }
+  }
+  return { changed: sets.length > 0 || priced, priced };
+}
+
+async function replaceQuoteItems(quoteId, items) {
+  await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(quoteId);
+  const ins = db.prepare('INSERT INTO quote_items (quote_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  for (const [idx, i] of items.entries()) await ins.run(quoteId, i.description, i.quantity, i.unit ?? '', i.unit_price, i.round_up ? 1 : 0, idx);
+}
+
+/** the job a quote belongs to, when the quote is the one its page opens (an older copy says nothing about the job) */
+async function jobOfQuote(userId, quoteId, projectId) {
+  if (!projectId) return null;
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+  if (!p) return null;
+  const quote = await jobQuote(p);
+  return quote && Number(quote.id) === Number(quoteId) ? p : null;
+}
+
+/**
+ * A job the customer turned down whose quote has just been changed to new prices: the job goes back to "quote made"
+ * and its quote to the draft, ready to be sent again (sending it moves both on as usual).
+ */
+async function reviseRejected(userId, projectId) {
+  const p = await db.prepare('SELECT * FROM projects WHERE id = ? AND user_id = ?').get(projectId, userId);
+  const quote = p && p.status === 'rejected' ? await jobQuote(p) : null;
+  if (!quote) return;
+  await db.prepare(`UPDATE projects SET status = 'quote_created', updated_at = ${NOW} WHERE id = ?`).run(p.id);
+  await db.prepare(`UPDATE quotes SET status = 'draft', updated_at = ${NOW} WHERE id = ?`).run(quote.id);
+  await logActivity(userId, 'quote_draft', `ใบเสนอราคา ${quote.code}`, 'แก้ราคาหลังลูกค้าปฏิเสธ รอส่งใหม่');
+}
+
+/** puts the job of a quote in the status that goes with the quote's; a finished job is left as it is */
+async function syncProjectStatus(userId, quoteId, projectId, quoteStatus) {
   const target = QUOTE_TO_PROJECT_STATUS[quoteStatus];
-  if (!projectId || !target) return;
-  await db.prepare(`UPDATE projects SET status = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ? AND status NOT IN ('completed', 'cancelled')`)
-    .run(target, projectId, userId);
+  const p = target ? await jobOfQuote(userId, quoteId, projectId) : null;
+  if (!p || p.status === target || p.status === 'completed') return;
+  await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(target, p.id);
 }
 
 app.get('/api/quotes', route(async (req) =>
   Promise.all((await db.prepare('SELECT * FROM quotes WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id)).map(serializeQuote)),
 ));
 
-app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(req.user.id, req.params.id))));
+app.get('/api/quotes/:id', route(async (req) => serializeQuote(await getQuote(req.user.id, req.params.id), { withJob: true })));
+
+/**
+ * Turns a quote that was written on its own into a job, once the client has said yes: the job takes the
+ * quote's details and its lines (as cost items waiting for a cost), and its price is the quote's amount
+ * after the discount and before VAT. From then on the two share their details, and the job's price follows
+ * the quote's lines, which stay free to change on the quote.
+ */
+app.post('/api/quotes/:id/project', route(async (req, res) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  if (quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้มีโปรเจ็กต์อยู่แล้ว');
+  const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const { afterDiscount } = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: quote.discount_rate, taxRate: quote.tax_rate, vatMode: quote.vat_mode, rounding: quote.rounding });
+  if (!(afterDiscount > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนสร้างโปรเจ็กต์');
+  const rules = parseRules(req.user.rules);
+  const title = quote.project_title || `งานของ ${quote.client_name}`;
+  const project = await transaction(async () => {
+    const code = await nextCode('projects', req.user.id, 'EV');
+    const status = QUOTE_TO_PROJECT_STATUS[quote.status] || 'approved';
+    const { lastInsertRowid } = await db
+      .prepare(`INSERT INTO projects (user_id, code, customer_id, title, project_type, client, phone, email, event_date, notes, status, profit_margin, deposit_pct, agreed_price, internal_note)
+                VALUES (?, ?, ?, ?, 'อื่นๆ', ?, ?, ?, ?, ?, ?, 0, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, quote.customer_id, title, quote.client_name, quote.client_phone, quote.client_email, quote.event_date, quote.notes, status,
+        Number.isFinite(rules.depositPct) ? rules.depositPct : 30, afterDiscount, quote.internal_note ?? '');
+    const projectId = Number(lastInsertRowid);
+    await replaceCosts(projectId, {
+      profit_margin: 0,
+      groups: [{ id: 1, name: 'รายการต้นทุน', markup: 0 }],
+      items: items.filter((i) => i.description).map((i) => ({ group: 1, name: i.description, category: 'material', quantity: i.quantity > 0 ? i.quantity : 1, unit: i.unit, price: 0, actual: null, is_extra: 0 })),
+    });
+    await db.prepare(`UPDATE quotes SET project_id = ?, locked_price = NULL, updated_at = ${NOW} WHERE id = ?`).run(projectId, quote.id);
+    await logActivity(req.user.id, 'project_created', `โปรเจ็กต์ใหม่จากใบเสนอราคา ${quote.code} - ${title}`, 'เพิ่มแล้ว');
+    return await getProject(req.user.id, projectId);
+  });
+  res.status(201);
+  return serializeProject(project);
+}));
 
 app.post('/api/quotes', route(async (req, res) => {
   const d = await readQuoteBody(req.user.id, req.body);
+  // a new quote lets each line choose; only quotes that already exist stay on the old whole-baht rule
+  d.rounding ||= 'line';
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
+  /** whether this save changed the job too (the details they share, or the price of a job made from a quote) */
+  let jobUpdated = false;
   const quote = await transaction(async () => {
     const code = await nextCode('quotes', req.user.id, 'QT');
     const status = d.status || 'draft';
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body), d.client_name, d.client_phone, d.client_email);
+    await syncCustomerContact(customerId, quoteCustomer(d), req.body.updateCustomer === true);
+    // A quote made for a job follows it: the lines and the price are the job's, whatever the caller sent, and one
+    // quote per job does. A job that was itself made from a quote is the other way round: its price follows its
+    // newest quote, which this one becomes. Either way the quote shares the job's details, and its event date is the job's.
+    const job = d.project_id ? await db.prepare('SELECT * FROM projects WHERE id = ?').get(d.project_id) : null;
+    if (job) d.event_date = job.event_date;
+    // and its note for the shop, unless one was written for it
+    if (job && !d.internal_note) d.internal_note = job.internal_note ?? '';
+    const follows = !!job && job.agreed_price === null;
+    let lockedPrice = null;
+    if (follows) {
+      const other = await followingQuote(d.project_id);
+      if (other) throw new HttpError(400, `โปรเจ็กต์นี้มีใบเสนอราคา ${other.code} อยู่แล้ว เปิดใบนั้นแทนการสร้างใหม่`);
+      const fresh = await jobQuoteLines(d.project_id);
+      d.items = fresh.lines.map(lineRow);
+      d.discount_rate = 0;
+      d.rounding = 'line';
+      lockedPrice = fresh.price;
+    }
     const { lastInsertRowid } = await db
-      .prepare(`INSERT INTO quotes (user_id, code, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(req.user.id, code, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status);
+      .prepare(`INSERT INTO quotes (user_id, code, customer_id, project_id, client_name, client_phone, client_email, project_title, event_date, valid_until, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, locked_price, status,
+                                    client_address, client_tax_id, client_branch, reference_no, credit_days, internal_note, follows_project)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(req.user.id, code, customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate,
+        d.vat_mode || req.user.vat_mode, d.rounding, lockedPrice, status,
+        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, follows ? 1 : 0);
     await replaceQuoteItems(Number(lastInsertRowid), d.items || []);
-    await syncProjectStatus(req.user.id, d.project_id, status);
+    if (job) jobUpdated = (await syncJobFromQuote(job, lastInsertRowid, null, d, customerId)).changed;
+    await syncProjectStatus(req.user.id, lastInsertRowid, d.project_id, status);
     await logActivity(req.user.id, 'quote_created', `ใบเสนอราคาใหม่ ${code}`, status === 'sent' ? 'ส่งแล้ว' : 'สร้างแล้ว');
     return await getQuote(req.user.id, lastInsertRowid);
   });
   res.status(201);
-  return serializeQuote(quote);
+  return { ...(await serializeQuote(quote, { withJob: true })), jobUpdated };
 }));
 
 app.put('/api/quotes/:id', route(async (req) => {
   const existing = await getQuote(req.user.id, req.params.id);
+  await refuseIfPaid(existing, 'แก้');
   const merged = { ...(await serializeQuote(existing)), ...req.body };
   if (!('status' in req.body)) merged.status = existing.status;
-  const d = await readQuoteBody(req.user.id, merged);
+  const d = await readQuoteBody(req.user.id, merged, existing);
   if (!d.client_name) throw new HttpError(400, 'กรุณากรอกชื่อลูกค้า');
   const status = d.status || existing.status;
+  /** the job whose page opens this quote: they share the customer and the job's name, and the event date is the job's */
+  const job = await jobOfQuote(req.user.id, existing.id, existing.project_id);
+  if (job) d.event_date = job.event_date;
+  /** whether this save changed the job too (the details they share, or the price of a job made from a quote) */
+  let jobUpdated = false;
   await transaction(async () => {
-    await db.prepare(`UPDATE quotes SET project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, status=?, updated_at=datetime('now')
+    const customerId = await resolveCustomer(req.user.id, customerChoice(req.body, existing, 'clientName', existing.client_name), d.client_name, d.client_phone, d.client_email);
+    await syncCustomerContact(customerId, quoteCustomer(d), req.body.updateCustomer === true);
+    if (existing.follows_project && existing.project_id) {
+      // its lines, discount and job are not the quote's to change: they are the job's, and are changed there
+      d.project_id = existing.project_id;
+      d.items = null;
+      d.discount_rate = existing.discount_rate;
+      d.rounding = existing.rounding;
+    } else if ('items' in req.body || 'discountRate' in req.body || 'rounding' in req.body) {
+      // only a change to the lines or the discount can break the lock; old quotes can still change status
+      checkLockedPrice(existing.locked_price, d, d.items || []);
+    }
+    await db.prepare(`UPDATE quotes SET customer_id=?, project_id=?, client_name=?, client_phone=?, client_email=?, project_title=?, event_date=?, valid_until=?, notes=?, tax_rate=?, discount_rate=?, wht_rate=?, vat_mode=?, rounding=?, status=?,
+                                    client_address=?, client_tax_id=?, client_branch=?, reference_no=?, credit_days=?, internal_note=?, updated_at=${NOW}
                 WHERE id = ? AND user_id = ?`)
-      .run(d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, status, existing.id, req.user.id);
+      .run(customerId, d.project_id, d.client_name, d.client_phone, d.client_email, d.project_title, d.event_date, d.valid_until, d.notes, d.tax_rate, d.discount_rate, d.wht_rate, d.vat_mode || existing.vat_mode, d.rounding || existing.rounding || 'baht', status,
+        d.client_address, d.client_tax_id, d.client_branch, d.reference_no, d.credit_days, d.internal_note, existing.id, req.user.id);
     if (d.items) await replaceQuoteItems(existing.id, d.items);
+    if (job) {
+      const synced = await syncJobFromQuote(job, existing.id, existing, d, customerId);
+      jobUpdated = synced.changed;
+      // the customer turned the quote down and its prices have now been changed: it is a new offer, not yet sent
+      if (synced.priced && existing.status === 'rejected' && status === 'rejected') await reviseRejected(req.user.id, job.id);
+    }
     if (status !== existing.status) {
-      await syncProjectStatus(req.user.id, d.project_id, status);
+      // a finished job keeps its quote as approved: its status is changed at the job first
+      if (job?.status === 'completed') throw new HttpError(400, `โปรเจ็กต์ ${job.code} เสร็จสิ้นแล้ว เปลี่ยนสถานะใบเสนอราคาไม่ได้ ถ้าจะเปลี่ยน ให้เปลี่ยนสถานะที่โปรเจ็กต์ก่อน`);
+      await syncProjectStatus(req.user.id, existing.id, d.project_id, status);
       await logActivity(req.user.id, `quote_${status}`, `ใบเสนอราคา ${existing.code}`, QUOTE_STATUS[status]);
     }
   });
-  return serializeQuote(await getQuote(req.user.id, existing.id));
+  return { ...(await serializeQuote(await getQuote(req.user.id, existing.id), { withJob: true })), jobUpdated };
+}));
+
+/**
+ * The note for the shop's own eyes on a quote, on its own: it can be changed even while the quote has a receipt in
+ * force (it is never printed), and the quote's job takes it too.
+ */
+app.put('/api/quotes/:id/internal-note', route(async (req) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  const note = str(req.body?.internalNote, 2000);
+  await transaction(async () => {
+    await shareInternalNote('quotes', quote.id, note);
+    const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
+    if (job && detail(job.internal_note) !== detail(note)) await shareInternalNote('projects', job.id, note);
+  });
+  return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
+}));
+
+// A quote tied to its job normally keeps up by itself. One made before the two were tied may still hold its old
+// lines; this brings it into line with the job when the shop asks for that (with the same confirmation as a job save).
+app.post('/api/quotes/:id/sync', route(async (req) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  if (!quote.follows_project || !quote.project_id) throw new HttpError(400, 'ใบเสนอราคานี้ไม่ได้ผูกกับโปรเจ็กต์');
+  await refuseIfPaid(quote, 'อัปเดต');
+  await transaction(async () => {
+    const synced = await syncJobQuote(quote, { lines: true, confirmed: req.body?.confirmQuoteChange === true });
+    if (synced.lines && quote.status === 'rejected') await reviseRejected(req.user.id, quote.project_id);
+  });
+  return serializeQuote(await getQuote(req.user.id, quote.id), { withJob: true });
 }));
 
 app.delete('/api/quotes/:id', route(async (req) => {
   const q = await getQuote(req.user.id, req.params.id);
-  await transaction(async () => {
-    await db.prepare('DELETE FROM quote_items WHERE quote_id = ?').run(q.id);
-    await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
-  });
+  await refuseIfPaid(q, 'ลบ');
+  const job = await jobOfQuote(req.user.id, q.id, q.project_id);
+  await db.prepare('DELETE FROM quotes WHERE id = ?').run(q.id);
+  if (job && !['completed', 'cancelled'].includes(job.status)) await jobLostItsQuote(job);
   await logActivity(req.user.id, 'quote_deleted', `ลบใบเสนอราคา ${q.code}`, 'ลบแล้ว');
   return { ok: true };
+}));
+
+/**
+ * A job whose quote has gone (deleted, or cancelled with its receipt): it takes the status of the quote its page
+ * opens now (a job made from a quote may have another), or goes back to the draft; and a job made from a quote takes
+ * the price of that quote (with none left, it keeps the last one).
+ */
+async function jobLostItsQuote(job) {
+  const next = await jobQuote(job);
+  const status = next ? QUOTE_TO_PROJECT_STATUS[next.status] ?? job.status : 'draft';
+  if (status !== job.status) await db.prepare(`UPDATE projects SET status = ?, updated_at = ${NOW} WHERE id = ?`).run(status, job.id);
+  if (next && job.agreed_price !== null) {
+    const price = await quotePrice(next);
+    if (price > 0 && toSatang(price) !== toSatang(job.agreed_price)) await applyAgreedPrice(job.id, price);
+  }
+}
+
+// ---------- receipts ----------
+
+const RECEIPT_STATUS = { issued: 'ออกแล้ว', cancelled: 'ยกเลิก' };
+const PAYMENT_METHODS = { transfer: 'โอนเงิน', cash: 'เงินสด', cheque: 'เช็ค' };
+const BANGKOK_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit' });
+/** the day it is in Thailand, YYYY-MM-DD */
+const bangkokToday = () => BANGKOK_DAY.format(new Date());
+/** a receipt for a quote with VAT is the tax invoice too, and says so */
+const receiptTitle = (r) => (r.vat_mode !== 'none' && r.tax_rate > 0 ? 'ใบเสร็จรับเงิน/ใบกำกับภาษี' : 'ใบเสร็จรับเงิน');
+
+/** the receipt in force for a quote (issued, not cancelled), if there is one */
+const receiptInForce = (quoteId) => db.prepare(`SELECT * FROM receipts WHERE quote_id = ? AND status = 'issued'`).get(quoteId);
+
+/** a quote with a receipt in force is what the customer paid for: it is not changed, nor deleted, until the receipt is cancelled */
+async function refuseIfPaid(quote, verb) {
+  const paid = await receiptInForce(quote.id);
+  if (paid) throw new HttpError(400, `ใบเสนอราคา ${quote.code} ออกใบเสร็จ ${paid.code} แล้ว จึง${verb}ไม่ได้ ถ้าจะ${verb} ให้ยกเลิกใบเสร็จก่อน`);
+}
+
+async function getReceipt(userId, id) {
+  const r = await db.prepare('SELECT * FROM receipts WHERE id = ? AND user_id = ?').get(rowId(id), userId);
+  if (!r) throw new HttpError(404, 'ไม่พบใบเสร็จ');
+  return r;
+}
+
+async function serializeReceipt(r) {
+  const items = await db.prepare('SELECT * FROM receipt_items WHERE receipt_id = ? ORDER BY sort, id').all(r.id);
+  const lines = items.map((i) => ({ id: i.id, description: i.description, quantity: i.quantity, unit: i.unit, unitPrice: i.unit_price, roundUp: !!i.round_up }));
+  const rounding = ROUNDINGS.includes(r.rounding) ? r.rounding : 'baht';
+  const totals = quoteTotals({ items: lines, discountRate: r.discount_rate, taxRate: r.tax_rate, vatMode: r.vat_mode, rounding, whtRate: r.wht_rate });
+  const project = r.project_id ? await db.prepare('SELECT id, code FROM projects WHERE id = ?').get(r.project_id) : null;
+  return {
+    id: String(r.id),
+    code: r.code,
+    status: r.status,
+    statusText: RECEIPT_STATUS[r.status] || r.status,
+    /** the heading printed on it: "ใบเสร็จรับเงิน/ใบกำกับภาษี" with VAT, "ใบเสร็จรับเงิน" without */
+    title: receiptTitle(r),
+    quoteId: r.quote_id ? String(r.quote_id) : null,
+    quoteCode: r.quote_code,
+    projectId: project ? String(project.id) : null,
+    projectCode: project?.code ?? '',
+    customerId: r.customer_id ? String(r.customer_id) : null,
+    clientName: r.client_name,
+    clientPhone: r.client_phone,
+    clientEmail: r.client_email,
+    clientAddress: r.client_address,
+    clientTaxId: r.client_tax_id,
+    clientBranch: r.client_branch,
+    projectTitle: r.project_title,
+    referenceNo: r.reference_no,
+    eventDate: r.event_date || '',
+    notes: r.notes,
+    taxRate: r.tax_rate,
+    discountRate: r.discount_rate,
+    whtRate: totals.whtRate,
+    vatMode: r.vat_mode,
+    rounding,
+    paidDate: r.paid_date || '',
+    paidDateText: thaiDate(r.paid_date),
+    paymentMethod: r.payment_method,
+    paymentMethodText: PAYMENT_METHODS[r.payment_method] || r.payment_method,
+    createdDate: thaiDate(r.created_at),
+    createdAt: r.created_at,
+    cancelledDate: thaiDate(r.cancelled_at),
+    itemCount: items.length,
+    totalAmount: totals.total,
+    withholding: totals.withholding,
+    payableAmount: totals.payable,
+    items: lines.map((i) => ({ ...i, total: lineAmount(i, rounding) })),
+  };
+}
+
+app.get('/api/receipts', route(async (req) =>
+  Promise.all((await db.prepare('SELECT * FROM receipts WHERE user_id = ? ORDER BY created_at DESC, id DESC').all(req.user.id)).map(serializeReceipt)),
+));
+
+app.get('/api/receipts/:id', route(async (req) => serializeReceipt(await getReceipt(req.user.id, req.params.id))));
+
+/**
+ * Issues the receipt for an approved quote: it copies everything the quote prints, with the day the money came in and
+ * how. The job of the quote is then finished, and the quote stays as it is until the receipt is cancelled.
+ */
+app.post('/api/quotes/:id/receipt', route(async (req, res) => {
+  const quote = await getQuote(req.user.id, req.params.id);
+  const receipt = await issueReceipt(req.user.id, quote, { paidDate: req.body?.paidDate, paymentMethod: req.body?.paymentMethod });
+  res.status(201);
+  return serializeReceipt(receipt);
+}));
+
+/**
+ * Issues the receipt for an approved quote of a shop (`quote` is its row) and returns the receipt's row; the quote's
+ * job is finished by it. Used by the quote's page and by server/backfill-receipts.js, so both follow the same rules.
+ */
+export async function issueReceipt(userId, quote, { paidDate: askedDate, paymentMethod } = {}) {
+  if (quote.status !== 'approved') throw new HttpError(400, 'ออกใบเสร็จได้เมื่อใบเสนอราคาอนุมัติแล้ว');
+  const issued = await receiptInForce(quote.id);
+  if (issued) throw new HttpError(400, `ใบเสนอราคานี้ออกใบเสร็จ ${issued.code} แล้ว`);
+  if (!((await quotePrice(quote)) > 0)) throw new HttpError(400, 'ใบเสนอราคานี้ยังไม่มียอดเงิน ใส่รายการก่อนออกใบเสร็จ');
+  const paidDate = date(askedDate) || bangkokToday();
+  const method = PAYMENT_METHODS[paymentMethod] ? paymentMethod : 'transfer';
+  const items = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(quote.id);
+  const job = await jobOfQuote(userId, quote.id, quote.project_id);
+  return transaction(async () => {
+    const code = await nextCode('receipts', userId, 'RE');
+    const { lastInsertRowid } = await db
+      .prepare(`INSERT INTO receipts (user_id, code, quote_id, project_id, customer_id, quote_code, client_name, client_phone, client_email, client_address, client_tax_id, client_branch,
+                  project_title, reference_no, event_date, notes, tax_rate, discount_rate, wht_rate, vat_mode, rounding, paid_date, payment_method)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+      .run(userId, code, quote.id, quote.project_id, quote.customer_id, quote.code, quote.client_name, quote.client_phone, quote.client_email, quote.client_address, quote.client_tax_id, quote.client_branch,
+        quote.project_title, quote.reference_no, quote.event_date, quote.notes, quote.tax_rate, quote.discount_rate, quote.wht_rate, quote.vat_mode, ROUNDINGS.includes(quote.rounding) ? quote.rounding : 'baht', paidDate, method);
+    const receiptId = Number(lastInsertRowid);
+    const ins = db.prepare('INSERT INTO receipt_items (receipt_id, description, quantity, unit, unit_price, round_up, sort) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (const [idx, i] of items.entries()) await ins.run(receiptId, i.description, i.quantity, i.unit ?? '', i.unit_price, i.round_up ? 1 : 0, idx);
+    // the money is in: the job is finished
+    if (job && job.status !== 'completed') {
+      await db.prepare(`UPDATE projects SET status = 'completed', updated_at = ${NOW} WHERE id = ?`).run(job.id);
+      await logActivity(userId, 'project_completed', `โปรเจ็กต์ ${job.title}`, `${PROJECT_STATUS.completed} (ใบเสร็จ ${code})`);
+    }
+    await logActivity(userId, 'receipt_created', `ใบเสร็จ ${code}`, `จากใบเสนอราคา ${quote.code}`);
+    return getReceipt(userId, receiptId);
+  });
+}
+
+/** the quote a job's page opens, for a script that has the job's row (see jobQuote) */
+export const quoteOfJob = (p) => jobQuote(p);
+/** what a quote comes to: its subtotal, discount, amount before VAT, VAT and total (for a script's listing) */
+export async function amountOfQuote(q) {
+  const stored = await db.prepare('SELECT * FROM quote_items WHERE quote_id = ? ORDER BY sort, id').all(q.id);
+  const rounding = ROUNDINGS.includes(q.rounding) ? q.rounding : 'baht';
+  return quoteTotals({ items: stored.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: q.discount_rate, taxRate: q.tax_rate, vatMode: q.vat_mode, rounding });
+}
+
+/**
+ * Cancels a receipt. It stays, with its number, marked cancelled. Its quote is cancelled with it and leaves its job,
+ * which goes back to the draft (or the status of another quote it has), ready for a new quote.
+ */
+app.post('/api/receipts/:id/cancel', route(async (req) => {
+  const r = await getReceipt(req.user.id, req.params.id);
+  if (r.status === 'cancelled') throw new HttpError(400, `ใบเสร็จ ${r.code} ถูกยกเลิกแล้ว`);
+  await transaction(async () => {
+    await db.prepare(`UPDATE receipts SET status = 'cancelled', cancelled_at = ${NOW}, updated_at = ${NOW} WHERE id = ?`).run(r.id);
+    const quote = r.quote_id ? await db.prepare('SELECT * FROM quotes WHERE id = ? AND user_id = ?').get(r.quote_id, req.user.id) : null;
+    if (quote) {
+      const job = await jobOfQuote(req.user.id, quote.id, quote.project_id);
+      await db.prepare(`UPDATE quotes SET status = 'cancelled', follows_project = 0, project_id = NULL, updated_at = ${NOW} WHERE id = ?`).run(quote.id);
+      await logActivity(req.user.id, 'quote_cancelled', `ใบเสนอราคา ${quote.code}`, `${QUOTE_STATUS.cancelled} (ยกเลิกใบเสร็จ ${r.code})`);
+      if (job) await jobLostItsQuote(job);
+    }
+    await logActivity(req.user.id, 'receipt_cancelled', `ใบเสร็จ ${r.code}`, 'ยกเลิกแล้ว');
+  });
+  return serializeReceipt(await getReceipt(req.user.id, r.id));
 }));
 
 // ---------- dashboard / reports ----------
@@ -549,8 +1583,12 @@ async function projectFinancials(userId) {
               WHERE p.user_id = ? GROUP BY p.id`)
     .all(userId))
     .map((p) => {
-      const profit = p.cost * (p.profit_margin / 100);
-      return { ...p, profit, sales: p.cost + profit, month: (p.event_date || p.created_at).slice(0, 7), sold: ['approved', 'completed'].includes(p.status) };
+      const agreed = p.agreed_price !== null;
+      const profit = agreed ? p.agreed_price - p.cost : p.cost * (p.profit_margin / 100);
+      // a job taken at an agreed price with no costs entered yet would count as pure profit: it waits until it has costs
+      const uncosted = agreed && p.cost === 0;
+      const won = ['approved', 'completed'].includes(p.status);
+      return { ...p, profit, sales: p.cost + profit, month: (p.event_date || p.created_at).slice(0, 7), sold: won && !uncosted, uncosted: won && uncosted };
     });
 }
 
@@ -569,6 +1607,20 @@ function monthSeries(rows, months) {
     });
   }
   return series;
+}
+
+/** January to December of one year, for the chart on the reports page */
+function yearSeries(rows, year) {
+  return TH_MONTHS.map((month, i) => {
+    const key = `${year}-${String(i + 1).padStart(2, '0')}`;
+    const inMonth = rows.filter((r) => r.sold && r.month === key);
+    return {
+      key,
+      month,
+      sales: Math.round(inMonth.reduce((s, r) => s + r.sales, 0)),
+      profit: Math.round(inMonth.reduce((s, r) => s + r.profit, 0)),
+    };
+  });
 }
 
 const pctChange = (cur, prev) => (prev === 0 ? (cur > 0 ? 100 : 0) : ((cur - prev) / prev) * 100);
@@ -601,33 +1653,138 @@ app.get('/api/dashboard', route(async (req) => {
 }));
 
 app.get('/api/activities', route(async (req) =>
-  db.prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(req.user.id, Math.min(Number(req.query.limit) || 50, 200)),
+  db.prepare('SELECT * FROM activities WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(req.user.id, Math.min(Math.max(Math.trunc(Number(req.query.limit)) || 50, 1), 200)),
 ));
 
-app.get('/api/reports', route(async (req) => {
-  const rows = await projectFinancials(req.user.id);
-  const byType = {};
-  for (const r of rows) {
-    const t = (byType[r.project_type] ||= { type: r.project_type, projects: 0, sold: 0, sales: 0, profit: 0 });
-    t.projects++;
-    if (r.sold) {
-      t.sold++;
-      t.sales += r.sales;
-      t.profit += r.profit;
+/**
+ * Sales, cost and profit of sold jobs (approved or completed) whose day falls inside from–to,
+ * by month, by customer and job by job. A job's day is its event date, or the day it was created
+ * when no event date is set. Either bound may be left out.
+ */
+/**
+ * The money that came in, for the report page: one row per receipt in force, on the day it was paid. Its sales are
+ * the receipt's amount after the discount and before VAT (VAT is not the shop's; withholding tax does not lower the
+ * sale); its cost is its job's, counted as everywhere else. A receipt whose job has no costs yet, or that has no job,
+ * is left out of the figures and counted apart (as uncosted), so it does not show as all profit.
+ */
+async function receiptFinancials(userId) {
+  const jobs = new Map((await projectFinancials(userId)).map((p) => [p.id, p]));
+  const receipts = await db.prepare(`SELECT * FROM receipts WHERE user_id = ? AND status = 'issued' ORDER BY id`).all(userId);
+  return Promise.all(
+    receipts.map(async (r) => {
+      const items = await db.prepare('SELECT quantity, unit_price, round_up FROM receipt_items WHERE receipt_id = ?').all(r.id);
+      const rounding = ROUNDINGS.includes(r.rounding) ? r.rounding : 'baht';
+      // before VAT: for prices that include VAT, the VAT is taken out
+      const sales = quoteTotals({ items: items.map((i) => ({ quantity: i.quantity, unitPrice: i.unit_price, roundUp: !!i.round_up })), discountRate: r.discount_rate, taxRate: r.tax_rate, vatMode: r.vat_mode, rounding }).beforeVat;
+      const job = r.project_id ? jobs.get(r.project_id) : null;
+      const cost = job ? job.cost : 0;
+      const uncosted = !(cost > 0);
+      const day = (r.paid_date || r.created_at).slice(0, 10);
+      return {
+        id: r.id,
+        code: r.code,
+        title: r.project_title || job?.title || '',
+        project_type: job?.project_type ?? 'อื่นๆ',
+        customer_id: r.customer_id,
+        client: r.client_name,
+        status: job?.status ?? 'completed',
+        day,
+        month: day.slice(0, 7),
+        sales,
+        cost,
+        profit: sales - cost,
+        sold: !uncosted,
+        uncosted,
+      };
+    }),
+  );
+}
+
+async function salesReport(userId, rows, from, to) {
+  const names = new Map((await db.prepare('SELECT id, name FROM customers WHERE user_id = ?').all(userId)).map((c) => [c.id, c.name]));
+  const jobs = rows
+    .filter((r) => r.sold)
+    .map((r) => ({
+      id: String(r.id),
+      code: r.code,
+      title: r.title,
+      // a receipt counts on the day it was paid
+      date: r.day ?? (r.event_date || r.created_at).slice(0, 10),
+      customerId: r.customer_id ? String(r.customer_id) : null,
+      customer: names.get(r.customer_id) || r.client || '',
+      statusText: PROJECT_STATUS[r.status],
+      sales: wholeBaht(r.sales),
+      cost: wholeBaht(r.cost),
+      profit: wholeBaht(r.sales) - wholeBaht(r.cost),
+    }))
+    .filter((j) => (!from || j.date >= from) && (!to || j.date <= to))
+    .sort((a, b) => a.date.localeCompare(b.date) || Number(a.id) - Number(b.id));
+
+  const sum = (list) => ({
+    jobs: list.length,
+    sales: list.reduce((s, j) => s + j.sales, 0),
+    cost: list.reduce((s, j) => s + j.cost, 0),
+    profit: list.reduce((s, j) => s + j.profit, 0),
+  });
+  const group = (keyOf) => {
+    const groups = new Map();
+    for (const j of jobs) {
+      const key = keyOf(j);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(j);
     }
+    return groups;
+  };
+
+  const byMonth = [...group((j) => j.date.slice(0, 7))]
+    .map(([key, list]) => ({ key, month: `${TH_MONTHS[Number(key.slice(5)) - 1]} ${Number(key.slice(0, 4)) + 543}`, ...sum(list) }))
+    .sort((a, b) => a.key.localeCompare(b.key));
+  // jobs not tied to a customer are grouped by the name typed on them
+  const byCustomer = [...group((j) => (j.customerId ? `id:${j.customerId}` : `name:${j.customer.toLowerCase()}`))]
+    .map(([, list]) => ({ customerId: list[0].customerId, name: list[0].customer, ...sum(list) }))
+    .sort((a, b) => b.sales - a.sales || a.name.localeCompare(b.name, 'th'));
+
+  return { from, to, totals: sum(jobs), byMonth, byCustomer, jobs };
+}
+
+// The report page counts the money that came in: its sales, costs and profit come from the receipts in force, on the
+// day each was paid (receiptFinancials). How many jobs there are, and in which status, is still counted from the jobs.
+app.get('/api/reports', route(async (req) => {
+  const jobs = await projectFinancials(req.user.id);
+  const rows = await receiptFinancials(req.user.id);
+  const byType = {};
+  for (const p of jobs) (byType[p.project_type] ||= { type: p.project_type, projects: 0, sold: 0, sales: 0, profit: 0 }).projects++;
+  for (const r of rows) {
+    if (!r.sold) continue;
+    const t = (byType[r.project_type] ||= { type: r.project_type, projects: 0, sold: 0, sales: 0, profit: 0 });
+    t.sold++;
+    t.sales += r.sales;
+    t.profit += r.profit;
   }
-  const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: rows.filter((r) => r.status === s).length }));
+  const sales = await salesReport(req.user.id, rows, date(req.query.from), date(req.query.to));
+  const byStatus = Object.keys(PROJECT_STATUS).map((s) => ({ status: s, statusText: PROJECT_STATUS[s], count: jobs.filter((p) => p.status === s).length }));
   const sold = rows.filter((r) => r.sold);
+  // the chart shows one calendar year: this year unless another is asked for. The years on offer are
+  // those with sales, and this year
+  const thisYear = bangkokYear();
+  const asked = /^\d{4}$/.test(String(req.query.year ?? '')) ? Number(req.query.year) : thisYear;
+  const chartYears = [...new Set([thisYear, ...sold.map((r) => Number(r.month.slice(0, 4)))])].sort((x, y) => y - x);
+  const chartYear = chartYears.includes(asked) ? asked : thisYear;
   return {
     totals: {
-      projects: rows.length,
+      projects: jobs.length,
       sales: sold.reduce((s, r) => s + r.sales, 0),
       profit: sold.reduce((s, r) => s + r.profit, 0),
       cost: sold.reduce((s, r) => s + r.cost, 0),
     },
-    chart: monthSeries(rows, 12),
+    chart: yearSeries(rows, chartYear),
+    chartYear,
+    chartYears,
     byType: Object.values(byType).sort((a, b) => b.sales - a.sales),
     byStatus,
+    sales,
+    // receipts left out of every figure above because their job's costs are not in yet (or they have no job)
+    uncosted: { count: rows.filter((r) => r.uncosted).length, sales: rows.filter((r) => r.uncosted).reduce((s, r) => s + r.sales, 0) },
   };
 }));
 
@@ -666,7 +1823,7 @@ const SHOPS_SQL = `
 app.get('/api/admin/shops', route(async () => (await db.prepare(`${SHOPS_SQL} ORDER BY u.created_at DESC, u.id DESC`).all()).map(shopRow)));
 
 app.put('/api/admin/shops/:id', route(async (req) => {
-  const shop = await db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
+  const shop = await db.prepare('SELECT * FROM users WHERE id = ?').get(rowId(req.params.id));
   if (!shop) throw new HttpError(404, 'ไม่พบร้านนี้');
   const { plan, disabled } = req.body;
   await transaction(async () => {
@@ -700,5 +1857,6 @@ app.use((err, _req, res, _next) => {
   const badJson = err.type === 'entity.parse.failed' || err instanceof SyntaxError;
   const status = badJson ? 400 : err.status || 500;
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: badJson ? 'ข้อมูลที่ส่งมาไม่ถูกต้อง' : status >= 500 ? 'เกิดข้อผิดพลาดในระบบ' : err.message });
+  // `data`: what the client needs to act on a refusal (for instance the quote a save would change), never on a 500
+  res.status(status).json({ error: badJson ? 'ข้อมูลที่ส่งมาไม่ถูกต้อง' : status >= 500 ? 'เกิดข้อผิดพลาดในระบบ' : err.message, ...(status < 500 && err.data ? err.data : {}) });
 });

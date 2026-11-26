@@ -1,9 +1,11 @@
-import { statusPill } from './ProjectItem';
-import React, { useEffect, useState } from 'react';
-import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive, X } from 'lucide-react';
+import { statusPill, struck } from './ProjectItem';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
 import { api, Project, ProjectStatus, type User } from '../lib/api';
-import { LEVEL_STYLE, projectHealth } from '../lib/job';
+import { LEVEL_STYLE, PROJECT_TYPES, projectHealth } from '../lib/job';
+import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
+import { PROJECT_STATUS_OPTIONS, projectStatusBlock, StatusDialog } from './StatusDialog';
 
 interface ProjectsProps {
   onProjectSelect: (project: Project, edit?: boolean) => void;
@@ -11,19 +13,13 @@ interface ProjectsProps {
   user: User;
 }
 
-interface StatusOption {
-  id: string;
-  name: string;
-  description: string;
-  icon: string;
-  className: string;
-}
-
 export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [timeFilter, setTimeFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('date');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sort, setSort] = useState<Sort>({ key: 'eventDate', dir: 'desc' });
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [notification, setNotification] = useState('');
@@ -39,87 +35,40 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
       .finally(() => setLoading(false));
   }, []);
 
-  const statusOptions: StatusOption[] = [
-    {
-      id: 'draft',
-      name: 'ร่าง',
-      description: 'โปรเจ็กต์ยังอยู่ในขั้นตอนการเตรียม',
-      icon: '📝',
-      className: 'status-draft'
-    },
-    {
-      id: 'quote_created',
-      name: 'สร้างใบเสนอราคาแล้ว',
-      description: 'สร้างใบเสนอราคาแล้ว พร้อมส่งให้ลูกค้า',
-      icon: '📄',
-      className: 'status-quote-created'
-    },
-    {
-      id: 'pending',
-      name: 'รอการอนุมัติ',
-      description: 'ส่งใบเสนอราคาแล้ว รอลูกค้าตอบกลับ',
-      icon: '⏳',
-      className: 'status-pending'
-    },
-    {
-      id: 'approved',
-      name: 'อนุมัติแล้ว',
-      description: 'ลูกค้าอนุมัติแล้ว เริ่มดำเนินการ',
-      icon: '✅',
-      className: 'status-approved'
-    },
-    {
-      id: 'completed',
-      name: 'เสร็จสิ้น',
-      description: 'ดำเนินการเสร็จสิ้นแล้ว สร้างใบเสร็จแล้ว',
-      icon: '🎉',
-      className: 'status-completed'
-    },
-    {
-      id: 'cancelled',
-      name: 'ยกเลิก',
-      description: 'ยกเลิกโปรเจ็กต์',
-      icon: '❌',
-      className: 'status-cancelled'
-    }
-  ];
+  const statusOrder: ProjectStatus[] = PROJECT_STATUS_OPTIONS.map((o) => o.id);
 
-  const statusOrder: ProjectStatus[] = ['draft', 'quote_created', 'pending', 'approved', 'completed', 'cancelled'];
+  const healthOf = useMemo(() => new Map(projects.map((p) => [p.id, projectHealth(p, user)])), [projects, user]);
 
-  const inTimeRange = (project: Project) => {
-    if (timeFilter === 'all') return true;
-    if (!project.eventDate) return false;
-    const d = new Date(project.eventDate);
-    const now = new Date();
-    if (timeFilter === 'week') {
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      start.setDate(now.getDate() - now.getDay());
-      const end = new Date(start);
-      end.setDate(start.getDate() + 7);
-      return d >= start && d < end;
-    }
-    if (timeFilter === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    return d.getFullYear() === now.getFullYear() && Math.floor(d.getMonth() / 3) === Math.floor(now.getMonth() / 3);
+  /** what each sortable column orders by */
+  const sortValue: Record<string, (p: Project) => string | number> = {
+    code: (p) => p.code,
+    title: (p) => p.title,
+    client: (p) => p.client,
+    eventDate: (p) => p.eventDate,
+    budget: (p) => p.budget,
+    price: (p) => healthOf.get(p.id)?.price ?? 0,
+    margin: (p) => healthOf.get(p.id)?.margin ?? 0,
+    score: (p) => healthOf.get(p.id)?.score ?? 0,
+    status: (p) => statusOrder.indexOf(p.status),
   };
+  /** numbers and dates start biggest/newest first, text starts A→Z */
+  const firstDir = (key: string): Sort['dir'] => (['eventDate', 'budget', 'price', 'margin', 'score'].includes(key) ? 'desc' : 'asc');
+  const sortBy = (key: string, dir = firstDir(key)) => setSort((cur) => nextSort(cur, key, dir));
 
-  const filteredProjects = projects
-    .filter(project => {
-      const term = searchTerm.toLowerCase();
-      const matchesSearch = project.title.toLowerCase().includes(term) ||
-                           project.code.toLowerCase().includes(term) ||
-                           project.client.toLowerCase().includes(term);
+  const term = searchTerm.trim().toLowerCase();
+  const filteredProjects = sortRows(
+    projects.filter((project) => {
+      const matchesSearch = [project.title, project.code, project.client].some((v) => v.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'all' || project.status === statusFilter;
-      return matchesSearch && matchesStatus && inTimeRange(project);
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'name': return a.title.localeCompare(b.title, 'th');
-        case 'budget': return b.budget - a.budget;
-        case 'status': return statusOrder.indexOf(a.status) - statusOrder.indexOf(b.status);
-        default: return (b.eventDate || '').localeCompare(a.eventDate || '');
-      }
-    });
+      const matchesType = typeFilter === 'all' || project.projectType === typeFilter;
+      return matchesSearch && matchesStatus && matchesType && inDateRange(project.eventDate, dateFrom, dateTo);
+    }),
+    sortValue[sort.key] ?? sortValue.eventDate,
+    sort.dir,
+  );
+  const paged = usePaged(filteredProjects, [term, statusFilter, typeFilter, dateFrom, dateTo, sort.key, sort.dir].join('|'));
+  /** the kinds to filter by: the usual ones, and any other a job of the shop has */
+  const typeOptions = [...PROJECT_TYPES, ...[...new Set(projects.map((p) => p.projectType))].filter((t) => t && !PROJECT_TYPES.includes(t))];
 
   const getStatusStyles = (status: string) => statusPill(status);
 
@@ -143,7 +92,8 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     try {
       const saved = await api.updateProject(selectedProject.id, { status: newStatus as ProjectStatus });
       setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
-      showNotification(`อัปเดตสถานะโปรเจ็กต์ ${saved.code} เรียบร้อยแล้ว`);
+      // the job's quote goes with it
+      showNotification(`อัปเดตสถานะโปรเจ็กต์ ${saved.code} เรียบร้อยแล้ว${saved.quote && newStatus !== 'completed' ? ` ใบเสนอราคา ${saved.quote.code} เป็น "${saved.quote.statusText}"` : ''}`);
     } catch (err) {
       showNotification((err as Error).message);
     }
@@ -199,7 +149,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       {/* Header */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 md:mb-8 gap-4">
-        <div><h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะการ์ดเพื่อดูรายละเอียด</p></div>
+        <div><h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">โปรเจ็กต์</h1><p className="text-sm text-ink-muted mt-1">งานทั้งหมดของคุณ แตะรายการเพื่อดูรายละเอียด</p></div>
         <div className="flex gap-2 w-full lg:w-auto">
           <button onClick={exportCsv} aria-label="ส่งออก CSV" className="pb-btn-secondary shrink-0">
             <Download className="w-4 h-4" />
@@ -214,7 +164,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
 
       {/* Status filter chips */}
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1 mb-4 -mx-1 px-1">
-        {[{ id: 'all', label: 'ทั้งหมด', count: projects.length }, { id: 'draft', label: 'ร่าง', count: getStatsByStatus('draft') }, { id: 'quote_created', label: 'มีใบเสนอราคา', count: getStatsByStatus('quote_created') }, { id: 'pending', label: 'รออนุมัติ', count: getStatsByStatus('pending') }, { id: 'approved', label: 'อนุมัติแล้ว', count: getStatsByStatus('approved') }, { id: 'completed', label: 'เสร็จสิ้น', count: getStatsByStatus('completed') }, { id: 'cancelled', label: 'ยกเลิก', count: getStatsByStatus('cancelled') }].map(chip => (
+        {[{ id: 'all', label: 'ทั้งหมด', count: projects.length }, { id: 'draft', label: 'ร่าง', count: getStatsByStatus('draft') }, { id: 'quote_created', label: 'มีใบเสนอราคา', count: getStatsByStatus('quote_created') }, { id: 'pending', label: 'รออนุมัติ', count: getStatsByStatus('pending') }, { id: 'approved', label: 'อนุมัติแล้ว', count: getStatsByStatus('approved') }, { id: 'rejected', label: 'ลูกค้าปฏิเสธ', count: getStatsByStatus('rejected') }, { id: 'completed', label: 'เสร็จสิ้น', count: getStatsByStatus('completed') }, { id: 'cancelled', label: 'ยกเลิก', count: getStatsByStatus('cancelled') }].map(chip => (
           <button
             key={chip.id}
             onClick={() => setStatusFilter(chip.id)}
@@ -252,11 +202,13 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
               {showFilters ? "ซ่อนตัวเลือก" : "ช่วงเวลาและการเรียง"}
             </button>
             
-            {(statusFilter !== 'all' || timeFilter !== 'all') && (
+            {(statusFilter !== 'all' || typeFilter !== 'all' || dateFrom || dateTo) && (
               <button
                 onClick={() => {
                   setStatusFilter('all');
-                  setTimeFilter('all');
+                  setTypeFilter('all');
+                  setDateFrom('');
+                  setDateTo('');
                 }}
                 className="text-xs md:text-sm text-ink-muted hover:text-ink"
               >
@@ -266,7 +218,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-line">
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_auto_1fr] gap-4 pt-4 border-t border-line">
               <select 
                 className="pb-input text-ink-muted"
                 value={statusFilter}
@@ -277,28 +229,31 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                 <option value="quote_created">สร้างใบเสนอราคาแล้ว</option>
                 <option value="pending">รอการอนุมัติ</option>
                 <option value="approved">อนุมัติแล้ว</option>
+                <option value="rejected">ลูกค้าปฏิเสธ</option>
                 <option value="completed">เสร็จสิ้น</option>
                 <option value="cancelled">ยกเลิก</option>
               </select>
-              <select 
-                className="pb-input text-ink-muted"
-                value={timeFilter}
-                onChange={(e) => setTimeFilter(e.target.value)}
-              >
-                <option value="all">ช่วงเวลาทั้งหมด</option>
-                <option value="week">สัปดาห์นี้</option>
-                <option value="month">เดือนนี้</option>
-                <option value="quarter">ไตรมาสนี้</option>
+              <select className="pb-input text-ink-muted" aria-label="ประเภทงาน" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                <option value="all">ประเภทงานทั้งหมด</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
               </select>
+              <DateRange label="วันที่จัดงาน" from={dateFrom} to={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
               <select 
                 className="pb-input text-ink-muted"
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
+                value={sort.key}
+                onChange={(e) => setSort({ key: e.target.value, dir: firstDir(e.target.value) })}
               >
-                <option value="date">เรียงตามวันที่</option>
-                <option value="name">เรียงตามชื่อ</option>
+                <option value="eventDate">เรียงตามวันที่</option>
+                <option value="title">เรียงตามชื่อ</option>
                 <option value="budget">เรียงตามงบประมาณ</option>
                 <option value="status">เรียงตามสถานะ</option>
+                <option value="price">เรียงตามราคา</option>
+                <option value="margin">เรียงตาม Margin</option>
+                <option value="score">เรียงตามคะแนนสุขภาพ</option>
+                <option value="code">เรียงตามรหัส</option>
+                <option value="client">เรียงตามลูกค้า</option>
               </select>
             </div>
           )}
@@ -317,9 +272,83 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
         </div>
       )}
 
-      {/* Projects Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-6 md:mb-8">
-        {filteredProjects.map((project) => {
+      {/* Table (desktop) */}
+      {paged.rows.length > 0 && (
+        <div className="hidden rows:block pb-card overflow-hidden mb-6">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              {/* Until the screen is wide (2xl) the table has no column for the code or the customer: both sit under the name, so the name keeps a readable width at this text size. */}
+              <thead>
+                <tr className="bg-canvas/60 border-b border-line">
+                  <SortHeader label="รหัส" sortKey="code" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
+                  <SortHeader label="โปรเจ็กต์" sortKey="title" sort={sort} onSort={sortBy} />
+                  <SortHeader label="ลูกค้า" sortKey="client" sort={sort} onSort={sortBy} className="hidden 2xl:table-cell" />
+                  <SortHeader label="วันที่จัดงาน" sortKey="eventDate" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="ราคา" sortKey="price" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="Margin" sortKey="margin" sort={sort} onSort={sortBy} align="right" firstDir="desc" />
+                  <SortHeader label="สุขภาพ" sortKey="score" sort={sort} onSort={sortBy} firstDir="desc" />
+                  <SortHeader label="สถานะ" sortKey="status" sort={sort} onSort={sortBy} />
+                  <th className="px-2 py-3 text-center text-ink font-medium">การจัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paged.rows.map((project) => {
+                  const h = healthOf.get(project.id)!;
+                  return (
+                    <tr key={project.id} onClick={() => handleProjectClick(project)} className="border-b border-line last:border-b-0 hover:bg-canvas/60 cursor-pointer">
+                      <td className="hidden 2xl:table-cell px-3 py-3 text-ink-muted whitespace-nowrap">{project.code}</td>
+                      <td className="px-2 2xl:px-3 py-3 font-medium text-ink max-w-[16rem]">
+                        <span className={`line-clamp-2 ${struck(project.status)}`}>{project.title}</span>
+                        {project.client && <span className="2xl:hidden block mt-0.5 font-normal text-ink truncate">{project.client}</span>}
+                        <span className="2xl:hidden block mt-0.5 text-xs font-normal text-ink-muted whitespace-nowrap">{project.code}</span>
+                      </td>
+                      <td className="hidden 2xl:table-cell px-3 py-3 text-ink max-w-[10rem] truncate">{project.client || '-'}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-ink whitespace-nowrap">{formatEventDate(project.eventDate)}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-right font-medium text-ink whitespace-nowrap">฿{Math.round(h.price).toLocaleString('th-TH')}</td>
+                      <td className="px-2 2xl:px-3 py-3 text-right text-ink whitespace-nowrap">{h.margin.toFixed(0)}%</td>
+                      <td className="px-2 2xl:px-3 py-3">
+                        <span title="คะแนนสุขภาพกำไร" className={`inline-flex w-9 h-9 rounded-xl items-center justify-center text-xs font-bold ${LEVEL_STYLE[h.level].chip}`}>{h.score}</span>
+                      </td>
+                      <td className="px-2 2xl:px-3 py-3">
+                        <button
+                          onClick={(e) => openStatusModal(project, e)}
+                          title="เปลี่ยนสถานะ"
+                          className={`px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap ${getStatusStyles(project.status)}`}
+                        >
+                          {project.statusText}
+                        </button>
+                      </td>
+                      <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => handleProjectClick(project)} aria-label="ดูโปรเจ็กต์" title="ดู" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => onProjectSelect(project, true)} aria-label="แก้ไขโปรเจ็กต์" title="แก้ไข" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {project.status === 'completed' ? (
+                            <button onClick={() => handleProjectClick(project)} aria-label="ดูรายงาน" title="รายงาน" className="flex items-center justify-center w-8 h-8 bg-[#F1F0F5] text-ink rounded-full hover:bg-[#E8E6EF] transition-colors">
+                              <FileBarChart className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button onClick={() => deleteProject(project)} aria-label="ลบโปรเจ็กต์" title="ลบ" className="flex items-center justify-center w-8 h-8 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cards (phones) */}
+      <div className="rows:hidden grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        {paged.rows.map((project) => {
           const progress = getProgressFromStatus(project.status);
           
           return (
@@ -332,7 +361,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
               <div className="p-4 md:p-6 border-b border-line">
                 <div className="flex justify-between items-start mb-4">
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-base md:text-lg text-ink mb-2 line-clamp-2 font-semibold">{project.title}</h3>
+                    <h3 className={`text-base md:text-lg text-ink mb-2 line-clamp-2 font-semibold ${struck(project.status)}`}>{project.title}</h3>
                     <p className="text-sm text-ink-muted">รหัส: {project.code}</p>
                   </div>
                   <button
@@ -414,62 +443,19 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
         })}
       </div>
 
+      <Pagination paged={paged} unit="โปรเจ็กต์" />
+
       {/* Status Update Modal */}
       {isStatusModalOpen && selectedProject && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-[24px] shadow-soft-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-4 md:p-6 border-b border-line">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-base md:text-lg text-ink mb-2 font-semibold">อัปเดตสถานะโปรเจ็กต์</h3>
-                  <p className="text-sm text-ink-muted line-clamp-2">{selectedProject.title}</p>
-                </div>
-                <button
-                  onClick={closeStatusModal}
-                  className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                >
-                  <X className="w-5 h-5 md:w-6 md:h-6" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 md:p-6">
-              <div className="space-y-3 mb-6">
-                {statusOptions.map((option) => (
-                  <div
-                    key={option.id}
-                    onClick={() => updateProjectStatus(option.id)}
-                    className={`p-3 md:p-4 border-2 rounded-xl cursor-pointer transition-all hover:border-[#673AB7] hover:bg-canvas/60 ${
-                      selectedProject.status === option.id 
-                        ? 'border-[#673AB7] bg-canvas/60' 
-                        : 'border-line'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="text-xl md:text-2xl">{option.icon}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-ink mb-1 text-sm md:text-base">{option.name}</div>
-                        <div className="text-xs md:text-sm text-ink-muted line-clamp-2">{option.description}</div>
-                        <div className="text-xs text-ink mt-1 font-medium">
-                          ความคืบหน้า: {getProgressFromStatus(option.id)}%
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-3 justify-end">
-                <button
-                  onClick={closeStatusModal}
-                  className="px-4 md:px-6 py-3 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-colors text-sm md:text-base"
-                >
-                  ยกเลิก
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <StatusDialog
+          title="เปลี่ยนสถานะโปรเจ็กต์"
+          subject={selectedProject.title}
+          options={PROJECT_STATUS_OPTIONS}
+          current={selectedProject.status}
+          blocked={projectStatusBlock(selectedProject)}
+          onPick={updateProjectStatus}
+          onClose={closeStatusModal}
+        />
       )}
 
       {/* Notification */}

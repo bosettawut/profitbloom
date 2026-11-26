@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   BarChart3, 
   FolderOpen, 
@@ -24,27 +24,37 @@ import {
   Send,
   XCircle,
   Loader2,
-  ClipboardCheck
+  ClipboardCheck,
+  Receipt,
+  Users,
+  ShieldCheck,
+  ChevronRight
 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { StatsCard } from './components/StatsCard';
 import { ActivityItem } from './components/ActivityItem';
-import { ProjectItem } from './components/ProjectItem';
+import { ProjectItem, struck } from './components/ProjectItem';
 import { SalesChart } from './components/SalesChart';
 import { Projects } from './components/Projects';
 import { JobWorkspace } from './components/job/JobWorkspace';
 import { NewProject } from './components/NewProject';
 import { NewQuote } from './components/NewQuote';
 import { AllQuotes } from './components/AllQuotes';
+import { AllReceipts } from './components/AllReceipts';
+import { ReceiptPage } from './components/ReceiptPage';
 import { Packages } from './components/Packages';
 import { AdminPage } from './components/AdminPage';
 import { QuickCheck } from './components/QuickCheck';
-import { LEVEL_STYLE, projectHealth } from './lib/job';
-import { AuthScreen } from './components/AuthScreen';
+import { LEVEL_STYLE, projectHealth, salePrice } from './lib/job';
+import { AuthScreen, type AuthMode } from './components/AuthScreen';
+import { ResetPassword } from './components/ResetPassword';
 import { Reports } from './components/Reports';
+import { CustomerPage, Customers } from './components/Customers';
+import { setShopCategories } from './lib/decision';
 import { AccountSettings } from './components/AccountSettings';
 import { brandLogo, brandName } from './lib/brand';
 import { trialDaysLeft } from './lib/plans';
+import { parseView, viewPath, type View } from './lib/route';
 import { api, Activity, baht, Dashboard, Project, ProjectInput, timeAgo, UNAUTHORIZED_EVENT, User } from './lib/api';
 
 // Function to calculate progress based on status
@@ -54,6 +64,7 @@ export const getProgressFromStatus = (status: string): number => {
     case 'quote_created': return 25;
     case 'pending': return 25; // Same as quote_created since quote is sent
     case 'approved': return 60;
+    case 'rejected': return 25; // the quote goes out again
     case 'completed': return 100;
     case 'cancelled': return 0;
     default: return 0;
@@ -61,12 +72,12 @@ export const getProgressFromStatus = (status: string): number => {
 };
 
 const activityIcon = (kind: string) => {
-  if (kind.startsWith('quote_deleted') || kind === 'project_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
+  if (kind.startsWith('quote_deleted') || kind === 'project_deleted' || kind === 'customer_deleted') return { icon: Trash2, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind === 'quote_sent') return { icon: Send, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'quote_rejected' || kind === 'project_cancelled') return { icon: XCircle, iconBg: 'bg-rose-50 text-rose-500' };
   if (kind.startsWith('quote_')) return { icon: FileText, iconBg: 'bg-violet-50 text-[#673AB7]' };
   if (kind === 'plan_changed') return { icon: Crown, iconBg: 'bg-amber-50 text-amber-600' };
-  if (kind === 'project_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
+  if (kind === 'project_created' || kind === 'customer_created') return { icon: Plus, iconBg: 'bg-amber-50 text-amber-600' };
   if (kind === 'project_completed' || kind === 'project_approved') return { icon: CheckCircle, iconBg: 'bg-amber-50 text-amber-600' };
   return { icon: DollarSign, iconBg: 'bg-violet-50 text-[#673AB7]' };
 };
@@ -80,22 +91,48 @@ const formatEventDate = (iso: string) =>
 
 interface AppProps {
   /** which tab the sign-in screen opens on when nobody is logged in */
-  authMode?: 'login' | 'register';
-  /** move to another top-level page (landing, /login, /signup, /app) */
-  go?: (path: string) => void;
+  authMode?: AuthMode;
+  /** the current address (path + query); decides which app screen is showing */
+  path: string;
+  /** move to another address: landing, /login, /signup, or a screen under /app */
+  go: (path: string, options?: { replace?: boolean }) => void;
 }
 
-export default function App({ authMode = 'login', go }: AppProps) {
+export default function App({ authMode = 'login', path, go }: AppProps) {
   const [user, setUser] = useState<User | null>(null);
+  // the category menus read this list; set while rendering so every screen below sees the signed-in shop's categories
+  setShopCategories(user?.costCategories ?? []);
   const [authChecked, setAuthChecked] = useState(false);
-  const [activeNav, setActiveNav] = useState('dashboard');
   const [chartType, setChartType] = useState<'line' | 'bar'>('bar');
   const [chartRange, setChartRange] = useState<'6' | '12' | 'year'>('6');
+  // the screen comes from the address, so the browser's back/forward buttons walk through the app
+  const view = useMemo(() => parseView(path), [path]);
+  /** the page a password reset email links to; it works whether or not someone is signed in here */
+  const onResetPage = path.startsWith('/reset');
+  const activeNav = view.nav;
+  /** the job the address points at (open in the workspace, or the one a new quote is built from) */
+  const neededProjectId = view.projectId ?? view.fromProjectId;
+  /**
+   * How much of the menu at the side a page gets, on a notebook or computer (a phone has the bar at the bottom).
+   * Making something new takes the whole width: no menu, a small button to call it up. Looking at one job, quote or
+   * customer folds it to a strip of icons. Everything else has the whole menu.
+   */
+  const menu: 'full' | 'icons' | 'none' =
+    activeNav === 'new-project' || (activeNav === 'quotes-new' && !view.quoteId) ? 'none'
+      : view.projectId || (activeNav === 'quotes-new' && view.quoteId) || (activeNav === 'customers' && view.customerId) || (activeNav === 'receipts' && view.receiptId) ? 'icons'
+        : 'full';
+  /** the whole menu called up over a page that has it folded or hidden */
+  const [menuShown, setMenuShown] = useState(false);
+  /** on a phone: the sheet of pages that are not in the bar at the bottom */
+  const [moreShown, setMoreShown] = useState(false);
+  useEffect(() => setMenuShown(false), [path]);
+  useEffect(() => {
+    if (!menuShown) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenuShown(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [menuShown]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [editOnOpen, setEditOnOpen] = useState(false);
-  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
-  const [quoteStartsInPreview, setQuoteStartsInPreview] = useState(false);
-  const [quoteFromProject, setQuoteFromProject] = useState<Project | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [openJobs, setOpenJobs] = useState<Project[]>([]);
   const [allActivities, setAllActivities] = useState<Activity[] | null>(null);
@@ -111,41 +148,49 @@ export default function App({ authMode = 'login', go }: AppProps) {
     api.dashboard(chartRange).then(setDashboard).catch(() => {});
     // jobs still waiting for a decision or under way — the dashboard leads with these
     api.projects()
-      .then((ps) => setOpenJobs(ps.filter((p) => ['draft', 'quote_created', 'pending', 'approved'].includes(p.status))))
+      .then((ps) => setOpenJobs(ps.filter((p) => ['draft', 'quote_created', 'pending', 'approved', 'rejected'].includes(p.status))))
       .catch(() => {});
   }, [chartRange]);
 
   useEffect(() => {
     document.title = user ? brandName(user) : 'ProfitBloom';
-    // a signed-in user always lives at /app, even if they arrived via /login or /signup (or the back button)
-    const keepAtApp = () => {
-      if (user && window.location.pathname !== '/app') window.history.replaceState(null, '', '/app');
-    };
-    keepAtApp();
-    window.addEventListener('popstate', keepAtApp);
-    return () => window.removeEventListener('popstate', keepAtApp);
   }, [user]);
+
+  useEffect(() => {
+    // a signed-in user never sees /login or /signup again, not even through the back button
+    if (user && !path.startsWith('/app') && !onResetPage) go('/app', { replace: true });
+  }, [user, path]);
+
+  const show = (next: View, options?: { replace?: boolean }) => {
+    setAllActivities(null);
+    go(viewPath(next), options);
+  };
+
+  useEffect(() => {
+    // arrived by back/forward, refresh or a link: the job isn't in memory yet
+    if (!user || !neededProjectId || selectedProject?.id === neededProjectId) return;
+    let stale = false;
+    api.project(neededProjectId)
+      .then((p) => !stale && setSelectedProject(p))
+      .catch(() => !stale && show({ nav: 'projects' }, { replace: true }));
+    return () => {
+      stale = true;
+    };
+  }, [user, neededProjectId, selectedProject?.id]);
 
   useEffect(() => {
     if (user && activeNav === 'dashboard') loadDashboard();
   }, [user, activeNav, loadDashboard]);
 
-  const navigate = (nav: string) => {
-    setActiveNav(nav);
-    setSelectedProject(null);
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(null);
-    setAllActivities(null);
-    window.scrollTo(0, 0);
-  };
+  const navigate = (nav: string) => show({ nav });
 
-  const handleLogout = async () => {
-    await api.logout().catch(() => {});
+  const handleLogout = async (everywhere = false) => {
+    if (everywhere) await api.logoutAll();
+    else await api.logout().catch(() => {});
     setUser(null);
     setDashboard(null);
-    navigate('dashboard');
-    go?.('/');
+    setSelectedProject(null);
+    go('/');
   };
 
   if (!authChecked) {
@@ -156,18 +201,33 @@ export default function App({ authMode = 'login', go }: AppProps) {
     );
   }
 
+  if (onResetPage) {
+    return (
+      <ResetPassword
+        token={new URLSearchParams(path.split('?')[1] ?? '').get('token') ?? ''}
+        onDone={(u) => {
+          // possibly a different account from the one that was signed in on this device
+          setSelectedProject(null);
+          setDashboard(null);
+          setUser(u);
+          go('/app', { replace: true });
+        }}
+        onRequestNew={() => go('/forgot', { replace: true })}
+        onBack={() => go('/')}
+      />
+    );
+  }
+
   if (!user) {
     return (
       <AuthScreen
         key={authMode}
         initialMode={authMode}
-        onModeChange={(m) => go?.(m === 'register' ? '/signup' : '/login')}
-        onBack={go && (() => go('/'))}
-        onAuthenticated={(u) => {
-          setUser(u);
-          navigate('dashboard');
-          go?.('/app');
-        }}
+        onModeChange={(m) => go(m === 'register' ? '/signup' : m === 'forgot' ? '/forgot' : '/login')}
+        onBack={() => go('/')}
+        // signing in from /login lands on /app (see the effect above); a session that ran out
+        // mid-work signs back in to the screen it was on
+        onAuthenticated={setUser}
       />
     );
   }
@@ -215,68 +275,84 @@ export default function App({ authMode = 'login', go }: AppProps) {
     else api.activities(50).then(setAllActivities).catch(() => {});
   };
 
+  // a phone's bar at the bottom holds five: the rest of the pages are under "เพิ่มเติม", a sheet from the bottom
   const mobileNav = [
     { id: 'dashboard', label: 'หน้าหลัก', icon: Home },
     { id: 'projects', label: 'โปรเจ็กต์', icon: FolderOpen },
     { id: 'new-project', label: 'สร้าง', icon: Plus },
     { id: 'quotes', label: 'ใบเสนอราคา', icon: FileText },
-    { id: 'quick-check', label: 'เช็คงาน', icon: ClipboardCheck },
+    { id: 'more', label: 'เพิ่มเติม', icon: Menu },
+  ];
+  const morePages = [
+    { id: 'quick-check', label: 'เช็คก่อนรับงาน', icon: ClipboardCheck },
+    { id: 'receipts', label: 'ใบเสร็จ', icon: Receipt },
+    { id: 'customers', label: 'ลูกค้า', icon: Users },
+    { id: 'reports', label: 'รายงาน', icon: BarChart3 },
+    { id: 'settings', label: 'ตั้งค่า', icon: Settings },
+    { id: 'subscription', label: 'แพ็กเกจ', icon: Crown },
+    ...(user?.role === 'admin' ? [{ id: 'admin', label: 'ผู้ดูแลระบบ', icon: ShieldCheck }] : []),
   ];
   const isNavActive = (id: string) =>
-    activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav));
+    activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav)) || (id === 'more' && morePages.some((m) => m.id === activeNav));
 
   const handleProjectSelect = (project: Project, edit = false) => {
-    setActiveNav('projects');
-    setEditOnOpen(edit);
     setSelectedProject(project);
-    window.scrollTo(0, 0);
+    show({ nav: 'projects', projectId: project.id, edit });
   };
 
   const handleProjectUpdate = async (updatedProject: ProjectInput & { id: string }) => {
     const saved = await api.updateProject(updatedProject.id, updatedProject);
-    setSelectedProject(saved);
+    // `quoteUpdated` says what this one save did; it is not part of the job
+    const { quoteUpdated: _quoteUpdated, ...project } = saved;
+    setSelectedProject(project);
     return saved;
   };
 
   const handleProjectDelete = async (projectId: string) => {
     await api.deleteProject(projectId);
+    // the deleted job's address is replaced, so the back button can't land on it again
     setSelectedProject(null);
+    show({ nav: 'projects' }, { replace: true });
   };
 
-  const handleBackToProjects = () => {
-    setSelectedProject(null);
-  };
+  const handleBackToProjects = () => show({ nav: 'projects' });
 
-  const openQuote = (quoteId: string | null, preview = false) => {
-    setEditingQuoteId(quoteId);
-    setQuoteStartsInPreview(preview);
-    setQuoteFromProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
+  const openQuote = (quoteId: string | null, preview = false) => show({ nav: 'quotes-new', quoteId: quoteId ?? undefined, preview });
+  const openReceipt = (receiptId: string) => show({ nav: 'receipts', receiptId });
+  /** a job named only by its id (from a receipt): fetched, then opened */
+  const openProjectById = (projectId: string) => {
+    api.project(projectId).then((p) => handleProjectSelect(p)).catch(() => {});
   };
 
   const createQuoteFromProject = (project: Project) => {
-    setEditingQuoteId(null);
-    setQuoteStartsInPreview(false);
-    setQuoteFromProject(project);
-    setSelectedProject(null);
-    setActiveNav('quotes-new');
-    window.scrollTo(0, 0);
+    // a job has one quote tied to it: when it is already there, that one opens
+    if (project.quote) return openQuote(project.quote.id);
+    setSelectedProject(project);
+    show({ nav: 'quotes-new', fromProjectId: project.id });
   };
 
+  const loadingScreen = (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <Loader2 className="w-8 h-8 text-[#673AB7] animate-spin" />
+    </div>
+  );
+
   const renderContent = () => {
-    // If a project is selected, show project detail
-    if (selectedProject && activeNav === 'projects') {
+    // the address names a job that is still being fetched
+    if (neededProjectId && selectedProject?.id !== neededProjectId) return loadingScreen;
+
+    if (view.projectId && selectedProject) {
       return (
         <JobWorkspace
-          key={`${selectedProject.id}-${editOnOpen}`}
+          key={`${selectedProject.id}-${!!view.edit}`}
           project={selectedProject}
           user={user}
           onBack={handleBackToProjects}
           onUpdate={handleProjectUpdate}
           onDelete={handleProjectDelete}
           onCreateQuote={createQuoteFromProject}
-          startStage={editOnOpen ? 'quote' : undefined}
+          onOpenQuote={(id) => openQuote(id)}
+          startStage={view.edit ? 'quote' : undefined}
         />
       );
     }
@@ -285,27 +361,59 @@ export default function App({ authMode = 'login', go }: AppProps) {
       case 'projects':
         return <Projects onProjectSelect={handleProjectSelect} onNavigate={navigate} user={user} />;
       case 'new-project':
-        return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} />;
+        return <NewProject user={user} onCreated={(p) => handleProjectSelect(p)} onClose={() => navigate('projects')} />;
       case 'quotes':
       case 'quotes-all':
-        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} user={user} />;
+        return <AllQuotes onNavigate={navigate} onOpenQuote={openQuote} onOpenProjectCosts={(p) => handleProjectSelect(p, true)} user={user} />;
       case 'quotes-new':
         return (
           <NewQuote
-            key={editingQuoteId ?? quoteFromProject?.id ?? 'new'}
+            key={view.quoteId ?? view.fromProjectId ?? 'new'}
             user={user}
-            quoteId={editingQuoteId}
-            fromProject={quoteFromProject}
-            startInPreview={quoteStartsInPreview}
+            quoteId={view.quoteId ?? null}
+            fromProject={view.fromProjectId ? selectedProject : null}
+            startInPreview={!!view.preview}
+            onOpenProjectCosts={(p) => handleProjectSelect(p, true)}
+            onOpenProject={(p) => handleProjectSelect(p)}
+            onOpenReceipt={openReceipt}
+            // the job held here is the copy from before the quote was saved: read it again, so going back to it shows its quote
+            onProjectChanged={(id) => { api.project(id).then((p) => setSelectedProject((held) => (held?.id === id ? p : held))).catch(() => {}); }}
             onDone={() => navigate('quotes-all')}
           />
         );
+      case 'receipts':
+        return view.receiptId ? (
+          <ReceiptPage
+            key={view.receiptId}
+            receiptId={view.receiptId}
+            user={user}
+            onClose={() => show({ nav: 'receipts' })}
+            onOpenQuote={(id) => openQuote(id)}
+            onOpenProject={openProjectById}
+          />
+        ) : (
+          <AllReceipts user={user} onOpenReceipt={openReceipt} onNavigate={navigate} />
+        );
       case 'quick-check':
         return <QuickCheck user={user} onCreated={(p) => handleProjectSelect(p)} />;
+      case 'customers':
+        return view.customerId ? (
+          <CustomerPage
+            key={view.customerId}
+            customerId={view.customerId}
+            onBack={() => show({ nav: 'customers' })}
+            // the deleted customer's address is replaced, so the back button can't land on it again
+            onGone={() => show({ nav: 'customers' }, { replace: true })}
+            onOpenProject={(p) => handleProjectSelect(p)}
+            onOpenQuote={(id) => openQuote(id)}
+          />
+        ) : (
+          <Customers onOpenCustomer={(id) => show({ nav: 'customers', customerId: id })} />
+        );
       case 'reports':
         return <Reports user={user} onOpenProject={(p) => handleProjectSelect(p)} />;
       case 'settings':
-        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={handleLogout} onNavigate={navigate} />;
+        return <AccountSettings user={user} onUserUpdated={setUser} onLogout={() => handleLogout()} onLogoutAll={() => handleLogout(true)} onNavigate={navigate} />;
       case 'admin':
         return user.role === 'admin' ? <AdminPage user={user} /> : null;
       case 'subscription':
@@ -336,13 +444,14 @@ export default function App({ authMode = 'login', go }: AppProps) {
                 <p className="text-sm text-ink-muted mb-1">
                   {new Date().toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
                 </p>
-                <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">สวัสดี คุณ{user.name}</h1>
+                <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">สวัสดี คุณ{user.name}</h1>
               </div>
-              <div className="flex gap-2">
-                <button onClick={() => navigate('new-project')} className="pb-btn-secondary flex-1 lg:flex-none">
+              {/* each button is as wide as its words need and never breaks them; on a phone too narrow for both, the second drops below */}
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => navigate('new-project')} className="pb-btn-secondary flex-auto lg:flex-none whitespace-nowrap max-sm:!px-3">
                   <Plus className="w-4 h-4" /> สร้างโปรเจ็กต์
                 </button>
-                <button onClick={() => navigate('quick-check')} className="pb-btn-primary flex-1 lg:flex-none">
+                <button onClick={() => navigate('quick-check')} className="pb-btn-primary flex-auto lg:flex-none whitespace-nowrap max-sm:!px-3">
                   <ClipboardCheck className="w-4 h-4" /> เช็คก่อนรับงาน
                 </button>
               </div>
@@ -362,7 +471,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
                   <button onClick={() => navigate('quick-check')} className="pb-btn-primary mt-3 !py-2">เช็คงานแรกก่อนรับ</button>
                 </div>
               ) : (
-                <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                   {openJobs
                     .map((p) => ({ p, h: projectHealth(p, user) }))
                     .sort((a, b) => a.h.score - b.h.score)
@@ -373,7 +482,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
                           <span className="text-base font-bold leading-none">{h.score}</span>
                         </span>
                         <span className="min-w-0">
-                          <span className="block text-sm font-semibold text-ink truncate">{p.title}</span>
+                          <span className={`block text-sm font-semibold text-ink truncate ${struck(p.status)}`}>{p.title}</span>
                           <span className="block text-xs text-ink-muted mt-0.5">Margin {h.margin.toFixed(1)}% · {p.statusText}</span>
                           <span className={`block text-xs mt-1 truncate ${h.risks.length ? 'text-rose-600' : 'text-emerald-600'}`}>
                             {h.risks[0]?.title ?? 'ไม่มีจุดเสี่ยง'}
@@ -474,7 +583,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
                     key={project.id}
                     title={project.title}
                     date={formatEventDate(project.eventDate)}
-                    budget={baht(project.costItems.reduce((s, i) => s + i.total, 0) * (1 + project.profitMargin / 100))}
+                    budget={baht(salePrice(project))}
                     status={project.status}
                     statusText={project.statusText}
                     onClick={() => handleProjectSelect(project)}
@@ -488,11 +597,46 @@ export default function App({ authMode = 'login', go }: AppProps) {
   };
 
   return (
-    <div className="min-h-screen bg-canvas text-ink">
-      {/* Desktop sidebar: floating purple panel */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
-        <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={handleLogout} />
-      </aside>
+    // --content-shift: how far the middle of the page is from the middle of the window, for things centred on the page
+    <div className="min-h-screen bg-canvas text-ink" style={{ ['--content-shift' as string]: menu === 'full' ? '8rem' : menu === 'icons' ? '2.75rem' : '0rem' }}>
+      {/* Desktop sidebar: floating purple panel, whole or folded to icons */}
+      {menu === 'full' && (
+        <aside className="hidden md:flex fixed inset-y-0 left-0 w-64 py-4 pl-4">
+          <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
+        </aside>
+      )}
+      {menu === 'icons' && (
+        <aside className="hidden md:flex fixed inset-y-0 left-0 w-[5.5rem] py-4 pl-4 z-30">
+          <Sidebar compact activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} onExpand={() => setMenuShown(true)} />
+        </aside>
+      )}
+      {menu === 'none' && (
+        <button
+          onClick={() => setMenuShown(true)}
+          aria-label="แสดงเมนู"
+          title="แสดงเมนู"
+          className="hidden md:flex fixed left-0 top-6 z-30 w-9 h-11 items-center justify-center rounded-r-2xl bg-gradient-to-b from-[#7C4DDB] to-[#673AB7] text-white shadow-[0_6px_16px_-6px_rgba(103,58,183,0.6)] hover:w-10 transition-all"
+        >
+          <Menu className="w-[18px] h-[18px]" />
+        </button>
+      )}
+      {/* the whole menu, called up for a moment over a page that has it folded or hidden */}
+      {menuShown && menu !== 'full' && (
+        <div className="hidden md:block fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-[#221A33]/30 backdrop-blur-[1px]" onClick={() => setMenuShown(false)} aria-hidden />
+          <aside className="absolute inset-y-0 left-0 w-64 py-4 pl-4" aria-label="เมนู">
+            <Sidebar activeNav={activeNav} setActiveNav={navigate} user={user} onLogout={() => handleLogout()} />
+          </aside>
+          <button
+            onClick={() => setMenuShown(false)}
+            aria-label="ซ่อนเมนู"
+            title="ซ่อนเมนู"
+            className="absolute top-6 left-[16.75rem] w-10 h-10 flex items-center justify-center rounded-full bg-white text-ink shadow-soft-xl hover:bg-[#F1F0F5]"
+          >
+            <X className="w-[18px] h-[18px]" />
+          </button>
+        </div>
+      )}
 
       {/* Mobile top bar */}
       <header className="md:hidden flex items-center justify-between px-5 pt-5 pb-3">
@@ -510,7 +654,7 @@ export default function App({ authMode = 'login', go }: AppProps) {
       </header>
 
       {/* Content floats on one soft sheet */}
-      <main className="md:pl-[17rem] md:py-4 md:pr-4">
+      <main className={`${menu === 'full' ? 'md:pl-[17rem]' : menu === 'icons' ? 'md:pl-[6.5rem]' : 'md:pl-4'} md:py-4 md:pr-4`}>
         <div className="pb-sheet min-h-[calc(100vh-5rem)] md:min-h-[calc(100vh-2rem)] mx-2 md:mx-0">
           {renderContent()}
         </div>
@@ -533,8 +677,10 @@ export default function App({ authMode = 'login', go }: AppProps) {
           return (
             <button
               key={item.id}
-              onClick={() => navigate(item.id)}
-              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-[11px] ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
+              onClick={() => (item.id === 'more' ? setMoreShown(true) : navigate(item.id))}
+              aria-haspopup={item.id === 'more' ? 'dialog' : undefined}
+              // below 360px a label is a pixel smaller, so "ใบเสนอราคา" fits its fifth of the bar
+              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-xs max-[359px]:text-[11px] whitespace-nowrap ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
             >
               <Icon className="w-5 h-5" />
               {item.label}
@@ -542,6 +688,43 @@ export default function App({ authMode = 'login', go }: AppProps) {
           );
         })}
       </nav>
+
+      {/* "เพิ่มเติม" on a phone: the pages that are not in the bar at the bottom */}
+      {moreShown && (
+        <div className="md:hidden fixed inset-0 z-50" onClick={() => setMoreShown(false)}>
+          <div className="absolute inset-0 bg-[#221A33]/40 backdrop-blur-[2px]" aria-hidden />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="เมนูเพิ่มเติม"
+            className="absolute left-3 right-3 bottom-3 bg-white rounded-[24px] shadow-soft-2xl p-2 pb-3 max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 pt-2 pb-1">
+              <h3 className="text-base font-semibold text-ink">เพิ่มเติม</h3>
+              <button type="button" onClick={() => setMoreShown(false)} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="divide-y divide-line">
+              {morePages.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    setMoreShown(false);
+                    navigate(id);
+                  }}
+                  aria-current={activeNav === id ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 px-3 py-3.5 text-left ${activeNav === id ? 'text-[#673AB7] font-semibold' : 'text-ink font-medium'}`}
+                >
+                  <Icon className="w-5 h-5 text-[#673AB7] shrink-0" />
+                  <span className="flex-1">{label}</span>
+                  <ChevronRight className="w-4 h-4 text-ink-muted" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

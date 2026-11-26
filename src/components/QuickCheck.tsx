@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertOctagon, CheckCircle2, ChevronDown, CircleAlert, FolderPlus } from 'lucide-react';
 import { api, type Project, type User } from '../lib/api';
 import { canTakeJob, fmt, type QuickAnswers } from '../lib/decision';
-import { rulesOf } from '../lib/job';
+import { PROJECT_TYPES, rulesOf } from '../lib/job';
 
 interface Props {
   user: User;
@@ -15,7 +15,6 @@ const VERDICT = {
   risky: { title: 'เสี่ยงขาดทุน', text: 'กำไรต่ำ เงินสดไม่พอ หรือมีต้นทุนตกหล่น', icon: AlertOctagon, cls: 'bg-rose-50 text-rose-700 ring-rose-200' },
 } as const;
 
-const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
 /** Can I Take This Job? — a quick answer for owners who aren't comfortable with accounts. */
 export function QuickCheck({ user, onCreated }: Props) {
@@ -85,20 +84,20 @@ export function QuickCheck({ user, onCreated }: Props) {
   return (
     <div className="p-5 md:p-10 pb-28 md:pb-10">
       <div className="mb-8">
-        <h1 className="text-2xl md:text-[28px] font-semibold text-ink tracking-tight">เช็คก่อนรับงาน</h1>
+        <h1 className="text-2xl md:text-[1.75rem] font-semibold text-ink tracking-tight">เช็คก่อนรับงาน</h1>
         <p className="text-sm text-ink-muted mt-1">ใส่งบที่ลูกค้าเสนอ แล้วตอบคำถามสั้น ๆ 10 ข้อ — รู้ทันทีว่างานนี้ควรรับไหม</p>
       </div>
 
       <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-5 items-start">
         <div className="pb-card p-5 md:p-6">
-          <div className="grid sm:grid-cols-2 gap-3 mb-5">
+          <div className="grid sm:grid-cols-2 gap-4 mb-5">
             <div>
               <label className="pb-label">ชื่องาน (ไม่บังคับ)</label>
-              <input className="pb-input !py-2" value={title} placeholder="เช่น งานแต่ง คุณนิภา" onChange={(e) => setTitle(e.target.value)} />
+              <input className="pb-input pb-input-sm" value={title} placeholder="เช่น งานแต่ง คุณนิภา" onChange={(e) => setTitle(e.target.value)} />
             </div>
             <div>
               <label className="pb-label">ประเภทงาน</label>
-              <select className="pb-input !py-2" value={type} onChange={(e) => setType(e.target.value)}>
+              <select className="pb-input pb-input-sm" value={type} onChange={(e) => setType(e.target.value)}>
                 {PROJECT_TYPES.map((t) => <option key={t}>{t}</option>)}
               </select>
             </div>
@@ -108,7 +107,7 @@ export function QuickCheck({ user, onCreated }: Props) {
               <div key={k} className={k === 'budget' ? 'sm:col-span-2' : ''}>
                 <label className="pb-label !text-ink">{label}</label>
                 <input
-                  className={`pb-input !py-2 ${k === 'budget' ? '!text-lg font-semibold' : ''}`}
+                  className={`pb-input pb-input-sm ${k === 'budget' ? '!text-lg font-semibold' : ''}`}
                   type="number"
                   min="0"
                   inputMode="decimal"
@@ -162,7 +161,7 @@ export function QuickCheck({ user, onCreated }: Props) {
                     ['ต้นทุนรวม', `${fmt(r.cost)} บาท`],
                     ['กำไรที่งบนี้', `${fmt(r.profit)} บาท`],
                     ['Margin', `${r.margin.toFixed(1)}%`],
-                    ['เงินสดสำรองก่อนงาน', `${fmt(r.cashRequired)} บาท`],
+                    ['เงินสดที่ต้องสำรอง', `${fmt(r.cashRequired)} บาท`],
                   ].map(([l, v]) => (
                     <div key={l} className="rounded-xl bg-[#F7F6FA] px-3 py-2.5">
                       <p className="text-xs text-ink-muted">{l}</p>

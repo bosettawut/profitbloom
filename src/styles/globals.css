@@ -83,8 +83,10 @@
   --chart-5: #35235e;
   
   /* Typography Scale */
-  --text-xs: 0.75rem;
-  --text-sm: 0.875rem;
+  /* 1px over what they were before the type was first enlarged: 14 → 15px and 12 → 13px on a computer (16px root),
+     about 13.1 → 14.1px and 11.3 → 12.2px on a phone (15px root) */
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
   --text-base: 1rem;
   --text-lg: 1.125rem;
   --text-xl: 1.25rem;
@@ -160,6 +162,19 @@
   --sidebar-ring: #facc15;
 }
 
+@theme {
+  /* The stock breakpoints (640 / 768 / 1024 / 1280 / 1536px): the root size is again what the layouts were drawn
+     at (15px below lg, 16px from lg up), so they need no moving. */
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  /* where the three lists (projects, quotes, customers) change from cards to table rows. Until 2xl the table keeps
+     to the columns that fit, with the lesser details under the name. */
+  --breakpoint-rows: 75rem;
+  --breakpoint-xl: 80rem;
+  --breakpoint-2xl: 96rem;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -191,7 +206,7 @@
   --color-gold: #eab308;
   --shadow-card: var(--shadow-card);
   --shadow-sheet: var(--shadow-sheet);
-  --font-sans: 'IBM Plex Sans Thai Looped', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: 'Noto Sans Thai', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -555,28 +570,56 @@
   }
 }
 
+/*
+ * Everything in the app is sized from the root (text, boxes and spacing are in rem), so this one figure makes
+ * the whole of it larger or smaller. These are the figures from before the type was first enlarged, 15px on a phone
+ * and 16px from lg up; the everyday text is 1px larger than it was then through the text sizes in the theme above.
+ * (On the way the owner tried roots of 18, 21, 19.5 and 17px on a computer, and settled here.)
+ */
 html {
   font-size: 15px;
 }
 
-/* Media queries for responsive font sizing */
-@media (max-width: 640px) {
-  html {
-    font-size: 15px;
-  }
-}
-
-@media (min-width: 1024px) {
+/* notebooks and computers (from lg up) */
+@media (min-width: 64rem) {
   html {
     font-size: 16px;
   }
 }
 
-@media (min-width: 1280px) {
-  html {
+/* On a touch screen a form field under 16px makes Safari zoom the page in when it is tapped, so there they are all
+   16px, whatever their class (this rule sits outside the layers, so it wins over Tailwind's text sizes). */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']),
+  select,
+  textarea {
     font-size: 16px;
   }
 }
+
+/*
+ * The menu at the side has to show every entry without scrolling, and at this text size a laptop's window is
+ * not tall enough for it. So on a short window the menu alone is drawn a step smaller (its text and its
+ * spacing both come from these variables); the pages keep the full size.
+ */
+@media (max-height: 640px) {
+  .pb-sidebar {
+    --spacing: 0.2125rem;
+    --text-sm: 0.8rem;
+    --text-xs: 0.69rem;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-height: 555px) {
+  .pb-sidebar {
+    --spacing: 0.1875rem;
+    --text-sm: 0.7rem;
+    --text-xs: 0.61rem;
+    font-size: 0.75rem;
+  }
+}
+
 /* ---------- Clean UI building blocks ---------- */
 @layer components {
   /* the floating panel the content sits on */
@@ -600,7 +643,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.9625rem;
     box-shadow: var(--shadow-purple);
     transition: background-color 0.15s ease;
   }
@@ -616,7 +659,7 @@ html {
     border-radius: 9999px;
     padding: 0.625rem 1.25rem;
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.9625rem;
     transition: background-color 0.15s ease;
   }
   .pb-btn-secondary:hover { background: #E8E6EF; }
@@ -625,33 +668,75 @@ html {
     background: #ffffff;
     border: 1px solid var(--line);
     border-radius: 14px;
-    padding: 0.7rem 0.95rem;
-    font-size: 0.95rem;
+    --pb-input-py: 0.7rem;
+    padding: var(--pb-input-py) 0.95rem;
+    font-size: 1rem;
     font-weight: 500;
+    line-height: 1.5;
     color: var(--ink);
     outline: none;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
+  /* the compact size used inside dense forms */
+  .pb-input-sm { --pb-input-py: 0.5rem; }
+  /* Safari gives text boxes, date boxes and dropdowns three different natural heights,
+     so single-line fields get theirs from the same sum instead of from their contents */
+  input.pb-input,
+  select.pb-input,
+  button.pb-input {
+    height: calc(1.5em + var(--pb-input-py) * 2 + 2px);
+  }
   .pb-input::placeholder { color: #8C879D; }
+  /* a form section locked as a whole (a quote with its receipt issued): its boxes read as fixed, the text still clear */
+  fieldset:disabled .pb-input {
+    background: #F7F6FA;
+    cursor: default;
+    color: var(--ink);
+    -webkit-text-fill-color: var(--ink);
+    opacity: 1;
+  }
+  /* number boxes look like the text boxes beside them: Safari otherwise shows stepper arrows all the time */
+  input[type='number'] { -moz-appearance: textfield; appearance: textfield; }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+  /* a native dropdown ignores line-height and comes out taller than the text box beside it,
+     so draw our own arrow and let it follow the same line-height */
+  select.pb-input {
+    appearance: none;
+    -webkit-appearance: none;
+    line-height: 1.5;
+    padding-right: 2.25rem !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23221A33' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.8rem center;
+    background-size: 0.85rem;
+  }
   .pb-input:focus {
     border-color: rgba(103, 58, 183, 0.45);
     box-shadow: 0 0 0 4px rgba(103, 58, 183, 0.08);
   }
   .pb-label {
     display: block;
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     font-weight: 600;
     color: var(--ink-muted);
     margin-bottom: 0.4rem;
   }
 }
 
-/* toast: drops in from the top, centred */
+/* toast: drops in from the top. Its own classes centre it (left-1/2 -translate-x-1/2), so the animation only moves it
+   down; shifting it sideways here as well pushed it left of centre and, on a phone, against the edge at half width. */
 @keyframes toastIn {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
-.animate-toast { animation: toastIn 0.25s ease-out both; }
+.animate-toast {
+  animation: toastIn 0.25s ease-out both;
+  /* as wide as its text, up to the screen less a margin; longer text wraps and stays centred */
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  text-align: center;
+}
 
 .no-scrollbar { scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
