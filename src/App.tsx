@@ -24,7 +24,11 @@ import {
   Send,
   XCircle,
   Loader2,
-  ClipboardCheck
+  ClipboardCheck,
+  Receipt,
+  Users,
+  ShieldCheck,
+  ChevronRight
 } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { StatsCard } from './components/StatsCard';
@@ -119,6 +123,8 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
         : 'full';
   /** the whole menu called up over a page that has it folded or hidden */
   const [menuShown, setMenuShown] = useState(false);
+  /** on a phone: the sheet of pages that are not in the bar at the bottom */
+  const [moreShown, setMoreShown] = useState(false);
   useEffect(() => setMenuShown(false), [path]);
   useEffect(() => {
     if (!menuShown) return;
@@ -269,15 +275,25 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
     else api.activities(50).then(setAllActivities).catch(() => {});
   };
 
+  // a phone's bar at the bottom holds five: the rest of the pages are under "เพิ่มเติม", a sheet from the bottom
   const mobileNav = [
     { id: 'dashboard', label: 'หน้าหลัก', icon: Home },
     { id: 'projects', label: 'โปรเจ็กต์', icon: FolderOpen },
     { id: 'new-project', label: 'สร้าง', icon: Plus },
     { id: 'quotes', label: 'ใบเสนอราคา', icon: FileText },
-    { id: 'quick-check', label: 'เช็คงาน', icon: ClipboardCheck },
+    { id: 'more', label: 'เพิ่มเติม', icon: Menu },
+  ];
+  const morePages = [
+    { id: 'quick-check', label: 'เช็คก่อนรับงาน', icon: ClipboardCheck },
+    { id: 'receipts', label: 'ใบเสร็จ', icon: Receipt },
+    { id: 'customers', label: 'ลูกค้า', icon: Users },
+    { id: 'reports', label: 'รายงาน', icon: BarChart3 },
+    { id: 'settings', label: 'ตั้งค่า', icon: Settings },
+    { id: 'subscription', label: 'แพ็กเกจ', icon: Crown },
+    ...(user?.role === 'admin' ? [{ id: 'admin', label: 'ผู้ดูแลระบบ', icon: ShieldCheck }] : []),
   ];
   const isNavActive = (id: string) =>
-    activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav));
+    activeNav === id || (id === 'quotes' && ['quotes-all', 'quotes-new'].includes(activeNav)) || (id === 'more' && morePages.some((m) => m.id === activeNav));
 
   const handleProjectSelect = (project: Project, edit = false) => {
     setSelectedProject(project);
@@ -661,8 +677,10 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
           return (
             <button
               key={item.id}
-              onClick={() => navigate(item.id)}
-              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-xs whitespace-nowrap ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
+              onClick={() => (item.id === 'more' ? setMoreShown(true) : navigate(item.id))}
+              aria-haspopup={item.id === 'more' ? 'dialog' : undefined}
+              // below 360px a label is a pixel smaller, so "ใบเสนอราคา" fits its fifth of the bar
+              className={`flex flex-col items-center gap-0.5 py-1.5 rounded-full text-xs max-[359px]:text-[11px] whitespace-nowrap ${active ? 'text-[#673AB7] font-medium' : 'text-ink-muted'}`}
             >
               <Icon className="w-5 h-5" />
               {item.label}
@@ -670,6 +688,43 @@ export default function App({ authMode = 'login', path, go }: AppProps) {
           );
         })}
       </nav>
+
+      {/* "เพิ่มเติม" on a phone: the pages that are not in the bar at the bottom */}
+      {moreShown && (
+        <div className="md:hidden fixed inset-0 z-50" onClick={() => setMoreShown(false)}>
+          <div className="absolute inset-0 bg-[#221A33]/40 backdrop-blur-[2px]" aria-hidden />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="เมนูเพิ่มเติม"
+            className="absolute left-3 right-3 bottom-3 bg-white rounded-[24px] shadow-soft-2xl p-2 pb-3 max-h-[80vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-3 pt-2 pb-1">
+              <h3 className="text-base font-semibold text-ink">เพิ่มเติม</h3>
+              <button type="button" onClick={() => setMoreShown(false)} aria-label="ปิด" className="p-1.5 rounded-full text-ink-muted hover:bg-[#F1F0F5]"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="divide-y divide-line">
+              {morePages.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    setMoreShown(false);
+                    navigate(id);
+                  }}
+                  aria-current={activeNav === id ? 'page' : undefined}
+                  className={`w-full flex items-center gap-3 px-3 py-3.5 text-left ${activeNav === id ? 'text-[#673AB7] font-semibold' : 'text-ink font-medium'}`}
+                >
+                  <Icon className="w-5 h-5 text-[#673AB7] shrink-0" />
+                  <span className="flex-1">{label}</span>
+                  <ChevronRight className="w-4 h-4 text-ink-muted" />
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
