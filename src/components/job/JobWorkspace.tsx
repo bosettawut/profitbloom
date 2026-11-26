@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ChevronDown, FileText, Save, Trash2, X } from 'lucide-react';
 import { api, quoteChangeOf, type Project, type ProjectStatus, type SavedProject, type User } from '../../lib/api';
 import { health, learnings } from '../../lib/decision';
-import { rulesOf, toJob } from '../../lib/job';
+import { PROJECT_TYPES, rulesOf, toJob } from '../../lib/job';
 import { statusPill, struck } from '../ProjectItem';
 import { HealthPanel, RiskList } from './HealthPanel';
 import { useCategoryPrompt } from './CategoryPrompt';
@@ -27,7 +27,6 @@ const STAGES: Array<{ id: Stage; step: string; title: string; hint: string }> = 
 ];
 
 
-const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
 
 interface Props {
   project: Project;

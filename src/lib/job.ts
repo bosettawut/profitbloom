@@ -31,6 +31,9 @@ export function toJob(p: Project): Job {
 /** what the job sells for: the sum of its headings */
 export const salePrice = (p: Project) => numbers(toJob(p)).price;
 
+/** the kinds of job a shop picks from (the job's code starts with the kind's letters, see TYPE_PREFIX on the server) */
+export const PROJECT_TYPES = ['งานแต่งงาน', 'งานหมั้น', 'งานวันเกิด', 'งานบวช', 'งานเปิดร้าน', 'อื่นๆ'];
+
 export const rulesOf = (user: User): Rules => withDefaults(user.rules);
 
 export const projectHealth = (p: Project, user: User) => health(toJob(p), rulesOf(user));

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Search, Filter, Plus, Eye, Edit, Trash2, Download, FileBarChart, Archive } from 'lucide-react';
 import { getProgressFromStatus } from '../App';
 import { api, Project, ProjectStatus, type User } from '../lib/api';
-import { LEVEL_STYLE, projectHealth } from '../lib/job';
+import { LEVEL_STYLE, PROJECT_TYPES, projectHealth } from '../lib/job';
 import { DateRange, inDateRange, nextSort, Pagination, SortHeader, sortRows, usePaged, type Sort } from './ListTools';
 import { PROJECT_STATUS_OPTIONS, projectStatusBlock, StatusDialog } from './StatusDialog';
 
@@ -16,6 +16,7 @@ interface ProjectsProps {
 export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [sort, setSort] = useState<Sort>({ key: 'eventDate', dir: 'desc' });
@@ -59,12 +60,15 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
     projects.filter((project) => {
       const matchesSearch = [project.title, project.code, project.client].some((v) => v.toLowerCase().includes(term));
       const matchesStatus = statusFilter === 'all' || project.status === statusFilter;
-      return matchesSearch && matchesStatus && inDateRange(project.eventDate, dateFrom, dateTo);
+      const matchesType = typeFilter === 'all' || project.projectType === typeFilter;
+      return matchesSearch && matchesStatus && matchesType && inDateRange(project.eventDate, dateFrom, dateTo);
     }),
     sortValue[sort.key] ?? sortValue.eventDate,
     sort.dir,
   );
-  const paged = usePaged(filteredProjects, [term, statusFilter, dateFrom, dateTo, sort.key, sort.dir].join('|'));
+  const paged = usePaged(filteredProjects, [term, statusFilter, typeFilter, dateFrom, dateTo, sort.key, sort.dir].join('|'));
+  /** the kinds to filter by: the usual ones, and any other a job of the shop has */
+  const typeOptions = [...PROJECT_TYPES, ...[...new Set(projects.map((p) => p.projectType))].filter((t) => t && !PROJECT_TYPES.includes(t))];
 
   const getStatusStyles = (status: string) => statusPill(status);
 
@@ -198,10 +202,11 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
               {showFilters ? "ซ่อนตัวเลือก" : "ช่วงเวลาและการเรียง"}
             </button>
             
-            {(statusFilter !== 'all' || dateFrom || dateTo) && (
+            {(statusFilter !== 'all' || typeFilter !== 'all' || dateFrom || dateTo) && (
               <button
                 onClick={() => {
                   setStatusFilter('all');
+                  setTypeFilter('all');
                   setDateFrom('');
                   setDateTo('');
                 }}
@@ -213,7 +218,7 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr] gap-4 pt-4 border-t border-line">
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-[1fr_1fr_auto_1fr] gap-4 pt-4 border-t border-line">
               <select 
                 className="pb-input text-ink-muted"
                 value={statusFilter}
@@ -227,6 +232,12 @@ export function Projects({ onProjectSelect, onNavigate, user }: ProjectsProps) {
                 <option value="rejected">ลูกค้าปฏิเสธ</option>
                 <option value="completed">เสร็จสิ้น</option>
                 <option value="cancelled">ยกเลิก</option>
+              </select>
+              <select className="pb-input text-ink-muted" aria-label="ประเภทงาน" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+                <option value="all">ประเภทงานทั้งหมด</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
               </select>
               <DateRange label="วันที่จัดงาน" from={dateFrom} to={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
               <select 
